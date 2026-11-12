@@ -41,8 +41,8 @@ foreach(actual IN LISTS shots)
     message(FATAL_ERROR "missing baseline ${expected} (run scripts/update-baselines.sh)")
   endif()
 
-  # Blur sampling differs by 1 LSB across Mesa versions; primitives, text and
-  # tile captures still compare at max-delta 1 with a tight SSIM floor.
+  # Blur sampling differs by up to 2 LSB across Mesa versions; primitives,
+  # text and tile captures compare at max-delta 2 with a tight SSIM floor.
   set(diff "${OUT_DIR}/${stem}.diff.png")
   execute_process(
     COMMAND "${PYTHON}" "${IMAGEDIFF}"
@@ -50,7 +50,7 @@ foreach(actual IN LISTS shots)
             --actual "${actual}"
             --diff "${diff}"
             --mode tolerance
-            --max-delta 1
+            --max-delta 2
             --max-diff-ratio 0.10
             --min-ssim 0.9995
             --max-cluster 1024

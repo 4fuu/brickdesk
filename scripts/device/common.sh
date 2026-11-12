@@ -50,7 +50,7 @@ stop_stock_ui() {
 
 start_stock_ui() {
     info "starting stock UI"
-    "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui start >/dev/null 2>&1 || true; elif [ -x /usr/trimui/bin/runtrimui.sh ]; then nohup /usr/trimui/bin/runtrimui.sh >/tmp/runtrimui.log 2>&1 & else echo 'no stock launcher found' >&2; fi"
+    "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui start >/dev/null 2>&1 || true; fi; sleep 1; if ! pidof MainUI >/dev/null 2>&1; then if [ -x /usr/trimui/bin/runtrimui.sh ]; then nohup /usr/trimui/bin/runtrimui.sh >/tmp/runtrimui.log 2>&1 & else echo 'no stock launcher found' >&2; fi; fi"
 }
 
 app_pid() {
@@ -70,7 +70,8 @@ local_sdl2_lib() {
         "${SDL2_LIB:-}" \
         "$BUILD_DIR/dist/lib/libSDL2-2.0.so.0" \
         "$BUILD_DIR/sysroot/lib/libSDL2-2.0.so.0" \
-        "$REPO_ROOT/build-target/sysroot/lib/libSDL2-2.0.so.0"; do
+        "$REPO_ROOT/build-target/sysroot/lib/libSDL2-2.0.so.0" \
+        "/opt/trimui/sysroot/lib/libSDL2-2.0.so.0"; do
         if [ -n "$candidate" ] && [ -e "$candidate" ]; then
             readlink -f "$candidate"
             return 0

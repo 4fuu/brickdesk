@@ -33,7 +33,7 @@ LIBDIR=$DEST/lib
 
 skip() {
     case "$1" in
-        libc.so*|libpthread*|libdl*|libm.so*|librt*|libgcc_s*|ld-*) return 0 ;;
+        libc.so*|libpthread*|libdl*|libm.so*|librt*|libgcc_s*|libSDL2*|ld-*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -57,7 +57,7 @@ for lib in "$SDK"/usr/lib/*.so*; do
     if skip "$base"; then
         continue
     fi
-    target=$(readlink "$lib")
+    target=$(readlink -f "$lib")
     target_base=$(basename "$target")
     if [ -e "$LIBDIR/$target_base" ]; then
         ln -sf "$target_base" "$LIBDIR/$base"

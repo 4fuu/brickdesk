@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static void set_error(char *error, size_t error_size, const char *format, ...) {
@@ -234,4 +235,78 @@ bool bd_app_last_frame_path(const char *dir, const char *id, char *out,
   }
   int written = snprintf(out, out_size, "%s/last-frame-%s.bin", dir, id);
   return written > 0 && (size_t)written < out_size;
+}
+
+bool bd_app_last_frame_write(const char *path, uint32_t width, uint32_t height,
+                             bd_app_pixel_format format, const void *pixels,
+                             size_t stride, uint64_t *frame_seq, char *error,
+                             size_t error_size) {
+  uint32_t bpp = bytes_per_pixel((uint32_t)format);
+  if (path == NULL || path[0] == '\0' || pixels == NULL || bpp == 0 ||
+      width == 0 || height == 0 ||
+      width > BD_APP_LAST_FRAME_MAX_DIMENSION ||
+      height > BD_APP_LAST_FRAME_MAX_DIMENSION ||
+      stride < (size_t)width * bpp || stride > UINT32_MAX) {
+    set_error(error, error_size, "invalid last-frame arguments");
+    return false;
+  }
+  uint64_t data_size = (uint64_t)stride * height;
+  if (data_size > (uint64_t)SIZE_MAX ||
+      data_size + BD_APP_LAST_FRAME_HEADER_SIZE > (uint64_t)SIZE_MAX) {
+    set_error(error, error_size, "last-frame is too large");
+    return false;
+  }
+  size_t total = (size_t)data_size + BD_APP_LAST_FRAME_HEADER_SIZE;
+
+  int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (fd < 0) {
+    set_error(error, error_size, "%s: %s", path, strerror(errno));
+    return false;
+  }
+  if (ftruncate(fd, (off_t)total) != 0) {
+    set_error(error, error_size, "%s: ftruncate: %s", path, strerror(errno));
+    close(fd);
+    return false;
+  }
+  void *map = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (map == MAP_FAILED) {
+    set_error(error, error_size, "%s: mmap: %s", path, strerror(errno));
+    close(fd);
+    return false;
+  }
+
+  bd_app_last_frame_header header;
+  memset(&header, 0, sizeof(header));
+  header.magic = BD_APP_LAST_FRAME_MAGIC;
+  header.version = BD_APP_LAST_FRAME_VERSION;
+  header.header_size = (uint16_t)sizeof(bd_app_last_frame_header);
+  header.width = width;
+  header.height = height;
+  header.format = (uint32_t)format;
+  header.stride = (uint32_t)stride;
+  header.data_size = data_size;
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+    header.timestamp_ms =
+        (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+  }
+  header.flags = BD_APP_LAST_FRAME_FLAG_WRITING;
+  memcpy(map, &header, sizeof(header));
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  memcpy((uint8_t *)map + BD_APP_LAST_FRAME_HEADER_SIZE, pixels, data_size);
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  header.frame_seq = frame_seq != NULL ? *frame_seq + 1 : 1;
+  header.flags = 0;
+  memcpy(map, &header, sizeof(header));
+
+  bool ok = msync(map, total, MS_SYNC) == 0;
+  if (!ok) {
+    set_error(error, error_size, "%s: msync: %s", path, strerror(errno));
+  }
+  munmap(map, total);
+  close(fd);
+  if (ok && frame_seq != NULL) {
+    *frame_seq = header.frame_seq;
+  }
+  return ok;
 }

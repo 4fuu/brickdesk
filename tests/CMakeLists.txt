@@ -189,6 +189,24 @@ if(BRICKDESK_BUILD_HARNESS)
     ENVIRONMENT "${BD_HEADLESS_ENV}"
     TIMEOUT 180
     FAIL_REGULAR_EXPRESSION "FAIL")
+
+  add_test(NAME menu
+    COMMAND "${CMAKE_COMMAND}"
+      "-DMENU_TEST=$<TARGET_FILE:bd_menu_test>"
+      "-DDEMO=$<TARGET_FILE:brickdesk-demo>"
+      "-DSTATE_APP=$<TARGET_FILE:bd_menu_state_app>"
+      "-DINPUTD=$<TARGET_FILE:brickdesk-inputd>"
+      "-DSHIM=$<TARGET_FILE:brickdesk-menu>"
+      "-DCONFIG_DIR=${PROJECT_SOURCE_DIR}/config"
+      "-DASSET_DIR=${PROJECT_SOURCE_DIR}/assets"
+      "-DOUT_DIR=${BD_ARTIFACT_DIR}/menu"
+      "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_menu_test.cmake")
+  set_tests_properties(menu PROPERTIES
+    TIMEOUT 180
+    FAIL_REGULAR_EXPRESSION "FAIL")
 endif()
 
 add_executable(bd_session_child session_child.c)
@@ -198,6 +216,18 @@ target_link_libraries(bd_session_child PRIVATE brickdesk_warnings)
 
 add_executable(bd_session_test session_test.c)
 target_link_libraries(bd_session_test PRIVATE brickdesk_session brickdesk_warnings)
+
+add_executable(bd_menu_state_app menu_state_app.c)
+target_include_directories(bd_menu_state_app PRIVATE "${BRICKDESK_GLES2_INCLUDE_DIR}")
+target_link_libraries(bd_menu_state_app PRIVATE
+  ${BRICKDESK_SDL2_TARGET}
+  ${BRICKDESK_GLES2_LIBRARY}
+  ${CMAKE_DL_LIBS}
+  $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
+  brickdesk_warnings)
+
+add_executable(bd_menu_test menu_test.c)
+target_link_libraries(bd_menu_test PRIVATE brickdesk_session brickdesk_warnings)
 
 add_test(NAME session
   COMMAND bd_session_test $<TARGET_FILE:brickdesk-demo> $<TARGET_FILE:bd_session_child>)

@@ -345,6 +345,18 @@ bool bd_app_last_frame_copy(const bd_app_last_frame *frame, void *dst,
 bool bd_app_last_frame_path(const char *dir, const char *id, char *out,
                             size_t out_size);
 
+/*
+ * Publishes one frame using the writer protocol from docs/app-protocol.md.
+ * `pixels` holds height rows of `stride` bytes; rows are stored in the order
+ * GL's glReadPixels returns them (bottom row first), matching the demo.
+ * `frame_seq` is incremented for the published header and may be NULL.
+ * The file is created or truncated; the mapping is private to the call.
+ */
+bool bd_app_last_frame_write(const char *path, uint32_t width, uint32_t height,
+                             bd_app_pixel_format format, const void *pixels,
+                             size_t stride, uint64_t *frame_seq, char *error,
+                             size_t error_size);
+
 /* ------------------------------------------------------------------ */
 /* Session                                                            */
 /* ------------------------------------------------------------------ */
@@ -401,7 +413,14 @@ typedef enum bd_session_event_kind {
   BD_SESSION_EVENT_HOOK,        /* an IPC hook completed or timed out */
   BD_SESSION_EVENT_NOTIFICATION,/* app.toast / app.log / app.state ... */
   BD_SESSION_EVENT_PROTOCOL_ERROR,
-  BD_SESSION_EVENT_NEEDS_ATTENTION /* background limit reached */
+  BD_SESSION_EVENT_NEEDS_ATTENTION, /* background limit reached */
+  /*
+   * The in-app menu shim asked the session to act on its own app. `method` is
+   * "background" or "quit"; `params` is the raw request line. The desktop
+   * handles it after bd_session_poll() returns by calling
+   * bd_session_background() or bd_session_terminate().
+   */
+  BD_SESSION_EVENT_MENU_ACTION
 } bd_session_event_kind;
 
 typedef struct bd_session_event {
@@ -522,6 +541,15 @@ bool bd_session_suggest_eviction(const bd_session *session,
 
 int bd_session_background_count(const bd_session *session);
 int bd_session_max_background(const bd_session *session);
+
+/*
+ * Path of the menu control socket injected as BRICKDESK_MENU_SOCKET. The
+ * shim connects there and sends {"type":"menu","app":"...","action":"..."};
+ * the session turns it into BD_SESSION_EVENT_MENU_ACTION. Returns NULL when
+ * the socket could not be created (the overlay still works, but return to
+ * desktop and quit have to fall back).
+ */
+const char *bd_session_menu_socket(const bd_session *session);
 
 const char *bd_session_state_name(bd_session_state state);
 const char *bd_session_result_name(bd_session_result result);

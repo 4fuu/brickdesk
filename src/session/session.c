@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -29,6 +30,15 @@
 #define BD_SESSION_FALLBACK_SOCKET_DIR "/tmp"
 #define BD_SESSION_FALLBACK_STATE_DIR "/tmp/brickdesk-state"
 #define BD_SESSION_POLL_SLICE_MS 100
+#define BD_SESSION_MENU_CLIENTS 4
+#define BD_SESSION_MENU_LINE 4096
+
+typedef struct session_menu_client {
+  int fd;
+  char buffer[BD_SESSION_MENU_LINE];
+  size_t length;
+  uint64_t deadline_ms;
+} session_menu_client;
 
 typedef enum session_op {
   OP_NONE = 0,
@@ -81,6 +91,10 @@ typedef struct session_instance {
 } session_instance;
 
 struct bd_session {
+  int menu_fd;
+  char menu_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+  session_menu_client menu_clients[BD_SESSION_MENU_CLIENTS];
+
   char socket_dir[BD_APP_PATH_MAX];
   char frame_dir[BD_APP_PATH_MAX];
   char state_root[BD_APP_PATH_MAX];
@@ -96,6 +110,10 @@ struct bd_session {
   size_t capacity;
   unsigned sequence;
 };
+
+static void menu_poll(bd_session *session, uint64_t now_ms);
+static void menu_shutdown(bd_session *session);
+static session_instance *find_instance(bd_session *session, const char *app_id);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -205,6 +223,9 @@ static void child_exec(const session_instance *instance, int error_fd) {
   }
   setenv("BRICKDESK_MENU_MODE",
          bd_app_menu_mode_name(instance->app.menu.mode), 1);
+  if (instance->session->menu_path[0] != '\0') {
+    setenv("BRICKDESK_MENU_SOCKET", instance->session->menu_path, 1);
+  }
   if (instance->frame_path[0] != '\0') {
     setenv("BRICKDESK_LAST_FRAME", instance->frame_path, 1);
   }
@@ -878,11 +899,237 @@ static void update_next(uint64_t *next, bool *has_next, uint64_t candidate) {
   }
 }
 
+
+static bool menu_json_field(const char *json, const char *field, char *out,
+                            size_t out_size) {
+  char pattern[96];
+  int written = snprintf(pattern, sizeof(pattern), "\"%s\"", field);
+  if (json == NULL || field == NULL || out == NULL || out_size == 0 ||
+      written <= 0 || (size_t)written >= sizeof(pattern)) {
+    return false;
+  }
+  const char *cursor = json;
+  while ((cursor = strstr(cursor, pattern)) != NULL) {
+    const char *after = cursor + strlen(pattern);
+    while (*after != '\0' && (*after == ' ' || *after == '\t')) {
+      ++after;
+    }
+    if (*after != ':') {
+      cursor = after;
+      continue;
+    }
+    ++after;
+    while (*after != '\0' && (*after == ' ' || *after == '\t')) {
+      ++after;
+    }
+    if (*after != '"') {
+      return false;
+    }
+    ++after;
+    size_t used = 0;
+    while (*after != '\0' && *after != '"') {
+      if (*after == '\\' && after[1] != '\0') {
+        ++after;
+      }
+      if (used + 1 < out_size) {
+        out[used++] = *after;
+      }
+      ++after;
+    }
+    out[used] = '\0';
+    return *after == '"';
+  }
+  return false;
+}
+
+static bool menu_socket_create(bd_session *session) {
+  if (session->socket_dir[0] == '\0' || session->session_id[0] == '\0') {
+    return false;
+  }
+  int written = snprintf(session->menu_path, sizeof(session->menu_path),
+                         "%s/menu-%s.sock", session->socket_dir,
+                         session->session_id);
+  if (written <= 0 || (size_t)written >= sizeof(session->menu_path)) {
+    session->menu_path[0] = '\0';
+    return false;
+  }
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlen(session->menu_path) >= sizeof(address.sun_path)) {
+    session->menu_path[0] = '\0';
+    return false;
+  }
+  snprintf(address.sun_path, sizeof(address.sun_path), "%s",
+           session->menu_path);
+  unlink(session->menu_path);
+  int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    session->menu_path[0] = '\0';
+    return false;
+  }
+  if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+      listen(fd, 8) != 0) {
+    close(fd);
+    unlink(session->menu_path);
+    session->menu_path[0] = '\0';
+    return false;
+  }
+  chmod(session->menu_path, 0660);
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags >= 0) {
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  }
+  session->menu_fd = fd;
+  return true;
+}
+
+static void menu_shutdown(bd_session *session) {
+  for (size_t i = 0; i < BD_SESSION_MENU_CLIENTS; ++i) {
+    if (session->menu_clients[i].fd >= 0) {
+      close(session->menu_clients[i].fd);
+      session->menu_clients[i].fd = -1;
+    }
+  }
+  if (session->menu_fd >= 0) {
+    close(session->menu_fd);
+    session->menu_fd = -1;
+  }
+  if (session->menu_path[0] != '\0') {
+    unlink(session->menu_path);
+    session->menu_path[0] = '\0';
+  }
+}
+
+static void menu_handle_line(bd_session *session, const char *line) {
+  char app[BD_APP_ID_MAX];
+  char action[32];
+  if (!menu_json_field(line, "app", app, sizeof(app)) ||
+      !menu_json_field(line, "action", action, sizeof(action))) {
+    return;
+  }
+  if (strcmp(action, "background") != 0 && strcmp(action, "quit") != 0) {
+    return;
+  }
+  session_instance *instance = find_instance(session, app);
+  if (instance == NULL || instance->reaped) {
+    return;
+  }
+  if (session->on_event == NULL) {
+    return;
+  }
+  bd_session_event event;
+  memset(&event, 0, sizeof(event));
+  event.kind = BD_SESSION_EVENT_MENU_ACTION;
+  event.app_id = instance->app.id;
+  event.pid = instance->pid;
+  event.previous = instance->state;
+  event.state = instance->state;
+  event.method = action;
+  event.params = line;
+  session->on_event(session->event_user, &event);
+}
+
+static void menu_poll(bd_session *session, uint64_t now_ms) {
+  if (session->menu_fd < 0) {
+    return;
+  }
+  for (;;) {
+    int fd = accept(session->menu_fd, NULL, NULL);
+    if (fd < 0) {
+      break;
+    }
+    int slot = -1;
+    for (size_t i = 0; i < BD_SESSION_MENU_CLIENTS; ++i) {
+      if (session->menu_clients[i].fd < 0) {
+        slot = (int)i;
+        break;
+      }
+    }
+    if (slot < 0) {
+      close(fd);
+      continue;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+      fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+    int fd_flags = fcntl(fd, F_GETFD, 0);
+    if (fd_flags >= 0) {
+      fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC);
+    }
+    session_menu_client *client = &session->menu_clients[slot];
+    client->fd = fd;
+    client->length = 0;
+    client->deadline_ms = now_ms + 2000;
+  }
+  for (size_t i = 0; i < BD_SESSION_MENU_CLIENTS; ++i) {
+    session_menu_client *client = &session->menu_clients[i];
+    if (client->fd < 0) {
+      continue;
+    }
+    if (now_ms >= client->deadline_ms) {
+      close(client->fd);
+      client->fd = -1;
+      continue;
+    }
+    for (;;) {
+      char chunk[512];
+      ssize_t amount = recv(client->fd, chunk, sizeof(chunk), 0);
+      if (amount < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        }
+        close(client->fd);
+        client->fd = -1;
+        break;
+      }
+      if (amount == 0) {
+        char *newline = memchr(client->buffer, '\n', client->length);
+        if (newline != NULL) {
+          *newline = '\0';
+          menu_handle_line(session, client->buffer);
+        }
+        close(client->fd);
+        client->fd = -1;
+        break;
+      }
+      if (client->length + (size_t)amount >= sizeof(client->buffer)) {
+        close(client->fd);
+        client->fd = -1;
+        break;
+      }
+      memcpy(client->buffer + client->length, chunk, (size_t)amount);
+      client->length += (size_t)amount;
+      char *newline = memchr(client->buffer, '\n', client->length);
+      if (newline == NULL) {
+        continue;
+      }
+      *newline = '\0';
+      menu_handle_line(session, client->buffer);
+      close(client->fd);
+      client->fd = -1;
+      break;
+    }
+  }
+}
+
+const char *bd_session_menu_socket(const bd_session *session) {
+  if (session == NULL || session->menu_path[0] == '\0') {
+    return NULL;
+  }
+  return session->menu_path;
+}
+
 int bd_session_poll(bd_session *session) {
   if (session == NULL) {
     return -1;
   }
   uint64_t now = monotonic_ms();
+  menu_poll(session, now);
   for (size_t i = 0; i < session->count; ++i) {
     session_instance *instance = session->items[i];
     if (instance->reaped) {
@@ -963,6 +1210,10 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
   if (session == NULL) {
     set_error(error, error_size, "out of memory creating session");
     return NULL;
+  }
+  session->menu_fd = -1;
+  for (size_t i = 0; i < BD_SESSION_MENU_CLIENTS; ++i) {
+    session->menu_clients[i].fd = -1;
   }
 
   const char *socket_dir = config != NULL ? config->socket_dir : NULL;
@@ -1081,6 +1332,7 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
       session->timeouts.display_ms = config->timeouts.display_ms;
     }
   }
+  menu_socket_create(session);
   return session;
 }
 
@@ -1089,6 +1341,7 @@ void bd_session_destroy(bd_session *session) {
     return;
   }
   session->on_event = NULL;
+  menu_shutdown(session);
   for (size_t i = 0; i < session->count; ++i) {
     free_instance(session, session->items[i], true);
   }

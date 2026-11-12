@@ -172,6 +172,7 @@ desktop decides how to display the background indicator.
 | `BRICKDESK_STATE_DIR` | `<state_root>/<app-id>` (created 0700) |
 | `BRICKDESK_STATE_FILE` | `<state-dir>/<state.path>` when declared |
 | `BRICKDESK_MENU_MODE` | `overlay`, `embedded`, `handoff`, `none` |
+| `BRICKDESK_MENU_SOCKET` | menu control socket (see section 6.1) |
 | `BRICKDESK_LAST_FRAME` | last-frame file path (see section 5) |
 
 Manifest `env` values are applied first; `BRICKDESK_*` values cannot be
@@ -283,6 +284,30 @@ connection closes.
 The reference app implements hello, pause/resume, display release/acquire,
 save/load, screenshot and quit.
 
+### 6.1 Menu control channel
+
+The in-app menu shim cannot use the application's JSON-RPC connection: it is
+not the app and must not interleave frames on that socket. The session opens a
+second, one-shot control socket at
+`<socket_dir>/menu-<session_id>.sock` and injects it as
+`BRICKDESK_MENU_SOCKET`. The shim connects, writes one line and closes:
+
+```json
+{"type":"menu","app":"dev.brickdesk.demo","action":"background"}
+```
+
+`action` is `background` or `quit`. The session accepts at most four pending
+clients, reads the first line (2 s deadline), matches `app` to a tracked
+instance, and emits `BD_SESSION_EVENT_MENU_ACTION` with `method` set to the
+action and `params` to the raw line. Like every session callback, the event
+runs inside `bd_session_poll()`; record it and call
+`bd_session_background()` or `bd_session_terminate()` after the poll returns.
+
+The shim closes the overlay before the desktop acts, so the application can
+process `app.display_release`, `app.pause` and `app.quit` from its own loop.
+If the socket is missing or the request fails, the background item reports
+that the desktop is unavailable and the quit item falls back to `SIGTERM`.
+
 ## 7. Lifecycle
 
 Per-app states:
@@ -327,7 +352,9 @@ Events (`bd_session_event_fn`):
 - `BD_SESSION_EVENT_HOOK`: hook name and `hook_ok` after response/timeout;
 - `BD_SESSION_EVENT_NOTIFICATION`: app toast/log/state/perf request;
 - `BD_SESSION_EVENT_PROTOCOL_ERROR`: malformed line or oversized request;
-- `BD_SESSION_EVENT_NEEDS_ATTENTION`: background limit, with suggestion.
+- `BD_SESSION_EVENT_NEEDS_ATTENTION`: background limit, with suggestion;
+- `BD_SESSION_EVENT_MENU_ACTION`: the in-app menu asked for `background` or
+  `quit`; `method` is the action, `app_id`/`pid` identify the instance.
 
 `bd_session_poll()` returns the milliseconds until the next timer (or 100 ms
 while any app is active, so exits are noticed) and `-1` when idle. Call it from
@@ -355,6 +382,13 @@ directly.
 crashes, ignored SIGTERM and hook timeouts. The test verifies `/proc/<pid>/stat`
 state `T` while suspended, `R/S` after resume, exit codes/signals, the
 background limit, manifest errors, image fallback and last-frame validation.
+
+`tests/menu_test.c` covers the menu shim end to end: a real
+`brickdesk-inputd --replay` stream opens the overlay, the menu control socket
+reports `background` and `quit`, the demo's state file is written, the
+last-frame header is valid, and the two menu screenshots are compared with
+`tests/baselines/host/menu_*.png`. `tests/menu_state_app.c` verifies the GL
+state and pixels after the menu closes. See `docs/menu-shim.md`.
 
 ## 9. Device probes and known limits
 

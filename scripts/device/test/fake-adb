@@ -1,0 +1,147 @@
+#!/bin/sh
+# Minimal adb stand-in for scripts/device/test/run-tests.sh.
+#
+# It logs every invocation to $FAKE_ADB_LOG and returns canned device data so
+# the device scripts can run without hardware. It never touches the real device.
+set -eu
+
+log=${FAKE_ADB_LOG:?FAKE_ADB_LOG is not set}
+state=${FAKE_ADB_STATE:-$(dirname "$log")/state}
+mkdir -p "$(dirname "$log")" "$state"
+printf '%s\n' "$*" >>"$log"
+
+cmd=${1:-}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+bump() {
+    file=$state/$1
+    n=0
+    if [ -f "$file" ]; then
+        n=$(cat "$file")
+    fi
+    n=$((n + 1))
+    printf '%s\n' "$n" >"$file"
+    printf '%s' "$n"
+}
+
+case "$cmd" in
+    get-state)
+        echo device
+        ;;
+    get-serialno)
+        echo FAKE0001
+        ;;
+    wait-for-device|start-server|kill-server|root|remount|devices|forward)
+        exit 0
+        ;;
+    shell|exec-out)
+        shcmd=$*
+        case "$shcmd" in
+            *"@@STAT"*)
+                tick=$(bump ticks)
+                up=$(bump uptime)
+                ticks=$((1200 + tick * 100))
+                uptime=$((1000 + up))
+                cat <<EOF
+@@STAT
+4242 (brickdesk) S 1 4242 4242 0 -1 4194560 100 0 0 0 $ticks 50 0 0 20 0 1 0 100 12345678 100 18446744073709551615
+@@STATUS
+Name:	brickdesk
+VmRSS:	  12345 kB
+@@UPTIME
+$uptime.00 200.00
+@@FREQ
+1200000
+@@TEMP
+45000
+@@BATT
+77
+EOF
+                ;;
+            *"getconf CLK_TCK"*)
+                echo 100
+                ;;
+            *pidof*brickdesk*)
+                echo 4242
+                ;;
+            *pidof*display_probe*)
+                echo 4243
+                ;;
+            *pidof*MainUI*)
+                echo 4000
+                ;;
+            *"kill -0"*)
+                exit 0
+                ;;
+            *display_probe*--dump-fb*)
+                echo "fb0_res: 1024x768"
+                echo "dump-fb: wrote 1024x768 PPM"
+                ;;
+            *display_probe*)
+                cat <<EOF
+== fb0 ==
+fb0_res: 1024x768
+fb0_bpp: 32
+== SDL ==
+sdl_video_driver: mali
+sdl_window_size: 1024x768
+== EGL ==
+egl_vendor: Imagination Technologies
+egl_version: 1.4
+egl_surface_size: 1024x768
+egl_buffer_age: 1
+egl_proc_swap_with_damage: yes
+== GL ==
+gl_renderer: PowerVR GE8300
+gl_version: OpenGL ES 2.0
+== clear + swap ==
+swap_ms_p50: 16.700
+swap_ms_p95: 17.100
+RESULT: PASS
+EOF
+                ;;
+            *"cat /proc/version"*)
+                echo "Linux version 4.9.191 (fake build)"
+                ;;
+            *"uname -a"*)
+                echo "Linux brickpro 4.9.191 aarch64 GNU/Linux"
+                ;;
+            *dmesg*)
+                echo "[fake] dmesg line"
+                ;;
+            *logread*)
+                echo "[fake] logread line"
+                ;;
+            *"tail -n"*)
+                echo "[fake] brickdesk log line"
+                ;;
+            *)
+                exit 0
+                ;;
+        esac
+        ;;
+    push)
+        # Logged above; the harness checks destinations.
+        exit 0
+        ;;
+    pull)
+        remote=${1:-}
+        local=${2:-}
+        mkdir -p "$(dirname "$local")"
+        case "$remote" in
+            *.ppm)
+                printf 'P6\n2 2\n255\n' >"$local"
+                printf '\377\000\000\000\377\000\000\000\000\377\377\377\377' >>"$local"
+                ;;
+            *)
+                mkdir -p "$local/$(basename "$remote")"
+                echo "[fake] application log" >"$local/$(basename "$remote")/brickdesk.log"
+                ;;
+        esac
+        ;;
+    *)
+        exit 0
+        ;;
+esac

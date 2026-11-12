@@ -5,6 +5,7 @@
 
 #include "brickdesk/gfx.h"
 #include "brickdesk/input.h"
+#include "brickdesk/plugin.h"
 #include "brickdesk/theme.h"
 
 /*
@@ -14,6 +15,7 @@
  */
 
 typedef struct bd_desktop bd_desktop;
+typedef struct bd_plugin bd_plugin;
 
 typedef struct bd_desktop_theme {
   bool dark;
@@ -41,5 +43,20 @@ bd_accent_palette bd_desktop_accent(const bd_desktop *desktop);
 
 /* True while cover images are decoding; the event loop should wake soon. */
 bool bd_desktop_has_pending_images(const bd_desktop *desktop);
+
+/*
+ * Replaces the reserved demo tile with a plugin-rendered tile. The desktop
+ * owns the tile's visibility and rendering; the caller owns the plugin host
+ * and must destroy the desktop (which frees the tile texture) before the host.
+ */
+void bd_desktop_set_plugin_tile(bd_desktop *desktop, bd_plugin *plugin);
+
+/*
+ * Draws a plugin's declarative settings tree in a centered panel over the
+ * desktop. Must be called inside a gfx frame; the caller draws the desktop
+ * first. Returns false when there is no settings tree.
+ */
+bool bd_desktop_draw_plugin_settings(bd_desktop *desktop, bd_gfx *gfx,
+                                     const bd_plugin_ui *settings);
 
 #endif /* BRICKDESK_DESKTOP_H */

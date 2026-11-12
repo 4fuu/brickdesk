@@ -55,6 +55,7 @@ const bd_config_spec bd_config_specs[] = {
 
     /* plugins */
     {"plugins", "enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"plugins", "dir", BD_CONFIG_STRING, "", 0, 0, NULL, 512, 0, 0},
     {"plugins", "max_total_rss_mb", BD_CONFIG_INT, "128", 16, 1024, NULL, 0, 0, 0},
     {"plugins", "idle_stop", BD_CONFIG_DURATION, "60s", 0, 86400000, NULL, 0,
      1000, 0},

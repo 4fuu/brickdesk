@@ -9,6 +9,7 @@
 #include "brickdesk/gfx.h"
 #include "brickdesk/input.h"
 #include "brickdesk/platform.h"
+#include "brickdesk/plugin.h"
 #include "brickdesk/theme.h"
 #include "brickdesk/version.h"
 
@@ -71,8 +72,8 @@ static void main_emit(void *user, const bd_input_output *event) {
 
 static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
                     bd_input_state *input_state,
-                    const bd_hotkey_table *hotkeys, int idle_check_ms,
-                    bool verbose) {
+                    const bd_hotkey_table *hotkeys, bd_plugin_host *plugins,
+                    int idle_check_ms, bool verbose) {
   const bool idle_check = idle_check_ms > 0;
   bool dirty = true;
   bool initial_presented = false;
@@ -86,6 +87,14 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
   input.verbose = verbose;
 
   for (;;) {
+    if (plugins != NULL) {
+      if (bd_plugin_host_poll(plugins, 0) < 0) {
+        fprintf(stderr, "brickdesk: plugin poll failed\n");
+      }
+      if (bd_plugin_host_take_dirty(plugins)) {
+        dirty = true;
+      }
+    }
     if (dirty) {
       render_frame(platform, gfx, desktop, verbose);
       dirty = false;
@@ -112,6 +121,12 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
     } else if (bd_desktop_has_pending_images(desktop)) {
       /* Decode results are uploaded in begin_frame; poll while work exists. */
       timeout_ms = 16;
+    }
+    if (plugins != NULL) {
+      int plugin_timeout = bd_plugin_host_next_timeout(plugins);
+      if (plugin_timeout >= 0 && (timeout_ms < 0 || plugin_timeout < timeout_ms)) {
+        timeout_ms = plugin_timeout;
+      }
     }
     uint64_t hotkey_deadline = 0;
     if (bd_input_state_next_deadline(input_state, &hotkey_deadline)) {
@@ -289,10 +304,80 @@ int main(int argc, char **argv) {
                       (int)bd_config_get_int(settings, "input.double_tap_ms",
                                              300));
 
+  bd_plugin_host *plugin_host = NULL;
+  bool plugins_enabled =
+      bd_config_get_bool(settings, "plugins.enabled", true) && idle_check_ms == 0;
+  if (plugins_enabled) {
+    const char *configured_dir = bd_config_get_string(settings, "plugins.dir", "");
+    bd_plugin_limits limits = bd_plugin_default_limits();
+    long idle_stop_ms = bd_config_get_int(settings, "plugins.idle_stop", 60000);
+    if (idle_stop_ms >= 0 && idle_stop_ms <= 86400000) {
+      limits.idle_stop_ms = (int)idle_stop_ms;
+    }
+    bd_plugin_host_config plugin_config;
+    memset(&plugin_config, 0, sizeof(plugin_config));
+    plugin_config.plugin_dir =
+        configured_dir != NULL && configured_dir[0] != '\0' ? configured_dir : NULL;
+    plugin_config.limits = &limits;
+    plugin_config.display_width = bd_platform_width(platform);
+    plugin_config.display_height = bd_platform_height(platform);
+    plugin_config.dark = theme.dark;
+    plugin_config.accent = ((uint32_t)(theme.accent.r * 255.0f + 0.5f) << 16) |
+                           ((uint32_t)(theme.accent.g * 255.0f + 0.5f) << 8) |
+                           (uint32_t)(theme.accent.b * 255.0f + 0.5f);
+    plugin_config.locale = bd_config_get_string(settings, "ui.language", "zh-CN");
+    plugin_config.verbose = verbose;
+    plugin_host = bd_plugin_host_create(&plugin_config);
+    if (plugin_host == NULL) {
+      fprintf(stderr, "brickdesk: plugin host unavailable\n");
+    } else {
+      char plugin_error[256] = {0};
+      int plugin_count =
+          bd_plugin_host_scan(plugin_host, plugin_error, sizeof(plugin_error));
+      if (plugin_count < 0) {
+        fprintf(stderr, "brickdesk: plugins: %s\n", plugin_error);
+      } else {
+        for (size_t i = 0; i < bd_plugin_host_diagnostic_count(plugin_host); ++i) {
+          char diagnostic[256];
+          if (bd_plugin_host_diagnostic(plugin_host, i, diagnostic,
+                                        sizeof(diagnostic))) {
+            fprintf(stderr, "brickdesk: plugin: %s\n", diagnostic);
+          }
+        }
+        bd_plugin *tile_plugin = NULL;
+        for (size_t i = 0; i < bd_plugin_host_count(plugin_host); ++i) {
+          const bd_plugin_manifest *manifest =
+              bd_plugin_host_manifest(plugin_host, i);
+          if (manifest != NULL &&
+              (manifest->capabilities & BD_PLUGIN_CAP_TILE) != 0) {
+            tile_plugin = bd_plugin_host_at(plugin_host, i);
+            break;
+          }
+        }
+        if (tile_plugin != NULL) {
+          bd_desktop_set_plugin_tile(desktop, tile_plugin);
+        } else if (verbose) {
+          fprintf(stderr, "brickdesk: no tile plugin found in %s\n",
+                  configured_dir != NULL && configured_dir[0] != '\0'
+                      ? configured_dir
+                      : BRICKDESK_PLUGIN_DIR);
+        }
+        for (size_t i = 0; i < bd_plugin_host_count(plugin_host); ++i) {
+          const bd_plugin_manifest *manifest =
+              bd_plugin_host_manifest(plugin_host, i);
+          if (manifest != NULL && manifest->autostart) {
+            bd_plugin_activate(bd_plugin_host_at(plugin_host, i));
+          }
+        }
+      }
+    }
+  }
+
   int result = run_loop(platform, gfx, desktop, &input_state, &hotkeys,
-                        idle_check_ms, verbose);
+                        plugin_host, idle_check_ms, verbose);
 
   bd_desktop_destroy(desktop);
+  bd_plugin_host_destroy(plugin_host);
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);
   bd_config_free(settings);

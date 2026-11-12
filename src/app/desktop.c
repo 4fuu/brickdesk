@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "brickdesk/plugin.h"
 #include "brickdesk/ui.h"
 #include "brickdesk/wall.h"
 
@@ -41,6 +42,8 @@ struct bd_desktop {
   bd_wall_item items[14];
   char image_paths[14][512];
   int item_count;
+  bd_plugin *plugin;
+  int plugin_item;
 };
 
 static float blob(float x, float y, float cx, float cy, float rx, float ry) {
@@ -286,6 +289,7 @@ bd_desktop *bd_desktop_create(bd_gfx *gfx, const bd_desktop_theme *theme) {
   desktop->wall_style.accent = desktop->accent;
   desktop->wall_style.radius = 6;
   desktop->wall_style.prefetch_pixels = BD_WALL_PITCH;
+  desktop->plugin_item = -1;
   desktop->wall = bd_wall_create(gfx, &desktop->wall_style);
   if (desktop->wall == NULL) {
     bd_ui_fonts_free(&desktop->fonts);
@@ -311,10 +315,50 @@ void bd_desktop_destroy(bd_desktop *desktop) {
   if (desktop == NULL) {
     return;
   }
+  if (desktop->plugin != NULL) {
+    bd_plugin_tile_release(desktop->plugin, desktop->gfx);
+    desktop->plugin = NULL;
+  }
   bd_wall_destroy(desktop->wall);
   bd_ui_fonts_free(&desktop->fonts);
   bd_gfx_texture_destroy(desktop->gfx, desktop->ambient);
   free(desktop);
+}
+
+static void draw_plugin_tile(bd_desktop *desktop, bd_gfx *gfx,
+                             bd_rect viewport) {
+  if (desktop->plugin == NULL || desktop->plugin_item < 0 ||
+      desktop->plugin_item >= desktop->item_count) {
+    return;
+  }
+  const bd_wall_item *item = &desktop->items[desktop->plugin_item];
+  bd_rect screen = bd_rect_make(item->rect.x + BD_WALL_ORIGIN_X,
+                                item->rect.y + BD_WALL_ORIGIN_Y, item->rect.w,
+                                item->rect.h);
+  bd_rect prefetch = bd_rect_make(viewport.x - BD_WALL_PITCH,
+                                  viewport.y - BD_WALL_PITCH,
+                                  viewport.w + BD_WALL_PITCH * 2,
+                                  viewport.h + BD_WALL_PITCH * 2);
+  bool visible = bd_rect_intersect(screen, prefetch).w > 0;
+  bd_plugin_set_tile_visible(desktop->plugin, visible);
+  if (!visible) {
+    return;
+  }
+  bool changed = bd_plugin_tile_begin_frame(desktop->plugin, gfx);
+  if (changed) {
+    bd_rect damage = screen;
+    damage.x -= 4;
+    damage.y -= 4;
+    damage.w += 8;
+    damage.h += 8;
+    bd_gfx_damage_rect(gfx, bd_rect_intersect(damage, viewport));
+  }
+  bd_plugin_render_style style;
+  memset(&style, 0, sizeof(style));
+  style.fonts = &desktop->fonts;
+  style.accent = desktop->accent;
+  style.dark = desktop->dark;
+  bd_plugin_tile_draw(desktop->plugin, gfx, screen, &style);
 }
 
 void bd_desktop_draw(bd_desktop *desktop, bd_gfx *gfx) {
@@ -326,6 +370,7 @@ void bd_desktop_draw(bd_desktop *desktop, bd_gfx *gfx) {
                       BD_WALL_ORIGIN_Y);
   draw_backdrop(desktop, gfx);
   bd_wall_draw(desktop->wall, gfx);
+  draw_plugin_tile(desktop, gfx, viewport);
   draw_top_bar(desktop, gfx);
   draw_hint_bar(desktop, gfx);
 }
@@ -386,4 +431,66 @@ bd_accent_palette bd_desktop_accent(const bd_desktop *desktop) {
 
 bool bd_desktop_has_pending_images(const bd_desktop *desktop) {
   return desktop != NULL && bd_wall_has_pending_images(desktop->wall);
+}
+
+bool bd_desktop_draw_plugin_settings(bd_desktop *desktop, bd_gfx *gfx,
+                                     const bd_plugin_ui *settings) {
+  if (desktop == NULL || gfx == NULL || settings == NULL) {
+    return false;
+  }
+  int width = bd_gfx_width(gfx);
+  int height = bd_gfx_height(gfx);
+  bd_color scrim = desktop->dark ? bd_color_rgba(8, 7, 5, 150)
+                                 : bd_color_rgba(255, 250, 240, 165);
+  bd_gfx_fill_rect(gfx, bd_rect_make(0, 0, width, height), scrim);
+  bd_rect panel = bd_rect_make((width - 560) / 2, (height - 380) / 2, 560, 380);
+  bd_color surface = desktop->dark ? bd_color_rgb(26, 23, 19)
+                                   : bd_color_rgb(247, 243, 234);
+  bd_gfx_fill_round_rect(gfx, panel, 16, surface);
+  bd_gfx_stroke_round_rect(gfx, panel, 16, 1, desktop->line);
+  bd_plugin_render_style style;
+  memset(&style, 0, sizeof(style));
+  style.fonts = &desktop->fonts;
+  style.accent = desktop->accent;
+  style.dark = desktop->dark;
+  int focused = -1;
+  for (int i = 0; i < settings->node_count; ++i) {
+    if (settings->nodes[i].type == BD_PLUGIN_UI_TOGGLE ||
+        settings->nodes[i].type == BD_PLUGIN_UI_SLIDER ||
+        settings->nodes[i].type == BD_PLUGIN_UI_SELECT ||
+        settings->nodes[i].type == BD_PLUGIN_UI_BUTTON) {
+      focused = i;
+      break;
+    }
+  }
+  bd_rect content = panel;
+  content.x += 8;
+  content.y += 8;
+  content.w -= 16;
+  content.h -= 16;
+  bd_plugin_ui_draw(settings, gfx, content, &style, focused, 0);
+  return true;
+}
+
+void bd_desktop_set_plugin_tile(bd_desktop *desktop, bd_plugin *plugin) {
+  if (desktop == NULL || plugin == NULL || desktop->item_count <= 0) {
+    return;
+  }
+  int index = desktop->item_count - 1;
+  int focus = bd_wall_focus(desktop->wall);
+  bd_wall_item *item = &desktop->items[index];
+  memset(item, 0, sizeof(*item));
+  item->rect = cell_rect(4, 3, 1, 1);
+  item->placeholder = bd_color_mix(desktop->bg, desktop->accent.soft, 0.5f);
+  item->progress = -1.0f;
+  desktop->plugin = plugin;
+  desktop->plugin_item = index;
+  if (!bd_wall_set_items(desktop->wall, desktop->items, desktop->item_count)) {
+    desktop->plugin = NULL;
+    desktop->plugin_item = -1;
+    return;
+  }
+  bd_wall_set_focus(desktop->wall, focus);
+  bd_plugin_set_tile_visible(plugin, true);
+  bd_gfx_damage_all(desktop->gfx);
 }

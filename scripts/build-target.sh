@@ -117,7 +117,10 @@ fi
 echo "==> writing SHA256SUMS"
 (
     cd "$BUILD_DIR/dist"
-    find . -type f ! -name SHA256SUMS -exec sha256sum {} \; | sort -k2 >SHA256SUMS
+    sums=$BUILD_DIR/.SHA256SUMS.tmp
+    rm -f "$sums"
+    find . -type f ! -name SHA256SUMS -exec sha256sum {} \; | sort -k2 >"$sums"
+    mv "$sums" SHA256SUMS
 )
 
 echo "==> target artifacts in $BUILD_DIR/dist"

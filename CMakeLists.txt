@@ -56,7 +56,11 @@ if(NOT BRICKDESK_GLES2_INCLUDE_DIR OR NOT BRICKDESK_GLES2_LIBRARY)
 endif()
 
 # --- third-party --------------------------------------------------------
-add_library(bd_stb STATIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_image_write_impl.c")
+add_library(bd_stb STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_image_impl.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_image_write_impl.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_truetype_impl.c"
+)
 target_include_directories(bd_stb PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb")
 if(NOT MSVC)
   # Vendored code is not ours to keep warning-clean.
@@ -66,8 +70,14 @@ endif()
 # --- core library -------------------------------------------------------
 add_library(brickdesk_core STATIC
   src/app/desktop.c
+  src/app/theme.c
+  src/app/ui.c
+  src/app/wall.c
+  src/gfx/batch.c
   src/gfx/capture.c
+  src/gfx/image.c
   src/gfx/renderer.c
+  src/gfx/text.c
   src/input/keys.c
   src/platform/host_sdl.c
 )
@@ -82,13 +92,17 @@ target_include_directories(brickdesk_core
 target_link_libraries(brickdesk_core
   PUBLIC
     ${BRICKDESK_SDL2_TARGET}
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
   PRIVATE
     ${BRICKDESK_GLES2_LIBRARY}
     bd_stb
     brickdesk_warnings
 )
-target_compile_definitions(brickdesk_core PRIVATE
-  BRICKDESK_BACKEND_NAME="${BRICKDESK_BACKEND}"
+target_compile_definitions(brickdesk_core
+  PUBLIC
+    BRICKDESK_ASSET_DIR="${BRICKDESK_ASSET_DIR}"
+  PRIVATE
+    BRICKDESK_BACKEND_NAME="${BRICKDESK_BACKEND}"
 )
 
 # --- configuration ------------------------------------------------------
@@ -135,4 +149,8 @@ target_link_libraries(brickdesk-config PRIVATE brickdesk_config brickdesk_warnin
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
+endif()
+
+if(BRICKDESK_BUILD_BENCH AND NOT CMAKE_CROSSCOMPILING)
+  add_subdirectory(bench)
 endif()

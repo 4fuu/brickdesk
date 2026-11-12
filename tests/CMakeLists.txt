@@ -16,6 +16,20 @@ target_link_libraries(bd_key_names_test PRIVATE brickdesk_core brickdesk_warning
 add_executable(bd_config_test config_test.c)
 target_link_libraries(bd_config_test PRIVATE brickdesk_config brickdesk_warnings)
 
+add_executable(bd_theme_test theme_test.c)
+target_link_libraries(bd_theme_test PRIVATE brickdesk_core brickdesk_warnings)
+
+add_executable(bd_dirty_regions dirty_regions.c)
+target_link_libraries(bd_dirty_regions PRIVATE brickdesk_core brickdesk_warnings)
+
+add_executable(bd_wall_scale wall_scale.c)
+target_link_libraries(bd_wall_scale PRIVATE brickdesk_core brickdesk_warnings)
+
+add_executable(bd_gfx_capture gfx_capture.c)
+target_link_libraries(bd_gfx_capture PRIVATE brickdesk_core brickdesk_warnings)
+target_compile_definitions(bd_gfx_capture PRIVATE
+  BRICKDESK_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
 if(BRICKDESK_BUILD_HARNESS)
   add_executable(bd_harness
     harness/main.c
@@ -25,7 +39,7 @@ if(BRICKDESK_BUILD_HARNESS)
     "${CMAKE_CURRENT_SOURCE_DIR}/harness"
     "${PROJECT_SOURCE_DIR}/third_party/jsmn"
   )
-  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_warnings)
+  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
 endif()
 
 if(CMAKE_CROSSCOMPILING)
@@ -37,6 +51,18 @@ add_test(NAME key_names COMMAND bd_key_names_test)
 add_test(NAME config COMMAND bd_config_test)
 add_test(NAME config_check
   COMMAND brickdesk-config check --config-dir "${PROJECT_SOURCE_DIR}/config")
+
+add_test(NAME theme COMMAND bd_theme_test)
+
+add_test(NAME dirty_regions COMMAND bd_dirty_regions)
+set_tests_properties(dirty_regions PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 120)
+
+add_test(NAME wall_scale COMMAND bd_wall_scale)
+set_tests_properties(wall_scale PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 120)
 
 add_test(NAME smoke_render
   COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")
@@ -104,4 +130,17 @@ if(BRICKDESK_BUILD_HARNESS)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_imagediff.py"
             --imagediff "${PROJECT_SOURCE_DIR}/tools/imagediff.py")
   set_tests_properties(imagediff_unit PROPERTIES TIMEOUT 120)
+
+  add_test(NAME gfx_capture
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCAPTURE=$<TARGET_FILE:bd_gfx_capture>"
+      "-DOUT_DIR=${BD_ARTIFACT_DIR}/gfx_capture"
+      "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_gfx_capture.cmake")
+  set_tests_properties(gfx_capture PROPERTIES
+    ENVIRONMENT "${BD_HEADLESS_ENV}"
+    TIMEOUT 180
+    FAIL_REGULAR_EXPRESSION "FAIL")
 endif()

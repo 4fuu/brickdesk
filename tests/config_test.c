@@ -268,7 +268,7 @@ static void test_repo_defaults(void) {
   CHECK(bd_config_get_int(config, "profile.performance.max_khz", -1) == 1800000,
         "repo defaults: profile.performance.max_khz");
   CHECK(strcmp(bd_config_get_string(config, "device.TrimUI Gamepad.A", ""),
-               "BTN_SOUTH") == 0,
+               "BTN_EAST") == 0,
         "repo defaults: device.TrimUI Gamepad.A");
   CHECK(strcmp(bd_config_dir(config), dir) == 0,
         "repo defaults: config dir");

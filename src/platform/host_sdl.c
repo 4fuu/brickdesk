@@ -37,6 +37,18 @@ static bd_key map_scancode(SDL_Scancode scancode) {
       return BD_KEY_L1;
     case SDL_SCANCODE_E:
       return BD_KEY_R1;
+    case SDL_SCANCODE_R:
+      return BD_KEY_L2;
+    case SDL_SCANCODE_F:
+      return BD_KEY_R2;
+    case SDL_SCANCODE_H:
+      return BD_KEY_HOME;
+    case SDL_SCANCODE_P:
+      return BD_KEY_POWER;
+    case SDL_SCANCODE_LEFTBRACKET:
+      return BD_KEY_VOLUME_DOWN;
+    case SDL_SCANCODE_RIGHTBRACKET:
+      return BD_KEY_VOLUME_UP;
     case SDL_SCANCODE_TAB:
       return BD_KEY_SELECT;
     case SDL_SCANCODE_RETURN:

@@ -30,6 +30,9 @@ target_link_libraries(bd_gfx_capture PRIVATE brickdesk_core brickdesk_warnings)
 target_compile_definitions(bd_gfx_capture PRIVATE
   BRICKDESK_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
+add_executable(bd_hotkey_test hotkey_test.c)
+target_link_libraries(bd_hotkey_test PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
+
 if(BRICKDESK_BUILD_HARNESS)
   add_executable(bd_harness
     harness/main.c
@@ -49,8 +52,11 @@ endif()
 
 add_test(NAME key_names COMMAND bd_key_names_test)
 add_test(NAME config COMMAND bd_config_test)
+add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME config_check
   COMMAND brickdesk-config check --config-dir "${PROJECT_SOURCE_DIR}/config")
+add_test(NAME input_check
+  COMMAND bd-input --check --config-dir "${PROJECT_SOURCE_DIR}/config")
 
 add_test(NAME theme COMMAND bd_theme_test)
 

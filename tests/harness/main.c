@@ -10,6 +10,7 @@
 #include "brickdesk/config.h"
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
+#include "brickdesk/input.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/theme.h"
 #include "scenario.h"
@@ -18,9 +19,21 @@
 
 static void print_usage(FILE *stream) {
   fprintf(stream,
-          "usage: bd_harness --scenario FILE --out-dir DIR [--verbose]\n"
+          "usage: bd_harness --scenario FILE --out-dir DIR [--config-dir DIR]\n"
+          "                  [--verbose]\n"
           "\n"
           "Replays a JSON input scenario and writes screenshots as PNG.\n");
+}
+
+typedef struct harness_input {
+  bd_desktop *desktop;
+} harness_input;
+
+static void harness_emit(void *user, const bd_input_output *event) {
+  harness_input *input = (harness_input *)user;
+  if (event->kind == BD_INPUT_OUTPUT_KEY) {
+    bd_desktop_handle_key(input->desktop, event->key, event->pressed);
+  }
 }
 
 static bool make_directory(const char *path) {
@@ -37,7 +50,7 @@ static bool join_path(char *out, size_t out_size, const char *directory,
 }
 
 static int run_scenario(const bd_scenario *scenario, const char *out_dir,
-                        bool verbose) {
+                        const char *config_dir, bool verbose) {
   bd_platform_config config;
   config.title = "brickdesk harness";
   config.width = scenario->width;
@@ -88,6 +101,31 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
     return 1;
   }
 
+  bd_config_options config_options;
+  config_options.config_dir = config_dir;
+  config_options.migrate = false;
+  char config_error[256] = {0};
+  bd_config *settings =
+      bd_config_load(&config_options, config_error, sizeof(config_error));
+  if (settings == NULL) {
+    fprintf(stderr, "harness: config: %s\n", config_error);
+    bd_desktop_destroy(desktop);
+    bd_gfx_destroy(gfx);
+    bd_platform_destroy(platform);
+    return 1;
+  }
+  bd_hotkey_table hotkeys;
+  bd_hotkey_table_load(&hotkeys, settings);
+  if (verbose && (hotkeys.diagnostic_count > 0 || hotkeys.conflict_count > 0)) {
+    fprintf(stderr, "harness: %zu hotkey diagnostic(s), %zu conflict(s)\n",
+            hotkeys.diagnostic_count, hotkeys.conflict_count);
+  }
+  bd_input_state input_state;
+  bd_input_state_init(&input_state, &hotkeys, "global",
+                      (int)bd_config_get_int(settings, "input.double_tap_ms", 300));
+  harness_input input;
+  input.desktop = desktop;
+
   printf("scenario: %s (%dx%d, fixed_dt_ms=%d, steps=%d)\n", scenario->name,
          scenario->width, scenario->height, scenario->fixed_dt_ms,
          scenario->step_count);
@@ -101,15 +139,23 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
     switch (step->type) {
       case BD_STEP_WAIT:
         frame += (unsigned long)step->frames;
+        bd_input_state_advance(&input_state,
+                               (uint64_t)frame * (uint64_t)scenario->fixed_dt_ms,
+                               harness_emit, &input);
         break;
 
       case BD_STEP_KEY:
         printf("key: frame=%lu key=%s action=%s\n", frame, bd_key_name(step->key),
                step->pressed ? "down" : "up");
-        bd_desktop_handle_key(desktop, step->key, step->pressed);
+        bd_input_state_feed(&input_state, step->key, step->pressed,
+                            (uint64_t)frame * (uint64_t)scenario->fixed_dt_ms,
+                            harness_emit, &input);
         break;
 
       case BD_STEP_SCREENSHOT: {
+        bd_input_state_advance(&input_state,
+                               (uint64_t)frame * (uint64_t)scenario->fixed_dt_ms,
+                               harness_emit, &input);
         int quiet = 0;
         for (int wait = 0; wait < 300 && quiet < 2; ++wait) {
           bd_gfx_begin_frame(gfx);
@@ -151,6 +197,7 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
 
   printf("done: frames=%lu captures=%d\n", frame, captures);
 
+  bd_config_free(settings);
   bd_desktop_destroy(desktop);
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);
@@ -160,6 +207,7 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
 int main(int argc, char **argv) {
   const char *scenario_path = NULL;
   const char *out_dir = NULL;
+  const char *config_dir = NULL;
   bool verbose = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -176,6 +224,12 @@ int main(int argc, char **argv) {
         return 2;
       }
       out_dir = argv[++i];
+    } else if (strcmp(arg, "--config-dir") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "bd_harness: --config-dir needs a path\n");
+        return 2;
+      }
+      config_dir = argv[++i];
     } else if (strcmp(arg, "--verbose") == 0) {
       verbose = true;
     } else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
@@ -207,5 +261,5 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  return run_scenario(&scenario, out_dir, verbose);
+  return run_scenario(&scenario, out_dir, config_dir, verbose);
 }

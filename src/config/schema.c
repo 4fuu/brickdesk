@@ -71,6 +71,7 @@ const bd_config_spec bd_config_specs[] = {
      BD_CONFIG_SPEC_REQUIRED},
     {"hotkey.*", "hold_ms", BD_CONFIG_INT, "500", 50, 5000, NULL, 0, 0, 0},
     {"hotkey.*", "window_ms", BD_CONFIG_INT, "50", 10, 500, NULL, 0, 0, 0},
+    {"hotkey.*", "sequence_ms", BD_CONFIG_INT, "800", 100, 5000, NULL, 0, 0, 0},
     {"hotkey.*", "action", BD_CONFIG_STRING, NULL, 0, 0, NULL, 64, 0,
      BD_CONFIG_SPEC_REQUIRED},
     {"hotkey.*", "scope", BD_CONFIG_STRING, "global", 0, 0, NULL, 64, 0, 0},
@@ -266,8 +267,10 @@ static bool normalize_accent(const bd_config_spec *spec, const char *value,
 }
 
 static const char *const g_logical_keys[] = {
-    "A", "B", "X", "Y", "L1", "R1", "SELECT", "START", "MENU",
-    "UP", "DOWN", "LEFT", "RIGHT",
+    "A",     "B",     "X",      "Y",     "L1",         "R1",
+    "L2",    "R2",    "SELECT", "START", "MENU",       "HOME",
+    "UP",    "DOWN",  "LEFT",   "RIGHT", "POWER",      "VOLUME_UP",
+    "VOLUME_DOWN",
 };
 
 static bool combo_key_name(const char *name, char *out, size_t out_size) {

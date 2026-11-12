@@ -78,7 +78,6 @@ add_library(brickdesk_core STATIC
   src/gfx/image.c
   src/gfx/renderer.c
   src/gfx/text.c
-  src/input/keys.c
   src/platform/host_sdl.c
 )
 target_include_directories(brickdesk_core
@@ -93,6 +92,7 @@ target_link_libraries(brickdesk_core
   PUBLIC
     ${BRICKDESK_SDL2_TARGET}
     $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
+    brickdesk_input
   PRIVATE
     ${BRICKDESK_GLES2_LIBRARY}
     bd_stb
@@ -137,9 +137,34 @@ target_link_libraries(brickdesk_config
   PRIVATE brickdesk_warnings
 )
 
+# --- input --------------------------------------------------------------
+# Keys, hotkey parsing/state machine, evdev and input.ini mapping. Kept free
+# of SDL so brickdesk-inputd and bd-input can run on the device without a
+# display context.
+add_library(brickdesk_input STATIC
+  src/input/device_map.c
+  src/input/evdev.c
+  src/input/hotkey.c
+  src/input/keys.c
+)
+target_include_directories(brickdesk_input
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_input
+  PUBLIC brickdesk_config
+  PRIVATE brickdesk_warnings
+)
+
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
 target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
+
+# --- input daemon and tools ---------------------------------------------
+add_executable(brickdesk-inputd src/input/inputd.c)
+target_link_libraries(brickdesk-inputd PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
+
+add_executable(bd-input tools/bd-input.c)
+target_link_libraries(bd-input PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
 
 # --- tools --------------------------------------------------------------
 add_executable(brickdesk-config tools/brickdesk-config.c)

@@ -37,9 +37,11 @@ int main(void) {
     }
   }
 
-  static const char *const required[] = {"A",    "B",   "X",      "Y",     "L1",
-                                         "R1",   "SELECT", "START", "MENU", "UP",
-                                         "DOWN", "LEFT", "RIGHT"};
+  static const char *const required[] = {
+      "A",     "B",      "X",     "Y",     "L1",         "R1",
+      "L2",    "R2",     "SELECT", "START", "MENU",      "HOME",
+      "UP",    "DOWN",   "LEFT",  "RIGHT", "POWER",      "VOLUME_UP",
+      "VOLUME_DOWN"};
   for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
     if (bd_key_from_name(required[i]) == BD_KEY_UNKNOWN) {
       fprintf(stderr, "key_names: required key '%s' not accepted\n", required[i]);

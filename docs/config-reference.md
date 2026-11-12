@@ -139,7 +139,7 @@ schema_version = 1
 | `repeat_delay_ms` | int | `400` | 0..2000 | 方向键首次重复前延迟 |
 | `repeat_interval_ms` | int | `80` | 10..1000 | 方向键重复间隔 |
 | `chord_window_ms` | int | `50` | 10..500 | chord 判定窗口 |
-| `long_press_ms` | int | `500` | 100..3000 | 全局长按阈值；热键可用 `hold_ms` 覆盖 |
+| `long_press_ms` | int | `500` | 100..3000 | 应用内长按阈值；热键用各自的 `hold_ms`，不读这个值 |
 | `double_tap_ms` | int | `300` | 100..1000 | 双击判定窗口 |
 
 ### 4.5 `[power]`
@@ -210,44 +210,102 @@ perfd 在应用策略时完成。
 每个 `[hotkey.<id>]` 是一个绑定。同 id 的 section 按 key 合并：高优先级的
 key 覆盖低优先级的同名 key，未写的 key 继续使用低层值。这样 `local.ini`
 可以只写用户改过的一个字段，不会把系统默认的 `combo`/`action` 弄丢。
-（这比架构草案的“整个 section 覆盖”更细；理由见第 11 节。）
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
 | `combo` | combo | 必填 | 见下 | 触发键 |
-| `hold_ms` | int | `500` | 50..5000 | 长按阈值；`Menu` 默认 600，`Select` 提示默认 400 |
+| `hold_ms` | int | 未设置 | 50..5000 | 写成 hold 绑定；省略时是 tap/chord/sequence 绑定 |
 | `window_ms` | int | `50` | 10..500 | chord 判定窗口 |
+| `sequence_ms` | int | `800` | 100..5000 | 序列下一步的等待窗口 |
 | `action` | string | 必填 | ≤64 字符 | 动作名，如 `menu.open`、`builtin.screenshot` |
 | `scope` | string | `global` | ≤64 字符 | `global`、`app:<id>`、`mode:<mode>` |
-| `suppress` | bool | `false` | — | 是否需要 grab + uinput 独占转发 |
+| `suppress` | bool | `false` | — | 预留给 grab + uinput 独占转发；M1-05 只记录警告 |
 | `confirm` | bool | `false` | — | 触发前是否二次确认 |
-| `repeat` | bool | `false` | — | 按住时是否重复 |
+| `repeat` | bool | `false` | — | 按住时重复；会隐含 hold 语义 |
 | `repeat_ms` | int | `100` | 20..1000 | 重复间隔 |
 | `plugin` | string | 空 | ≤64 字符 | `plugin.invoke` 的插件 id |
 | `action_id` | string | 空 | ≤64 字符 | `plugin.invoke` 的动作 id |
 
-组合键语法：
+> `hold_ms` 的 schema 默认值是 500，但输入层只在文件里显式写了 `hold_ms`
+> 时才把绑定当作 hold。`brickdesk-config dump` 会显示这个默认值，判断语义
+> 时以“是否显式设置”为准；省略就是 tap/chord/sequence。
 
-- `A+B+C`：chord，同一 chord 里的键不能重复；最多 8 个键。
-- `A,B`：序列，每一步都可以是 chord；步与步之间按顺序匹配。
-- `Key(hold:800)`：只作用于单键，长按覆盖全局 `hold_ms`，范围 1..10000。
-- `Key(double)`：双击。
-- `*`：任意键，只能单独使用，仅用于诊断。
+### 6.1 组合键语法
+
+- `A+B+C`：chord。所有键必须在 `window_ms` 内按下并保持同时按下；最后一个
+  键按下时触发一次。释放顺序不影响已触发的动作，所有键松开后才会重新武装。
+- `A,B`：序列。每一步都可以是 chord。前一步的所有键必须先松开，下一步才
+  开始计时；`sequence_ms` 从松开时算起。超时后回到第一步。
+- `Key(hold:800)`：hold 绑定，覆盖 `hold_ms`。动作在按住达到阈值时以
+  `phase=down` 发出，松开时以 `phase=up` 发出。提示栏用这个语义。
+- `Key(double)`：双击。第一次松开后 `input.double_tap_ms`（默认 300 ms）
+  内再次按下触发；与同键的 tap 绑定时，双击会取消延迟的单击。
+- 普通单键（如 `A`）是 tap：松开时触发；如果同一键还是某个序列/双击的
+  前缀，tap 会延迟到 `sequence_ms`/`double_tap_ms` 之后再触发。
+- 普通 chord/序列在完成时立即触发，不会等松开。
+- `*`：任意键，只能单独使用；配置层接受，但 `brickdesk-inputd` 把它当作
+  诊断语法拒绝，不建立绑定。
 - 键名来自 `include/brickdesk/input.h` 的逻辑键：`A`、`B`、`X`、`Y`、
-  `L1`、`R1`、`SELECT`、`START`、`MENU`、`UP`、`DOWN`、`LEFT`、`RIGHT`；
+  `L1`、`R1`、`L2`、`R2`、`SELECT`、`START`、`MENU`、`HOME`、`UP`、
+  `DOWN`、`LEFT`、`RIGHT`、`POWER`、`VOLUME_UP`、`VOLUME_DOWN`；
   大小写不敏感，输出统一大写。
-- 冲突检测（完全相同的绑定、前缀冲突、scope 重叠）在 M1-05 的输入状态机
-  里实现；配置层目前只做语法和单 chord 重复键校验。
+- `hold_ms`、`(hold:N)`、`(double)` 只适用于单键绑定；用在 chord 或序列
+  上会在加载时报错并跳过该绑定。
+- `repeat=true` 只能用于单键；如果没有写 `hold_ms`，隐含 500 ms。
+
+### 6.2 动作名
+
+`action` 是自由字符串，长度 1..64，配置层只要求非空；`brickdesk-inputd`
+不执行动作，只把 `binding/action/combo/trigger/phase` 通过 socket 转发给
+订阅者。约定前缀：
+
+| 前缀 | 例子 | 执行者 |
+|---|---|---|
+| `builtin.` | `builtin.screenshot`、`builtin.volume_up` | 系统/输入层 |
+| `menu.` | `menu.open` | 菜单 shim |
+| `ui.` | `ui.hint` | 桌面/提示栏 |
+| `session.` | `session.return_home` | session |
+| `perf.` | `perf.cycle` | perfd |
+| `app.` | `app.launch` | session |
+| `plugin.` | `plugin.invoke` | 插件宿主 |
+| `script.` | `script.run` | 受限 worker |
+
+未知动作名不是配置错误：它会被原样转发，便于新 UI 先接动作、后补文档。
+
+### 6.3 冲突与优先级
+
+加载 `hotkeys.ini` 时按 scope 分组检查，并报告 `file:line`：
+
+| 类型 | 例子 | 处理 |
+|---|---|---|
+| 完全相同 | 两个 `Menu`（scope 重叠） | 错误；保留先加载的，拒绝后一个 |
+| 前缀/子集 | `Menu` 与 `Menu+X`、`Menu` 与 `Menu,X` | 警告；保留两者，运行时按优先级解析 |
+| 首键重叠 | `L1+Start` 与 `L1+Select` | 警告；两个 chord 都完成时只会有一个先触发 |
+| scope 不重叠 | `global` 与 `app:foo` 的两个 `Menu` | 不冲突；各自生效 |
+
+运行时优先级：**完成的 chord > 到达阈值的 hold > 双击 > 序列 > 延迟的
+tap**。chord 完成会取消同键的 hold/tap；hold 触发会取消同键的 tap；序列
+或双击完成会取消为它们让路的 tap。释放所有键后状态复位，不会粘键或重复
+触发。事件时间戳乱序时按已处理的最大时间钳制，重复的 down/up 被忽略。
+
+默认配置故意保留两个前缀关系，并由上述规则解析：`Menu`（hold 600）对
+`Menu+X`（chord），`Select`（hold 400，提示栏）对 `Select+Up`（chord）。
+`brickdesk-inputd` 启动时会打印这两条 warning，`bd-input --check` 也会。
+
+`scope` 目前只实现“global 或与当前 scope 完全相同”的激活；`app:`、`mode:`
+字符串会被接受和检查冲突，但 M1-05 的桌面/inputd 还没有应用上下文切换。
+`suppress=true` 也尚未实现按绑定 grab+uinput 转发；inputd 只在菜单订阅者
+显式请求 `grab` 时独占设备。
 
 默认绑定：
 
-| section | combo | hold_ms | action |
+| section | combo | 语义 | action |
 |---|---|---|---|
-| `hotkey.menu` | `Menu` | 600 | `menu.open` |
-| `hotkey.hint` | `Select` | 400 | `ui.hint` |
-| `hotkey.screenshot` | `L1+R1+Start` | — | `builtin.screenshot` |
-| `hotkey.performance` | `Select+Up` | — | `perf.cycle` |
-| `hotkey.return_home` | `Menu+X` | — | `session.return_home`（confirm） |
+| `hotkey.menu` | `Menu` | hold 600 | `menu.open` |
+| `hotkey.hint` | `Select` | hold 400；按住显示提示，松开隐藏 | `ui.hint` |
+| `hotkey.screenshot` | `L1+R1+Start` | chord | `builtin.screenshot` |
+| `hotkey.performance` | `Select+Up` | chord | `perf.cycle` |
+| `hotkey.return_home` | `Menu+X` | chord，confirm | `session.return_home` |
 
 ## 7. `input.ini`
 
@@ -258,7 +316,14 @@ key 覆盖低优先级的同名 key，未写的 key 继续使用低层值。这�
 |---|---|---|---|
 | `vendor` | string | 必填（设备段） | USB vendor id，例如 `0x1a2c` |
 | `product` | string | 必填（设备段） | USB product id，例如 `0x0001` |
-| 其他任意 key | string | — | 逻辑键名到 evdev 的映射，例如 `A = BTN_SOUTH`、`Up = ABS_HAT0Y:-1` |
+| 其他任意 key | string | — | 逻辑键名到 evdev 的映射，例如 `A = BTN_EAST`、`Up = ABS_HAT0Y:-1` |
+
+值支持 `BTN_*`、`KEY_*`、`ABS_*:<方向>`（方向 `-1`/`0`/`1`）和数字码
+（`0x130`、`304`）。每个设备从内置映射开始，只覆盖 section 里写出的字段：
+A/B/X/Y、L1/R1/L2/R2、SELECT/START/MENU/HOME、方向键（HAT、BTN_DPAD 和
+键盘方向键）、POWER、VOLUME_UP、VOLUME_DOWN。这样设备到货前也能工作；
+Power/Volume 通常属于独立的 `gpio-keys` 设备，即使 `input.ini` 没写它，
+内置映射仍会识别。
 
 配置层不校验 evdev 名称/轴方向是否真实存在；M1-05 的 `bd-input --list`
 和 `--learn` 会在设备上确认，无法识别时回退到内置映射。
@@ -353,7 +418,8 @@ void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
 - inotify 热重载和 SIGHUP：M1-04 只提供内存 set + 回调，主程序启动时加载一次；
 - 删除/重置本地覆盖的 API；目前要移除某个覆盖需要手动编辑 `local.ini`；
 - `flock` 并发写锁；
-- 热键冲突/前缀/scope 合并：M1-05；
+- 热键冲突/前缀/scope 合并：M1-05 已实现，见 `docs/input.md` 和
+  `bd-input --check`；应用级 scope 切换仍待 M1-09；
 - profile 继承链、循环、未知 profile：M1-07；
 - `/usr/share`、`/etc`、应用级 `[app.*]`、环境变量白名单、逐 key 命令行覆盖；
 - `path`、`frequency` 类型和 `restart_required` 标记；

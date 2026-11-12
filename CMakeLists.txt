@@ -62,6 +62,7 @@ add_library(bd_stb STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_truetype_impl.c"
 )
 target_include_directories(bd_stb PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb")
+set_target_properties(bd_stb PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(NOT MSVC)
   # Vendored code is not ours to keep warning-clean.
   target_compile_options(bd_stb PRIVATE -w)
@@ -108,6 +109,7 @@ target_compile_definitions(brickdesk_core
 # --- configuration ------------------------------------------------------
 add_library(bd_inih STATIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/inih/ini.c")
 target_include_directories(bd_inih PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/inih")
+set_target_properties(bd_inih PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # The config layer reports file:line for every diagnostic.
 target_compile_definitions(bd_inih PUBLIC INI_HANDLER_LINENO=1)
 if(NOT MSVC)
@@ -140,6 +142,7 @@ target_include_directories(brickdesk_config
 target_compile_definitions(brickdesk_config PRIVATE
   BRICKDESK_BUILTIN_CONFIG_DIR="${BRICKDESK_CONFIG_DIR}"
 )
+set_target_properties(brickdesk_config PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(brickdesk_config
   PUBLIC bd_inih
   PRIVATE brickdesk_warnings
@@ -198,6 +201,49 @@ target_compile_definitions(brickdesk_session PRIVATE
   BRICKDESK_STATE_DIR="${BRICKDESK_STATE_DIR}"
 )
 target_link_libraries(brickdesk_session PRIVATE brickdesk_warnings)
+
+# --- in-app menu shim (M1-09) ------------------------------------------
+# LD_PRELOAD overlay for dynamically linked SDL2/EGL applications. It has no
+# SDL, EGL or GLES link-time dependency: the present calls and GL entry points
+# are resolved from the host process, so the library still loads into apps
+# that only use one of the paths. docs/menu-shim.md covers mode selection.
+find_package(Threads REQUIRED)
+add_library(brickdesk-menu SHARED
+  src/menu/clients.c
+  src/menu/render.c
+  src/menu/shim.c
+  src/session/last_frame.c
+)
+set_target_properties(brickdesk-menu PROPERTIES
+  OUTPUT_NAME "brickdesk-menu"
+  POSITION_INDEPENDENT_CODE ON
+  C_VISIBILITY_PRESET hidden
+)
+target_include_directories(brickdesk-menu PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${BRICKDESK_GLES2_INCLUDE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+)
+target_compile_definitions(brickdesk-menu PRIVATE
+  BRICKDESK_ASSET_DIR="${BRICKDESK_ASSET_DIR}"
+)
+target_link_libraries(brickdesk-menu PRIVATE
+  brickdesk_config
+  bd_stb
+  Threads::Threads
+  ${CMAKE_DL_LIBS}
+  $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
+  brickdesk_warnings
+)
+if(NOT MSVC)
+  # Keep every static-library symbol (config, stb, last-frame) local; only the
+  # hooks and the bd_menu_* API are interposed into the application.
+  target_link_options(brickdesk-menu PRIVATE
+    "LINKER:--exclude-libs,ALL"
+    "LINKER:--no-undefined"
+    "LINKER:-soname,libbrickdesk-menu.so"
+  )
+endif()
 
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)

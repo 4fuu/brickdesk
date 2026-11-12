@@ -99,6 +99,9 @@ echo "==> staging runtime libraries"
 rm -rf "$BUILD_DIR/dist"
 mkdir -p "$BUILD_DIR/dist/lib" "$BUILD_DIR/dist/bin"
 cp -a "$SYSROOT/lib/libSDL2-2.0.so.0"* "$BUILD_DIR/dist/lib/"
+if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
+    cp -a "$BUILD_DIR/libbrickdesk-menu.so" "$BUILD_DIR/dist/lib/"
+fi
 cp -a "$BUILD_DIR/display_probe" "$BUILD_DIR/dist/bin/"
 for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
     if [ -e "$BUILD_DIR/$binary" ]; then
@@ -108,6 +111,9 @@ done
 
 echo "==> checking GLIBC requirements"
 CHECK_TARGETS="$BUILD_DIR/display_probe"
+if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
+    CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/libbrickdesk-menu.so"
+fi
 for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/$binary"

@@ -71,7 +71,9 @@ truth; see [docs/input.md](docs/input.md) and
 [docs/config-reference.md](docs/config-reference.md) section 6.
 
 Application packages and the session/app protocol are documented in
-[docs/app-protocol.md](docs/app-protocol.md).
+[docs/app-protocol.md](docs/app-protocol.md). The LD_PRELOAD in-app menu
+(open, input grab, background/quit, perfd profiles, GL state restore and the
+mode C/D fallback matrix) is documented in [docs/menu-shim.md](docs/menu-shim.md).
 
 ## Tests
 
@@ -92,6 +94,9 @@ The suite includes:
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,
   crash detection, background limit and last-frame validation (runs the demo
   app and a purpose-built child process)
+- `menu`: apps/demo under `libbrickdesk-menu.so`, driven by a replayed
+  inputd stream; checks grab/ungrab, background/resume, quit/save, the
+  last-frame header, the two menu screenshots and the GL state probe
 
 Screenshots are decoded RGBA and compared pixel-by-pixel; PNG bytes are never
 compared. Failure artifacts (actual, baseline copy, diff) land under
@@ -100,8 +105,9 @@ compared. Failure artifacts (actual, baseline copy, diff) land under
 Update baselines only after reviewing the images, in a separate commit:
 
 ```sh
-./scripts/update-baselines.sh            # boot and focus_move
+./scripts/update-baselines.sh            # all scenarios, captures and menu
 ./scripts/update-baselines.sh boot       # one scenario
+./scripts/update-baselines.sh menu       # menu_open + menu_focus
 ```
 
 ## Scenario format
@@ -155,6 +161,7 @@ src/app/               M1 placeholder desktop scene
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
 src/session/           app manifests, process lifecycle, app IPC, last frame
+src/menu/              LD_PRELOAD menu shim: hooks, GLES2 overlay, clients
 apps/demo/             SDL2 + GLES2 reference app for the session protocol
 tests/                 harness, scenarios, baselines, image diff self-test
 tools/bd-input.c       --list/--learn/--watch/--check input utility

@@ -136,6 +136,12 @@ Daemon to client:
 (timestamps are relative to daemon start); `--replay-fast` processes it
 immediately and exits. `--exit-after-replay` exits at EOF.
 
+Replay events are applied at their scheduled timestamps. Pending hotkey timers
+are advanced to the event timestamp before the event is fed, so a hold that
+expires at the same timestamp as the key release fires its action first. This
+matters for the Menu hold (600 ms) used by the in-app menu test; a late poll
+must not silently drop the action.
+
 ```text
 # time_ms kind name value
 0     key A down

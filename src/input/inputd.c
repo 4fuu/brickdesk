@@ -752,8 +752,10 @@ static void run_replay_fast(inputd *daemon) {
     if (event->time_ms > sim_ms) {
       sim_ms = event->time_ms;
     }
-    apply_replay_event(daemon, device, event, sim_ms);
+    /* Advance to the event time before feeding it, so a hold timer that
+     * expires exactly at the next event fires before that event cancels it. */
     bd_input_state_advance(&device->state, sim_ms, dispatch_output, &context);
+    apply_replay_event(daemon, device, event, sim_ms);
     if (!daemon->running) {
       break;
     }
@@ -772,9 +774,11 @@ static void process_replay_due(inputd *daemon, uint64_t now_ms) {
          daemon->replay_next.time_ms <= now_ms) {
     const replay_event *event = &daemon->replay_next;
     uint64_t event_time = event->time_ms;
-    apply_replay_event(daemon, device, event, event_time);
+    /* Timers due at this timestamp fire before the event is applied; a key
+     * release at the hold deadline must not swallow the action. */
     bd_input_state_advance(&device->state, event_time, dispatch_output,
                            &context);
+    apply_replay_event(daemon, device, event, event_time);
     if (!daemon->running) {
       return;
     }
@@ -1329,6 +1333,14 @@ int main(int argc, char **argv) {
 
   while (daemon.running && !g_stop) {
     uint64_t now_ms = daemon_now(&daemon);
+    /*
+     * Replay events carry their own timestamps. Apply them before advancing
+     * the state to the polling time; otherwise a late poll stamps a hold
+     * press with the poll time and the following release can cancel it.
+     */
+    if (daemon.replay_mode && !daemon.replay_fast) {
+      process_replay_due(&daemon, now_ms);
+    }
     for (size_t i = 0; i < daemon.device_count; ++i) {
       output_context context;
       context.daemon = &daemon;
@@ -1338,9 +1350,6 @@ int main(int argc, char **argv) {
     }
     if (daemon.grab_pending) {
       request_ungrab(&daemon, now_ms);
-    }
-    if (daemon.replay_mode && !daemon.replay_fast) {
-      process_replay_due(&daemon, now_ms);
     }
     if (!daemon.running) {
       break;

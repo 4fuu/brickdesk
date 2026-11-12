@@ -23,8 +23,8 @@
 #include <SDL2/SDL.h>
 #include <GLES2/gl2.h>
 
-#define DEMO_WIDTH 512
-#define DEMO_HEIGHT 384
+#define DEMO_DEFAULT_WIDTH 512
+#define DEMO_DEFAULT_HEIGHT 384
 #define DEMO_LINE_MAX 8192
 
 static volatile sig_atomic_t g_stop;
@@ -40,6 +40,10 @@ typedef struct demo {
   bool paused;
   bool quit;
   uint64_t frame;
+  int width;
+  int height;
+  bool fixed_time;
+  float fixed_time_seconds;
   int socket_fd;
   char input[DEMO_LINE_MAX];
   size_t input_length;
@@ -262,8 +266,8 @@ static bool acquire_display(demo *app) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   app->window = SDL_CreateWindow("brickdesk demo", SDL_WINDOWPOS_CENTERED,
-                                 SDL_WINDOWPOS_CENTERED, DEMO_WIDTH,
-                                 DEMO_HEIGHT, SDL_WINDOW_OPENGL);
+                                 SDL_WINDOWPOS_CENTERED, app->width,
+                                 app->height, SDL_WINDOW_OPENGL);
   if (app->window == NULL) {
     app->headless = true;
     return false;
@@ -284,12 +288,16 @@ static void render_frame(demo *app) {
   if (!app->display_ready) {
     return;
   }
-  glViewport(0, 0, DEMO_WIDTH, DEMO_HEIGHT);
+  glViewport(0, 0, app->width, app->height);
   glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
   if (app->program != 0) {
     glUseProgram(app->program);
-    glUniform1f(app->time_uniform, (float)(monotonic_ms() % 10000) / 1000.0f);
+    float time_seconds =
+        app->fixed_time
+            ? app->fixed_time_seconds
+            : (float)(monotonic_ms() % 10000) / 1000.0f;
+    glUniform1f(app->time_uniform, time_seconds);
     glBindBuffer(GL_ARRAY_BUFFER, app->vertex_buffer);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
@@ -299,11 +307,11 @@ static void render_frame(demo *app) {
 }
 
 static void fill_pattern(demo *app, uint8_t *pixels) {
-  for (int y = 0; y < DEMO_HEIGHT; ++y) {
-    for (int x = 0; x < DEMO_WIDTH; ++x) {
-      size_t offset = ((size_t)y * DEMO_WIDTH + (size_t)x) * 4u;
-      pixels[offset + 0] = (uint8_t)(x * 255 / (DEMO_WIDTH - 1));
-      pixels[offset + 1] = (uint8_t)(y * 255 / (DEMO_HEIGHT - 1));
+  for (int y = 0; y < app->height; ++y) {
+    for (int x = 0; x < app->width; ++x) {
+      size_t offset = ((size_t)y * (size_t)app->width + (size_t)x) * 4u;
+      pixels[offset + 0] = (uint8_t)(x * 255 / (app->width - 1));
+      pixels[offset + 1] = (uint8_t)(y * 255 / (app->height - 1));
       pixels[offset + 2] = (uint8_t)((app->frame_seq * 37u) & 0xffu);
       pixels[offset + 3] = 255;
     }
@@ -315,7 +323,7 @@ static bool write_last_frame(demo *app) {
   if (path == NULL || path[0] == '\0') {
     return false;
   }
-  size_t pixel_size = (size_t)DEMO_WIDTH * DEMO_HEIGHT * 4u;
+  size_t pixel_size = (size_t)app->width * (size_t)app->height * 4u;
   if (pixel_size == 0) {
     return false;
   }
@@ -326,7 +334,7 @@ static bool write_last_frame(demo *app) {
   bool captured = false;
   if (app->display_ready && app->context != NULL) {
     render_frame(app);
-    glReadPixels(0, 0, DEMO_WIDTH, DEMO_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE,
+    glReadPixels(0, 0, app->width, app->height, GL_RGBA, GL_UNSIGNED_BYTE,
                  pixels);
     captured = true;
   }
@@ -356,10 +364,10 @@ static bool write_last_frame(demo *app) {
   header.magic = BD_APP_LAST_FRAME_MAGIC;
   header.version = BD_APP_LAST_FRAME_VERSION;
   header.header_size = (uint16_t)sizeof(bd_app_last_frame_header);
-  header.width = DEMO_WIDTH;
-  header.height = DEMO_HEIGHT;
+  header.width = (uint32_t)app->width;
+  header.height = (uint32_t)app->height;
   header.format = BD_APP_PIXEL_RGBA8888;
-  header.stride = DEMO_WIDTH * 4;
+  header.stride = (uint32_t)app->width * 4u;
   header.data_size = pixel_size;
   header.timestamp_ms = monotonic_ms();
   header.flags = BD_APP_LAST_FRAME_FLAG_WRITING;
@@ -602,6 +610,27 @@ int main(void) {
   demo app;
   memset(&app, 0, sizeof(app));
   app.socket_fd = -1;
+  app.width = DEMO_DEFAULT_WIDTH;
+  app.height = DEMO_DEFAULT_HEIGHT;
+  const char *width_env = getenv("BRICKDESK_DEMO_WIDTH");
+  const char *height_env = getenv("BRICKDESK_DEMO_HEIGHT");
+  if (width_env != NULL) {
+    int value = atoi(width_env);
+    if (value >= 64 && value <= 4096) {
+      app.width = value;
+    }
+  }
+  if (height_env != NULL) {
+    int value = atoi(height_env);
+    if (value >= 64 && value <= 4096) {
+      app.height = value;
+    }
+  }
+  const char *fixed_time = getenv("BRICKDESK_DEMO_FIXED_TIME_MS");
+  if (fixed_time != NULL) {
+    app.fixed_time = true;
+    app.fixed_time_seconds = (float)atol(fixed_time) / 1000.0f;
+  }
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     app.headless = true;

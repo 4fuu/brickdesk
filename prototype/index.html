@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>brickdesk 界面原型</title>
+<style>
+/* 字体内嵌：西文与数字用 Inter，中文用思源黑体（Noto Sans SC）常用字子集，均为可变字重 */
+@font-face{font-family:"BD Latin";src:url(fonts/inter-latin-wght-normal.woff2) format("woff2");font-weight:100 900;font-display:swap}
+@font-face{font-family:"BD CJK";src:url(fonts/noto-sans-sc-subset.woff2) format("woff2");font-weight:100 900;font-display:swap}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#0d0d0e;color:#8b8d93;font-family:"BD Latin","BD CJK","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+body{display:flex;flex-direction:column;align-items:center;padding:12px 12px 20px;gap:12px}
+#fit{position:relative;flex:none}
+
+/* ---------- 设备屏幕：固定 1024x768，整体缩放 ---------- */
+/* 主页是一面可以四向平移的封面墙，游戏和应用都在墙上；左侧边栏和右侧快捷面板平时完全隐藏 */
+.stage{position:absolute;left:0;top:0;width:1024px;height:768px;transform-origin:0 0;overflow:hidden;background:var(--bg);color:var(--text);user-select:none;font-weight:500;font-variant-numeric:tabular-nums}
+.stage[data-theme=dark]{--bg:oklch(12% 0 0);--panel:oklch(19% 0 0);--surface:oklch(26.9% 0 0);--line:oklch(34% 0 0);--text:oklch(97% 0 0);--muted:oklch(70.8% 0 0);--accent:oklch(64% .19 258);--scrim:rgba(0,0,0,.66)}
+.stage[data-theme=light]{--bg:oklch(95.5% 0 0);--panel:#fff;--surface:oklch(91% 0 0);--line:oklch(85% 0 0);--text:oklch(21% 0 0);--muted:oklch(48% 0 0);--accent:oklch(57.72% .2324 260);--scrim:rgba(20,20,20,.5)}
+.stage svg{display:block;flex:none}
+
+/* 顶栏 */
+.top{position:absolute;left:0;right:0;top:0;height:60px;padding:0 32px;display:flex;align-items:center;justify-content:space-between;z-index:3;background:var(--bg)}
+.tabs{display:flex;gap:28px;font-size:20px;color:var(--muted)}
+.tab{position:relative;line-height:60px}
+.tab.on{color:var(--text);font-weight:600}
+.tab.on::after{content:"";position:absolute;left:0;right:0;bottom:11px;height:3px;border-radius:2px;background:var(--accent)}
+.status{display:flex;align-items:center;gap:12px;font-size:20px}
+.bat{position:relative;width:32px;height:16px;border:2px solid currentColor;border-radius:5px;padding:2px;margin-right:4px}
+.bat::after{content:"";position:absolute;right:-6px;top:3px;width:3px;height:6px;border-radius:0 2px 2px 0;background:currentColor}
+.bat i{display:block;height:100%;border-radius:1px;background:currentColor}
+.s-title{font-size:24px;font-weight:700}
+
+/* 主页：封面墙。大小不一的封面紧密拼在一起并伸出屏幕边缘，焦点项尽量居中，墙跟着平移 */
+.wallbg{position:absolute;inset:0;background:#0a0a0a}
+.wall{position:absolute;left:0;top:0;transition:transform .22s ease-out}
+.tile{position:absolute;overflow:hidden;border-radius:6px;background-color:var(--surface);transition:opacity .16s ease-out}
+.tile::before{content:"";position:absolute;inset:0;background:rgba(0,0,0,.3);transition:opacity .16s ease-out}
+.tile::after{content:"";position:absolute;left:0;right:0;bottom:0;height:50%;max-height:150px;background:linear-gradient(to top,rgba(0,0,0,.72),transparent)}
+.tile.cur::before{opacity:0}
+.tile.f{outline:4px solid #fff;z-index:2}
+.tile.off{opacity:.14}
+.t-chip{position:absolute;left:12px;top:12px;width:36px;height:36px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center}
+.t-big{position:absolute;inset:0 0 34px;display:flex;align-items:center;justify-content:center;color:#fff;opacity:.6}
+.t-tx{position:absolute;left:14px;right:14px;bottom:12px;z-index:1;color:#fff}
+.t-name{font-size:22px;font-weight:700;line-height:1.2}
+.tile.s .t-name{font-size:19px}
+.tile.hero .t-name{font-size:30px}
+.t-sub{font-size:15px;line-height:1.35;color:rgba(255,255,255,.74);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile.cur .t-sub{white-space:normal}
+.shade{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(to bottom,#0a0a0a 56px,transparent 96px)}
+.top.over{background:none;color:#fff}
+.top.over .tabs{color:rgba(255,255,255,.64)}
+.top.over .tab.on{color:#fff}
+/* 实时封面：应用可以往自己的封面里放实时内容（这里是音乐的歌名、歌词和进度）和 X、Y 快捷操作 */
+.t-song{font-size:15px;font-weight:600;line-height:1.35;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t-bar{height:3px;border-radius:2px;background:rgba(255,255,255,.26);margin-top:10px;overflow:hidden}
+.t-bar i{display:block;height:100%;background:#fff;transition:width .3s linear}
+
+/* 列表行：侧边栏、快捷面板和设置共用。焦点行反色 */
+.mi{position:relative;flex:none;height:54px;border-radius:8px;display:flex;align-items:center;gap:16px;padding:0 14px;font-size:22px;margin-bottom:4px}
+.mi.sel{background:var(--surface)}
+.mi.f{background:var(--text);color:var(--bg)}
+.mi.cur::before{content:"";position:absolute;left:0;top:15px;bottom:15px;width:4px;border-radius:2px;background:var(--accent)}
+.mi .r{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:20px;color:var(--muted)}
+.mi.f .r{color:inherit}
+.r .ch{opacity:0}
+.mi.f .r .ch{opacity:1}
+.sl{width:130px;height:6px;border-radius:3px;background:color-mix(in srgb,currentColor 28%,transparent)}
+.sl i{display:block;height:100%;border-radius:3px;background:currentColor}
+.num{min-width:34px;text-align:right}
+.sw{width:44px;height:24px;border-radius:12px;background:color-mix(in srgb,currentColor 28%,transparent);padding:3px}
+.sw i{display:block;width:18px;height:18px;border-radius:50%;background:currentColor;opacity:.7}
+.sw.on{background:var(--accent)}
+.sw.on i{margin-left:20px;background:#fff;opacity:1}
+
+/* 两侧面板：平时完全隐藏；出现时压暗后面的页面，面板底色更亮，边缘有分隔线 */
+.scrim{position:absolute;inset:0;z-index:6;background:var(--scrim);opacity:0;transition:opacity .16s ease-out;pointer-events:none}
+.scrim.on{opacity:1}
+.side,.quick{position:absolute;top:0;bottom:0;z-index:7;background:var(--panel);display:flex;flex-direction:column;padding:0 16px;transition:transform .18s ease-out}
+.side{left:0;width:320px;border-right:1px solid var(--line);transform:translateX(-104%)}
+.quick{right:0;width:400px;border-left:1px solid var(--line);transform:translateX(104%)}
+.side.on,.quick.on{transform:none;box-shadow:0 0 48px rgba(0,0,0,.45)}
+.p-head{flex:none;height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-size:18px;font-weight:600;color:var(--muted)}
+.p-head .bk{display:flex;align-items:center;gap:6px;margin-left:-6px;color:var(--text)}
+.p-sub{font-size:16px;font-weight:600;color:var(--muted);padding:18px 14px 8px;border-top:1px solid var(--line);margin-top:10px}
+.nt{padding:8px 14px;font-size:17px;line-height:1.4}
+.nt small{display:block;font-size:15px;color:var(--muted)}
+.sp{flex:1}
+.p-foot{flex:none;height:56px;display:flex;align-items:center;gap:18px;padding:0 14px;border-top:1px solid var(--line);font-size:16px;color:var(--muted);white-space:nowrap}
+.p-foot div{display:flex;align-items:center;gap:7px}
+.p-foot .g{background:var(--muted);color:var(--panel)}
+
+/* 设置 */
+.s-cats{position:absolute;left:20px;top:72px;width:230px}
+.s-opts{position:absolute;left:274px;right:20px;top:72px}
+.s-opts .r{font-size:19px}
+
+/* 提示条：按一次 Select 出现，几秒后自动消失；底部带渐变阴影 */
+.hint{position:absolute;left:0;right:0;bottom:0;height:124px;z-index:5;background:linear-gradient(to top,var(--bg) 38%,transparent);display:flex;align-items:flex-end;justify-content:space-between;padding:0 32px 22px;font-size:18px;opacity:0;transition:opacity .14s ease-out;pointer-events:none}
+.hint.on{opacity:1}
+.hg{display:flex;gap:24px}
+.hg div{display:flex;align-items:center;gap:8px}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:28px;padding:0 8px;border-radius:14px;background:var(--text);color:var(--bg);font-size:14px;font-weight:700;line-height:1}
+.g+.g{margin-left:-3px}
+.toast{position:absolute;left:50%;top:12px;z-index:9;transform:translate(-50%,-10px);background:var(--text);color:var(--bg);font-size:18px;line-height:36px;padding:0 20px;border-radius:18px;white-space:nowrap;opacity:0;transition:opacity .14s ease-out,transform .14s ease-out}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.noanim *{transition:none!important}
+
+/* ---------- 屏幕外：仅供在浏览器里试用 ---------- */
+.pad{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1024px}
+.pad button{font:inherit;font-size:14px;color:#d6d6d8;background:#222326;border:1px solid #37383c;border-radius:8px;min-width:44px;height:40px;padding:0 12px;touch-action:none;cursor:pointer}
+.pad button:active{background:#37383c}
+.pad .sp{width:12px}
+.note{font-size:13px;line-height:1.7;text-align:center;max-width:900px}
+.note kbd{font:inherit;color:#d6d6d8;border:1px solid #37383c;border-radius:4px;padding:0 5px}
+</style>
+</head>
+<body>
+<div id="fit"><div class="stage" id="stage" data-theme="dark">
+  <div id="view"></div>
+  <div class="hint" id="hint"></div>
+  <div class="scrim" id="scrim"></div>
+  <div class="side" id="side"></div>
+  <div class="quick" id="quick"></div>
+  <div class="toast" id="toast"></div>
+</div></div>
+
+<div class="pad" id="pad">
+  <button data-k="left">←</button><button data-k="up">↑</button><button data-k="down">↓</button><button data-k="right">→</button>
+  <span class="sp"></span>
+  <button data-k="a">A</button><button data-k="b">B</button><button data-k="x">X</button><button data-k="y">Y</button>
+  <span class="sp"></span>
+  <button data-k="l1">L1</button><button data-k="r1">R1</button>
+  <span class="sp"></span>
+  <button data-k="menu">Menu</button><button data-k="select">Select</button><button data-k="start">Start</button>
+  <span class="sp"></span>
+  <button id="themeBtn">深色 / 浅色</button>
+</div>
+<p class="note">
+  键盘：方向键 = 十字键，<kbd>Z</kbd>/<kbd>Enter</kbd> = A，<kbd>X</kbd>/<kbd>Esc</kbd> = B，<kbd>C</kbd>/<kbd>V</kbd> = X/Y，<kbd>Q</kbd>/<kbd>E</kbd> = L1/R1，<kbd>M</kbd> = Menu，<kbd>Tab</kbd> = Select，<kbd>S</kbd> = Start，<kbd>T</kbd> = 切换主题。<br>
+  十字键在封面墙上四向移动；焦点在音乐上时 X 暂停、Y 下一首，不用进应用；Menu 打开左侧边栏；Select 按一次显示按键提示，提示还在时再按一次打开右侧快捷设置。游戏、应用、封面和状态数据均为示例。
+</p>
+
+<script>
+{
+const I={
+ folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+ book:'<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+ music:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+ image:'<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+ wifi:'<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
+ swap:'<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+ term:'<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+ gear:'<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+ game:'<line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+ bell:'<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+ search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+ power:'<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+ moon:'<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+ restart:'<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+ monitor:'<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+ volume:'<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+ info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+ home:'<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+ sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+ bt:'<path d="m7 7 10 10-5 5V2l5 5L7 17"/>',
+ side:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+ left:'<path d="m15 18-6-6 6-6"/>', right:'<path d="m9 18 6-6-6-6"/>'
+};
+const ico=(n,s,w)=>`<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="${w||2}" stroke-linecap="round" stroke-linejoin="round">${I[n]}</svg>`;
+
+/* 游戏和应用同在一层。x、y、w、h 是在封面墙上的位置和大小，单位是一格；live 是应用放进封面的实时内容。游戏为虚构示例 */
+const items=[
+ {name:'小镇四季',x:2,y:1,w:3,h:2,type:'game',plat:'Game Boy Advance',desc:'第 3 年夏季，已玩 41 小时',bg:'town',pos:'92% 22%',fav:1},
+ {name:'阅读',x:0,y:0,w:2,h:2,type:'app',desc:'《三体》读到第 14 章',icon:'book',color:'#5d7c5a',bg:'read',fav:1},
+ {name:'星海拾荒者',x:5,y:0,w:2,h:2,type:'game',plat:'PICO-8',desc:'第 7 扇区，已玩 6 小时',bg:'space',pos:'84% 30%'},
+ {name:'文件',x:2,y:0,w:2,h:1,type:'app',desc:'SD 卡已用 41.2 GB，共 128 GB',icon:'folder',color:'#3f6186',bg:'files'},
+ {name:'音乐',x:0,y:2,w:1,h:2,type:'app',desc:'312 首歌曲，6 个播放列表',icon:'music',color:'#7b5a8c',bg:'music',live:{playing:true,si:0,li:0,songs:[
+   {name:'夜航',by:'林间电台',lines:['灯塔在身后慢慢变小','风把航线吹成一条细线','我们往没有名字的海去','天亮以前不必回头']},
+   {name:'旧磁带',by:'南窗',lines:['按下播放键的那一秒','夏天从喇叭里漏出来','有些歌只在夜里才响','转到尽头再翻一面']}]}},
+ {name:'雾港',x:1,y:2,w:1,h:2,type:'game',plat:'PlayStation',desc:'第二章「灯塔」，已玩 3 小时',bg:'harbor',pos:'88% 28%',fav:1},
+ {name:'相册',x:5,y:2,w:2,h:1,type:'app',desc:'截图与照片，共 86 张',icon:'image',color:'#b88a3e',bg:'photos'},
+ {name:'深井',x:2,y:3,w:2,h:2,type:'game',plat:'Super Famicom',desc:'到达地下 12 层，已玩 9 小时',bg:'well',pos:'100% 20%'},
+ {name:'无线传输',x:4,y:3,w:1,h:2,type:'app',desc:'在电脑浏览器里向掌机传文件',icon:'swap',color:'#3f8587',bg:'transfer',fav:1},
+ {name:'赤色公路',x:5,y:3,w:2,h:2,type:'game',plat:'PlayStation',desc:'最佳圈速 1:42.08',bg:'road',pos:'90% 34%'},
+ {name:'终端',x:4,y:0,w:1,h:1,type:'app',desc:'本机 Shell',icon:'term',color:'#45474d'}, /* 故意不带背景图，展示回退效果 */
+ {name:'设置',x:0,y:4,w:2,h:1,type:'app',desc:'显示、声音、网络与按键',icon:'gear',color:'#6f737b',bg:'settings'}
+];
+const tabs=['全部','游戏','应用','收藏'],U=200,GAP=6,WW=7*U,WH=5*U;
+/* 侧边栏：主页、设置、电源固定，其余可在设置里增减 */
+const sideOpts=[
+ {label:'搜索',icon:'search',type:'toggle',on:true},{label:'消息',icon:'bell',type:'toggle',on:true},
+ {label:'文件',icon:'folder',type:'toggle',on:false},{label:'无线传输',icon:'swap',type:'toggle',on:true}];
+const sideItems=()=>[{label:'主页',icon:'home'},...sideOpts.filter(o=>o.on),{label:'设置',icon:'gear'},{label:'电源',icon:'power',sub:1}];
+const power=[{label:'睡眠',icon:'moon'},{label:'重启',icon:'restart'},{label:'关机',icon:'power'}];
+const cats=[
+ {name:'显示',icon:'monitor',opts:[
+  {key:'theme',label:'主题',icon:'moon',type:'select',values:['深色','浅色'],i:0},
+  {key:'bright',label:'亮度',icon:'sun',type:'slider',v:70},
+  {label:'自动休眠',type:'select',values:['1 分钟','3 分钟','5 分钟','从不'],i:1},
+  {key:'anim',label:'界面动画',type:'toggle',on:true}]},
+ {name:'声音',icon:'volume',opts:[
+  {key:'vol',label:'音量',icon:'volume',type:'slider',v:45},
+  {label:'按键音',type:'toggle',on:false}]},
+ {name:'网络',icon:'wifi',opts:[
+  {key:'wifi',label:'Wi-Fi',icon:'wifi',type:'toggle',on:true},
+  {key:'bt',label:'蓝牙',icon:'bt',type:'toggle',on:false},
+  {label:'已连接',type:'info',value:'Home-5G'},
+  {label:'IP 地址',type:'info',value:'192.168.1.37'}]},
+ {name:'按键',icon:'game',opts:[
+  {key:'hintMs',label:'提示停留时长',type:'select',values:['3 秒','5 秒','8 秒'],ms:[3000,5000,8000],i:1},
+  {label:'Menu',type:'info',value:'打开或关闭侧边栏'},
+  {label:'Select',type:'info',value:'显示提示，再按打开快捷设置'},
+  {label:'Start',type:'info',value:'当前项的选项'},
+  {label:'L1 / R1',type:'info',value:'切换主页分类'}]},
+ {name:'侧边栏',icon:'side',opts:sideOpts},
+ {name:'系统',icon:'info',opts:[
+  {label:'语言',type:'info',value:'简体中文'},
+  {label:'设备',type:'info',value:'TrimUI Brick Pro'},
+  {label:'版本',type:'info',value:'brickdesk 0.1.0'}]}
+];
+const opt=k=>{for(const c of cats)for(const o of c.opts)if(o.key===k)return o};
+const quick=()=>['bright','vol','wifi','bt','theme'].map(opt);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+const S={screen:'home',tab:0,fi:0,cat:0,oi:0,szone:'cats',side:false,si:0,sub:false,pi:0,quick:false,qi:0};
+const $=id=>document.getElementById(id);
+const stage=$('stage'),view=$('view'),hintEl=$('hint'),toastEl=$('toast'),scrim=$('scrim'),sideEl=$('side'),quickEl=$('quick');
+let built='',K=1,hintOn=false,hintT,toastT;
+const match=a=>S.tab===0||(S.tab===1&&a.type==='game')||(S.tab===2&&a.type==='app')||(S.tab===3&&!!a.fav);
+const clock=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+const status=()=>`<div class="status">${opt('wifi').on?ico('wifi',22,2.25):''}<span class="bat"><i style="width:82%"></i></span><span class="clk">${clock()}</span></div>`;
+
+function render(){
+ stage.dataset.theme=opt('theme').i?'light':'dark';
+ stage.classList.toggle('noanim',!opt('anim').on);
+ if(S.screen==='home')renderHome();else renderSettings();
+ renderSide();renderQuick();
+ scrim.classList.toggle('on',S.side||S.quick);
+ if(hintOn)hintEl.innerHTML=hintHtml();
+}
+/* 封面：背景图加左上角的圆形应用图标；游戏只用图；没有背景图时回退成底色加大图标 */
+const tile=a=>`<div class="tile ${a.w*a.h>=6?'hero':a.w*a.h===1?'s':''}" style="left:${a.x*U+GAP/2}px;top:${a.y*U+GAP/2}px;width:${a.w*U-GAP}px;height:${a.h*U-GAP}px;${a.bg?`background:url(bg/${a.bg}.jpg) ${a.pos||'center'}/cover no-repeat`:`background:color-mix(in srgb,${a.color} 62%,#111)`}">${a.bg?(a.type==='app'?`<span class="t-chip" style="background:${a.color}">${ico(a.icon,20)}</span>`:''):`<span class="t-big">${ico(a.icon,60,1.5)}</span>`}<div class="t-tx"><div class="t-name">${a.name}</div>${a.live?'<div class="t-song"></div>':''}<div class="t-sub"></div>${a.live?'<div class="t-bar"><i></i></div>':''}</div></div>`;
+function renderHome(){
+ const key='home';
+ if(built!==key){
+  built=key;
+  view.innerHTML=`<div class="wallbg"></div><div class="wall">${items.map(tile).join('')}</div><div class="shade"></div>
+  <div class="top over"><div class="tabs">${tabs.map(t=>`<span class="tab">${t}</span>`).join('')}</div>${status()}</div>`;
+ }
+ view.querySelector('.status').outerHTML=status();
+ view.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('on',i===S.tab));
+ view.querySelectorAll('.tile').forEach((el,i)=>{
+  const a=items[i],cur=i===S.fi,kind=a.type==='game'?a.plat:'应用';
+  el.classList.toggle('cur',cur);
+  el.classList.toggle('f',cur);
+  el.classList.toggle('off',!match(a)); /* 切换分类不重排，只把不属于该分类的封面压暗并跳过 */
+  if(a.live){
+   const L=a.live,g=L.songs[L.si];
+   el.querySelector('.t-song').textContent=g.name+' · '+g.by;
+   el.querySelector('.t-sub').textContent=L.playing?g.lines[L.li]:'已暂停';
+   el.querySelector('.t-bar i').style.width=(L.li+1)/g.lines.length*100+'%';
+  }else el.querySelector('.t-sub').textContent=cur?kind+' · '+a.desc:kind;
+ });
+ /* 墙跟着焦点平移，焦点项尽量居中 */
+ const a=items[S.fi];
+ const x=clamp((a.x+a.w/2)*U-512,-12,WW-1024+12),y=clamp((a.y+a.h/2)*U-384,-64,WH-768+16);
+ view.querySelector('.wall').style.transform=`translate(${-x}px,${-y}px)`;
+}
+/* 在大小不一的封面之间找某个方向上最近的一个 */
+function neighbor(d){
+ const f=items[S.fi],hz=d==='left'||d==='right',fw=d==='right'||d==='down';
+ let best=-1,bs=1e9;
+ items.forEach((c,i)=>{
+  if(i===S.fi||!match(c))return;
+  const gap=hz?(fw?c.x-f.x-f.w:f.x-c.x-c.w):(fw?c.y-f.y-f.h:f.y-c.y-c.h);
+  if(gap<0)return;
+  const ov=hz?Math.min(f.y+f.h,c.y+c.h)-Math.max(f.y,c.y):Math.min(f.x+f.w,c.x+c.w)-Math.max(f.x,c.x);
+  const off=Math.abs(hz?c.y+c.h/2-f.y-f.h/2:c.x+c.w/2-f.x-f.w/2);
+  const sc=gap*4+off+(ov>0?0:6);
+  if(sc<bs){bs=sc;best=i}
+ });
+ return best;
+}
+function valHtml(o){
+ if(o.type==='select')return `<span class="ch">${ico('left',20,2.5)}</span><span>${o.values[o.i]}</span><span class="ch">${ico('right',20,2.5)}</span>`;
+ if(o.type==='slider')return `<span class="sl"><i style="width:${o.v}%"></i></span><span class="num">${o.v}</span>`;
+ if(o.type==='toggle')return `<span>${o.on?'开':'关'}</span><span class="sw ${o.on?'on':''}"><i></i></span>`;
+ return `<span>${o.value}</span>`;
+}
+const mi=(cls,icon,label,r)=>`<div class="mi ${cls}">${icon?ico(icon,24):''}<span>${label}</span>${r?`<span class="r">${r}</span>`:''}</div>`;
+function renderSettings(){
+ built='settings';
+ const c=cats[S.cat];
+ view.innerHTML=`<div class="top"><div class="s-title">设置</div>${status()}</div>
+ <div class="s-cats">${cats.map((k,i)=>mi(i===S.cat?(S.szone==='cats'?'f':'sel'):'',k.icon,k.name)).join('')}</div>
+ <div class="s-opts">${c.opts.map((o,i)=>mi(S.szone==='opts'&&i===S.oi?'f':'',null,o.label,valHtml(o))).join('')}</div>`;
+}
+const G=t=>`<span class="g">${t}</span>`;
+const foot=x=>`<div class="p-foot">${x.map(y=>`<div>${y[0]}<span>${y[1]}</span></div>`).join('')}</div>`;
+function renderSide(){
+ sideEl.classList.toggle('on',S.side);
+ if(!S.side)return; /* 收起时保留内容，滑出动画不会变空 */
+ if(S.sub){
+  sideEl.innerHTML=`<div class="p-head"><span class="bk">${ico('left',22,2.5)}电源</span></div>${power.map((p,i)=>mi(i===S.pi?'f':'',p.icon,p.label)).join('')}<div class="sp"></div>${foot([[G('A'),'确定'],[G('B'),'返回']])}`;
+  return;
+ }
+ const it=sideItems(),cur=S.screen==='home'?'主页':'设置';
+ const row=(x,i)=>mi((i===S.si?'f ':'')+(x.label===cur?'cur':''),x.icon,x.label,x.sub?ico('right',20,2.5):'');
+ sideEl.innerHTML=`<div class="p-head"><span>菜单</span></div>${it.slice(0,-1).map(row).join('')}<div class="sp"></div>${row(it[it.length-1],it.length-1)}<div style="height:8px"></div>${foot([[G('A'),'确定'],[G('B'),'关闭']])}`;
+}
+function renderQuick(){
+ quickEl.classList.toggle('on',S.quick);
+ if(!S.quick)return;
+ quickEl.innerHTML=`<div class="p-head"><span>快捷设置</span><span>电量 82%</span></div>
+ ${quick().map((o,i)=>mi(i===S.qi?'f':'',o.icon,o.label,valHtml(o))).join('')}
+ <div class="p-sub">通知</div>
+ <div class="nt">截图已保存到相册<small>2 分钟前</small></div>
+ <div class="nt">无线传输收到 3 个文件<small>昨天 21:40</small></div>
+ <div class="sp"></div>${foot([[G('←')+G('→'),'调整'],[G('A'),'切换'],[G('B'),'关闭']])}`;
+}
+
+/* ---------- 提示条与轻提示 ---------- */
+function hints(){
+ const l=[[G('MENU'),'菜单'],[G('SELECT'),'再按一次 快捷设置']];
+ if(S.screen==='home'){
+  const L=items[S.fi].live; /* 焦点封面带快捷操作时，提示条换成它的 X、Y */
+  return {l,r:(L?[[G('X'),L.playing?'暂停':'播放'],[G('Y'),'下一首']]:[[G('L1')+G('R1'),'分类'],[G('START'),'选项']]).concat([[G('A'),'打开']])};
+ }
+ return {l,r:S.szone==='cats'?[[G('B'),'主页'],[G('A'),'进入']]:[[G('←')+G('→'),'调整'],[G('B'),'返回']]};
+}
+const grp=x=>`<div class="hg">${x.map(y=>`<div>${y[0]}<span>${y[1]}</span></div>`).join('')}</div>`;
+const hintHtml=()=>{const h=hints();return grp(h.l)+grp(h.r)};
+function showHint(){const o=opt('hintMs');hintOn=true;hintEl.innerHTML=hintHtml();hintEl.classList.add('on');clearTimeout(hintT);hintT=setTimeout(hideHint,o.ms[o.i])}
+function hideHint(){hintOn=false;clearTimeout(hintT);hintEl.classList.remove('on')}
+function toast(t){toastEl.textContent=t;toastEl.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>toastEl.classList.remove('on'),1800)}
+
+/* ---------- 输入 ---------- */
+function adjust(o,d,wrap){
+ if(o.type==='select')o.i=wrap?(o.i+1)%o.values.length:clamp(o.i+d,0,o.values.length-1);
+ if(o.type==='slider'&&!wrap)o.v=clamp(o.v+d*5,0,100);
+ if(o.type==='toggle')o.on=!o.on;
+}
+function move(d){
+ const h=d==='left'?-1:d==='right'?1:0,v=d==='up'?-1:d==='down'?1:0;
+ if(S.side){
+  if(S.sub){if(v)S.pi=clamp(S.pi+v,0,power.length-1);if(h<0)S.sub=false}
+  else{const it=sideItems();if(v)S.si=clamp(S.si+v,0,it.length-1);if(h>0&&it[S.si].sub){S.sub=true;S.pi=0}}
+  return;
+ }
+ if(S.quick){const q=quick();if(v)S.qi=clamp(S.qi+v,0,q.length-1);if(h)adjust(q[S.qi],h);return}
+ if(S.screen==='home'){
+  /* 刚走过来又按相反方向时原路返回，大小不一的封面之间来回不会走岔 */
+  const opp={left:'right',right:'left',up:'down',down:'up'}[d],p=S.trail;
+  const n=p&&p.to===S.fi&&p.dir===opp&&match(items[p.from])?p.from:neighbor(d);
+  if(n>=0){S.trail={from:S.fi,to:n,dir:d};S.fi=n}
+  return;
+ }
+ if(S.szone==='cats'){if(v){S.cat=clamp(S.cat+v,0,cats.length-1);S.oi=0}if(h>0)S.szone='opts'}
+ else{const o=cats[S.cat].opts;if(v)S.oi=clamp(S.oi+v,0,o.length-1);if(h)adjust(o[S.oi],h)}
+}
+function openSettings(){S.screen='settings';S.szone='cats';S.cat=0;S.oi=0}
+const focused=()=>items[S.fi].name;
+function confirm(){
+ if(S.side){
+  if(S.sub){S.side=S.sub=false;toast(power[S.pi].label+'（示例）');return}
+  const x=sideItems()[S.si];
+  if(x.sub){S.sub=true;S.pi=0;return}
+  S.side=false;
+  if(x.label==='主页')S.screen='home';else if(x.label==='设置')openSettings();else toast('正在打开 '+x.label);
+  return;
+ }
+ if(S.quick){adjust(quick()[S.qi],1,true);return}
+ if(S.screen==='home'){const n=focused();if(n==='设置')openSettings();else toast('正在打开 '+n);return}
+ if(S.szone==='cats')S.szone='opts';else adjust(cats[S.cat].opts[S.oi],1,true);
+}
+function back(){
+ if(S.side){if(S.sub)S.sub=false;else S.side=false;return}
+ if(S.quick){S.quick=false;return}
+ if(S.screen==='settings'){if(S.szone==='opts')S.szone='cats';else S.screen='home'}
+}
+function shoulder(d){if(S.screen!=='home'||S.side||S.quick)return;S.tab=(S.tab+d+tabs.length)%tabs.length;if(!match(items[S.fi]))S.fi=items.findIndex(match)}
+function menu(){
+ S.quick=false;S.side=!S.side;S.sub=false;hideHint();
+ if(S.side)S.si=Math.max(0,sideItems().findIndex(x=>x.label===(S.screen==='home'?'主页':'设置')));
+}
+/* Select：第一次显示提示；提示还在时再按，打开右侧快捷设置 */
+function select(){
+ if(S.quick){S.quick=false;return}
+ if(S.side)return;
+ if(hintOn){hideHint();S.quick=true;S.qi=0}else showHint();
+}
+/* X、Y 交给焦点封面自己的快捷操作，不用进应用 */
+function quickAct(k){
+ const L=items[S.fi].live;
+ if(S.screen!=='home'||S.side||S.quick||!L)return;
+ if(k==='x')L.playing=!L.playing;else{L.si=(L.si+1)%L.songs.length;L.li=0;L.playing=true}
+}
+function start(){if(S.screen==='home'&&!S.side&&!S.quick)toast(focused()+' 的选项（示例）')}
+
+const held={};
+function press(k){
+ if(held[k]&&!/up|down|left|right/.test(k))return;
+ held[k]=true;
+ if(k==='a')confirm();else if(k==='b')back();else if(k==='l1')shoulder(-1);else if(k==='r1')shoulder(1);
+ else if(k==='menu')menu();else if(k==='select')select();else if(k==='start')start();else if(k==='x'||k==='y')quickAct(k);else move(k);
+ render();
+}
+const release=k=>{held[k]=false};
+const KEY={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',z:'a',Enter:'a',x:'b',Escape:'b',c:'x',v:'y',q:'l1',e:'r1',Tab:'select',m:'menu',s:'start'};
+function toggleTheme(){const t=opt('theme');t.i=1-t.i;render()}
+addEventListener('keydown',e=>{
+ const key=e.key.length===1?e.key.toLowerCase():e.key;
+ if(key==='t'){if(!e.repeat)toggleTheme();return}
+ const k=KEY[key];if(!k)return;e.preventDefault();press(k);
+});
+addEventListener('keyup',e=>{const k=KEY[e.key.length===1?e.key.toLowerCase():e.key];if(k)release(k)});
+document.querySelectorAll('#pad [data-k]').forEach(b=>{
+ const k=b.dataset.k;
+ b.addEventListener('pointerdown',e=>{e.preventDefault();press(k)});
+ ['pointerup','pointerleave','pointercancel'].forEach(n=>b.addEventListener(n,()=>release(k)));
+});
+$('themeBtn').addEventListener('click',toggleTheme);
+
+function fit(){
+ const s=Math.min((innerWidth-24)/1024,(innerHeight-150)/768,1.5),f=$('fit');K=Math.max(s,.3);
+ f.style.width=1024*K+'px';f.style.height=768*K+'px';stage.style.transform=`scale(${K})`;
+}
+addEventListener('resize',fit);fit();render();
+showHint(); /* 开机先显示一次提示，告诉用户两个面板在哪 */
+/* 示例：歌词每 2.4 秒走一句，唱完换下一首 */
+setInterval(()=>{
+ const L=items.find(a=>a.live).live;if(!L.playing)return;
+ if(++L.li>=L.songs[L.si].lines.length){L.li=0;L.si=(L.si+1)%L.songs.length}
+ if(S.screen==='home')render();
+},2400);
+setInterval(()=>{const c=stage.querySelector('.clk');if(c)c.textContent=clock()},30000);
+window.bd={S,items,press,release,render,showHint,hideHint,toast,opt,sideOpts};
+}
+</script>
+</body>
+</html>

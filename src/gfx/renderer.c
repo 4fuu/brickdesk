@@ -152,10 +152,13 @@ static const char *const COMPOSITE_FRAGMENT_SHADER =
     "uniform vec2 u_center;\n"
     "uniform vec2 u_half;\n"
     "uniform float u_radius;\n"
+    "uniform vec4 u_rect;\n"
     "uniform vec2 u_uv_scale;\n"
     "uniform vec4 u_overlay0;\n"
     "uniform vec4 u_overlay1;\n"
     "uniform mediump int u_axis;\n"
+    "uniform float u_feather;\n"
+    "uniform mediump int u_feather_edge;\n"
     "varying vec2 v_uv;\n"
     "varying vec2 v_local;\n"
     "void main() {\n"
@@ -171,7 +174,13 @@ static const char *const COMPOSITE_FRAGMENT_SHADER =
     "    float aa = max(BD_AA(d), 0.0001);\n"
     "    coverage = 1.0 - smoothstep(-aa, aa, d);\n"
     "  }\n"
-    "  gl_FragColor = vec4(rgb, coverage);\n"
+    "  float fade = 1.0;\n"
+    "  if (u_feather > 0.0) {\n"
+    "    float distance = u_feather_edge == 1 ? v_uv.y * u_rect.w\n"
+    "                                        : (1.0 - v_uv.y) * u_rect.w;\n"
+    "    fade = smoothstep(0.0, 1.0, clamp(distance / u_feather, 0.0, 1.0));\n"
+    "  }\n"
+    "  gl_FragColor = vec4(rgb, coverage * fade);\n"
     "}\n";
 
 static const GLfloat PASS_QUAD[] = {
@@ -561,6 +570,10 @@ static bool create_programs(bd_gfx *gfx) {
   gfx->composite_overlay1 =
       glGetUniformLocation(gfx->composite_program, "u_overlay1");
   gfx->composite_axis = glGetUniformLocation(gfx->composite_program, "u_axis");
+  gfx->composite_feather =
+      glGetUniformLocation(gfx->composite_program, "u_feather");
+  gfx->composite_feather_edge =
+      glGetUniformLocation(gfx->composite_program, "u_feather_edge");
 
   if (gfx->main_viewport < 0 || gfx->main_tex < 0 || gfx->main_mode < 0 ||
       gfx->main_flip < 0 || gfx->main_stroke < 0 || gfx->main_grad0 < 0 ||
@@ -571,7 +584,8 @@ static bool create_programs(bd_gfx *gfx) {
       gfx->composite_center < 0 || gfx->composite_half < 0 ||
       gfx->composite_radius < 0 || gfx->composite_uv_scale < 0 ||
       gfx->composite_overlay0 < 0 || gfx->composite_overlay1 < 0 ||
-      gfx->composite_axis < 0) {
+      gfx->composite_axis < 0 || gfx->composite_feather < 0 ||
+      gfx->composite_feather_edge < 0) {
     bd_gfx_set_error(gfx, "missing shader uniforms");
     return false;
   }
@@ -883,6 +897,14 @@ static void draw_unit_quad(bd_gfx *gfx) {
 
 void bd_gfx_blur_region(bd_gfx *gfx, bd_rect rect, int radius, bd_color overlay_start,
                         bd_color overlay_end, bd_gradient_axis axis) {
+  bd_gfx_blur_region_feathered(gfx, rect, radius, overlay_start, overlay_end, axis,
+                               BD_BLUR_EDGE_NONE, 0);
+}
+
+void bd_gfx_blur_region_feathered(bd_gfx *gfx, bd_rect rect, int radius,
+                                  bd_color overlay_start, bd_color overlay_end,
+                                  bd_gradient_axis axis, bd_blur_edge edge,
+                                  int feather) {
   if (gfx == NULL || !gfx->in_frame) {
     return;
   }
@@ -999,6 +1021,8 @@ void bd_gfx_blur_region(bd_gfx *gfx, bd_rect rect, int radius, bd_color overlay_
   glUniform4f(gfx->composite_overlay1, overlay_end.r, overlay_end.g, overlay_end.b,
               overlay_end.a);
   glUniform1i(gfx->composite_axis, axis == BD_GRADIENT_HORIZONTAL ? 1 : 0);
+  glUniform1f(gfx->composite_feather, feather > 0 ? (float)feather : 0.0f);
+  glUniform1i(gfx->composite_feather_edge, (int)edge);
   gfx->stats.blur_passes += 1;
 
   for (int i = 0; i < gfx->damage_final_count; ++i) {

@@ -56,8 +56,9 @@ static void draw_chrome(bd_gfx *gfx, bd_color bg, bd_color ink) {
   top.a = 0.72f;
   bd_color bottom = bg;
   bottom.a = 0.14f;
-  bd_gfx_blur_region(gfx, bd_rect_make(0, 0, BENCH_WIDTH, 76), 0, top, bottom,
-                     BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bd_rect_make(0, 0, BENCH_WIDTH, 76), 0, top,
+                               bottom, BD_GRADIENT_VERTICAL,
+                               BD_BLUR_EDGE_BOTTOM, 20);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, 75, BENCH_WIDTH, 1),
                    bd_color_rgba(30, 26, 21, 30));
 
@@ -65,9 +66,9 @@ static void draw_chrome(bd_gfx *gfx, bd_color bg, bd_color ink) {
   hint_top.a = 0.60f;
   bd_color hint_bottom = ink;
   hint_bottom.a = 0.82f;
-  bd_gfx_blur_region(gfx,
-                     bd_rect_make((BENCH_WIDTH - 640) / 2, 700, 640, 56), 16,
-                     hint_top, hint_bottom, BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(
+      gfx, bd_rect_make((BENCH_WIDTH - 640) / 2, 700, 640, 56), 16, hint_top,
+      hint_bottom, BD_GRADIENT_VERTICAL, BD_BLUR_EDGE_TOP, 12);
 }
 
 static bool build_wall_items(bd_wall_item **out_items, char (**out_titles)[40],

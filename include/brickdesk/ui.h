@@ -15,6 +15,8 @@ typedef struct bd_ui_fonts {
   bd_font *badge;
   bd_font *serif;
   bd_font *latin;
+  /* Optional 20 px full Noto Sans SC loaded when it exists on disk. */
+  bd_font *fallback_full;
 } bd_ui_fonts;
 
 bool bd_ui_fonts_load(bd_ui_fonts *fonts, bd_gfx *gfx);

@@ -201,7 +201,8 @@ static void draw_top_bar(bd_desktop *desktop, bd_gfx *gfx) {
   top.a = 0.72f;
   bd_color bottom = desktop->bg;
   bottom.a = 0.16f;
-  bd_gfx_blur_region(gfx, bar, 0, top, bottom, BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bar, 0, top, bottom, BD_GRADIENT_VERTICAL,
+                                  BD_BLUR_EDGE_BOTTOM, 24);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, BD_TOP_BAR_HEIGHT - 1, width, 1), desktop->line);
 
   bd_gfx_fill_round_rect(gfx, bd_rect_make(32, 29, 14, 14), 4,
@@ -235,7 +236,8 @@ static void draw_hint_bar(bd_desktop *desktop, bd_gfx *gfx) {
   top.a = 0.62f;
   bd_color bottom = desktop->ink;
   bottom.a = 0.82f;
-  bd_gfx_blur_region(gfx, bar, 16, top, bottom, BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bar, 16, top, bottom, BD_GRADIENT_VERTICAL,
+                                  BD_BLUR_EDGE_TOP, 14);
 
   static const char *const KEYS[] = {"A", "B", "M"};
   static const char *const LABELS[] = {"打开", "返回", "菜单"};

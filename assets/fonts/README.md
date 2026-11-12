@@ -14,15 +14,25 @@ texts are in `OFL-NotoSansSC.txt`, `OFL-NotoSerifSC.txt` and `OFL-Inter.txt`.
 
 ## Subset
 
-The subset contains the 2,061 common Chinese characters in
-`tools/font-subset-chars.txt`, ASCII, common Latin-1 punctuation, arrows and
-the CJK punctuation used by the UI. It is roughly 2 MiB in total, versus tens
-of MiB for the full CJK fonts.
+The subset covers GB2312 level 1 + level 2 (6,763 Hanzi) plus two
+UI-specific characters, ASCII, common Latin-1 punctuation, arrows and the CJK
+punctuation used by the UI: 6,904 codepoints in total. It is 6.9 MiB across
+the four files (Sans 500 + Sans 700 + Serif 500 + Inter), versus tens of MiB
+for the full CJK fonts.
+
+Keeping GB2312 coverage and two Chinese sans weights plus a serif title face
+exceeds the 4 MiB soft budget. Dropping `NotoSansSC-700` or limiting the serif
+to level 1 would fit under 4 MiB, at the cost of the title hierarchy. The
+runtime can optionally load a full `NotoSansSC-Full.ttf`/`.otf` from this
+directory (not bundled) as a 20 px last-resort fallback; otherwise missing
+glyphs draw a placeholder box and increment `missing_glyphs` in the renderer
+stats.
 
 The files are generated from the upstream variable fonts with FontTools:
 
 ```sh
 python3 -m pip install fonttools brotli
+python3 tools/make-gb2312-chars.py
 python3 tools/subset-fonts.py
 ```
 

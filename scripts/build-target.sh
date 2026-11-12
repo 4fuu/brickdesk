@@ -100,7 +100,7 @@ rm -rf "$BUILD_DIR/dist"
 mkdir -p "$BUILD_DIR/dist/lib" "$BUILD_DIR/dist/bin"
 cp -a "$SYSROOT/lib/libSDL2-2.0.so.0"* "$BUILD_DIR/dist/lib/"
 cp -a "$BUILD_DIR/display_probe" "$BUILD_DIR/dist/bin/"
-for binary in brickdesk brickdesk-inputd bd-input; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         cp -a "$BUILD_DIR/$binary" "$BUILD_DIR/dist/bin/"
     fi
@@ -108,7 +108,7 @@ done
 
 echo "==> checking GLIBC requirements"
 CHECK_TARGETS="$BUILD_DIR/display_probe"
-for binary in brickdesk brickdesk-inputd bd-input; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/$binary"
     fi

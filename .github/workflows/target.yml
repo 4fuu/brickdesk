@@ -78,11 +78,13 @@ jobs:
             "$IMAGE:$TAG" sh -c '
               test -x build-target/brickdesk
               test -x build-target/brickdesk-inputd
+              test -x build-target/brickdesk-perfd
               test -x build-target/bd-input
-              file build-target/brickdesk build-target/brickdesk-inputd build-target/bd-input
+              file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input
               ./ci/check-glibc.sh --max 2.23 \
                 build-target/brickdesk \
                 build-target/brickdesk-inputd \
+                build-target/brickdesk-perfd \
                 build-target/bd-input \
                 build-target/display_probe \
                 build-target/dist/lib/libSDL2-2.0.so.0

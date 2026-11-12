@@ -137,6 +137,22 @@ target_link_libraries(brickdesk_config
   PRIVATE brickdesk_warnings
 )
 
+# --- performance --------------------------------------------------------
+# Profile resolution, lease arbitration, sysfs probing and write
+# transactions.  Kept free of SDL so brickdesk-perfd can run without a
+# display context and the policy tests can use a fake sysfs tree.
+add_library(brickdesk_perf STATIC
+  src/perfd/policy.c
+  src/perfd/sysfs.c
+)
+target_include_directories(brickdesk_perf
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_perf
+  PUBLIC brickdesk_config
+  PRIVATE brickdesk_warnings
+)
+
 # --- input --------------------------------------------------------------
 # Keys, hotkey parsing/state machine, evdev and input.ini mapping. Kept free
 # of SDL so brickdesk-inputd and bd-input can run on the device without a
@@ -165,6 +181,9 @@ target_link_libraries(brickdesk-inputd PRIVATE brickdesk_input brickdesk_config 
 
 add_executable(bd-input tools/bd-input.c)
 target_link_libraries(bd-input PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
+
+add_executable(brickdesk-perfd src/perfd/perfd.c)
+target_link_libraries(brickdesk-perfd PRIVATE brickdesk_perf brickdesk_config brickdesk_warnings)
 
 # --- tools --------------------------------------------------------------
 add_executable(brickdesk-config tools/brickdesk-config.c)

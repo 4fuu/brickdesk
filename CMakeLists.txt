@@ -150,3 +150,7 @@ include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+if(BRICKDESK_BUILD_BENCH AND NOT CMAKE_CROSSCOMPILING)
+  add_subdirectory(bench)
+endif()

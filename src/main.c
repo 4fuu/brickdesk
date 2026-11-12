@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "brickdesk/config.h"
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
@@ -16,6 +17,7 @@ static void print_usage(FILE *stream) {
           "  --version        print version and exit\n"
           "  --verbose        print GL extensions at startup\n"
           "  --idle-check MS  block for MS milliseconds and report redraws\n"
+          "  --config-dir DIR load configuration from DIR\n"
           "  -h, --help       show this help\n");
 }
 
@@ -100,6 +102,7 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
 int main(int argc, char **argv) {
   bool verbose = false;
   int idle_check_ms = 0;
+  const char *config_dir = NULL;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
@@ -109,6 +112,14 @@ int main(int argc, char **argv) {
     }
     if (strcmp(arg, "--verbose") == 0) {
       verbose = true;
+      continue;
+    }
+    if (strcmp(arg, "--config-dir") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "brickdesk: --config-dir needs a directory\n");
+        return 2;
+      }
+      config_dir = argv[++i];
       continue;
     }
     if (strcmp(arg, "--idle-check") == 0) {
@@ -134,6 +145,21 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  bd_config_options config_options = {config_dir, true};
+  char config_error[256];
+  bd_config *settings =
+      bd_config_load(&config_options, config_error, sizeof(config_error));
+  if (settings == NULL) {
+    fprintf(stderr, "brickdesk: config: %s\n", config_error);
+    return 1;
+  }
+  if (bd_config_diagnostic_count(settings) > 0) {
+    fprintf(stderr,
+            "brickdesk: config: %zu diagnostic(s) in %s; "
+            "run brickdesk-config check\n",
+            bd_config_diagnostic_count(settings), bd_config_dir(settings));
+  }
+
   bd_platform_config config;
   config.title = "brickdesk";
   config.width = BD_DEFAULT_WIDTH;
@@ -142,6 +168,7 @@ int main(int argc, char **argv) {
 
   bd_platform *platform = bd_platform_create(&config);
   if (platform == NULL) {
+    bd_config_free(settings);
     return 1;
   }
 
@@ -154,6 +181,7 @@ int main(int argc, char **argv) {
   if (gfx == NULL) {
     fprintf(stderr, "brickdesk: renderer creation failed\n");
     bd_platform_destroy(platform);
+    bd_config_free(settings);
     return 1;
   }
 
@@ -162,6 +190,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "brickdesk: out of memory\n");
     bd_gfx_destroy(gfx);
     bd_platform_destroy(platform);
+    bd_config_free(settings);
     return 1;
   }
 
@@ -170,5 +199,6 @@ int main(int argc, char **argv) {
   bd_desktop_destroy(desktop);
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);
+  bd_config_free(settings);
   return result;
 }

@@ -13,6 +13,9 @@ target_link_libraries(bd_smoke_render PRIVATE brickdesk_core brickdesk_warnings)
 add_executable(bd_key_names_test key_names_test.c)
 target_link_libraries(bd_key_names_test PRIVATE brickdesk_core brickdesk_warnings)
 
+add_executable(bd_config_test config_test.c)
+target_link_libraries(bd_config_test PRIVATE brickdesk_config brickdesk_warnings)
+
 if(BRICKDESK_BUILD_HARNESS)
   add_executable(bd_harness
     harness/main.c
@@ -31,6 +34,9 @@ if(CMAKE_CROSSCOMPILING)
 endif()
 
 add_test(NAME key_names COMMAND bd_key_names_test)
+add_test(NAME config COMMAND bd_config_test)
+add_test(NAME config_check
+  COMMAND brickdesk-config check --config-dir "${PROJECT_SOURCE_DIR}/config")
 
 add_test(NAME smoke_render
   COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")
@@ -44,6 +50,12 @@ add_test(NAME idle_loop COMMAND brickdesk --idle-check 500)
 set_tests_properties(idle_loop PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   PASS_REGULAR_EXPRESSION "idle: duration_ms=500 presents=0 ")
+
+add_test(NAME config_dir_override
+  COMMAND brickdesk --idle-check 100 --config-dir "${PROJECT_SOURCE_DIR}/config")
+set_tests_properties(config_dir_override PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  PASS_REGULAR_EXPRESSION "idle: duration_ms=100 presents=0 ")
 
 if(BRICKDESK_BUILD_HARNESS)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)

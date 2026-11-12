@@ -1,0 +1,393 @@
+# brickdesk 配置参考
+
+本文对应 M1-04 配置核心，schema 版本 1。配置用 INI（inih）书写，机器数据
+仍用 JSON。配置加载后是只读快照；UI 和 `brickdesk-config` 修改值时通过
+`include/brickdesk/config.h` 的接口校验并原子写回 `local.ini`。
+
+## 1. 文件与覆盖层级
+
+从低到高：
+
+| 层 | 文件 | 谁写 | 说明 |
+|---|---|---|---|
+| 1 | 编译期默认值 | 开发者 | 定义在 `src/config/schema.c`，每个 key 都有默认值或标记为可选 |
+| 2 | `brickdesk.ini` | 固件 | 主题、界面、显示、输入、电源、插件、会话 |
+| 3 | `perf.ini` | 固件 | 性能 profile |
+| 4 | `hotkeys.ini` | 固件 | 组合键 |
+| 5 | `input.ini` | 固件 | 设备/按键映射 |
+| 6 | `local.ini` | UI / CLI | 只写用户改过的 key，覆盖前面所有层 |
+
+`brickdesk.ini`、`perf.ini`、`hotkeys.ini`、`input.ini` 都属于“系统层”；
+同一 key 在后面的文件出现时覆盖前面的文件。`local.ini` 是唯一用户层。
+
+目录解析顺序：
+
+1. 命令行 `--config-dir DIR`（`brickdesk` 和 `brickdesk-config` 都支持）；
+2. 环境变量 `BRICKDESK_CONFIG_DIR`；
+3. 编译期默认目录。宿主机构建默认是仓库里的 `config/`；交叉构建可用
+   `-DBRICKDESK_CONFIG_DIR=/mnt/SDCARD/brickdesk/config` 覆盖。
+
+设备上推荐：
+
+```text
+/mnt/SDCARD/brickdesk/config/
+  brickdesk.ini
+  perf.ini
+  hotkeys.ini
+  input.ini
+  local.ini
+```
+
+不在设备上时，`brickdesk --config-dir ./config` 直接使用仓库里的默认文件。
+配置文件缺失不是错误：该层跳过，使用更低的层。配置目录不存在会报错，但
+主程序仍用默认值启动（安全模式），`brickdesk-config check` 返回非 0。
+
+## 2. 语法、类型与校验
+
+- 注释：行首 `;` 或 `#`；`;` 也可以作为行内注释。
+- section：`[section]`，key：`name = value`；值两侧空白会去掉。
+- 空值 `key =` 合法；字符串空值就是空字符串。
+- 未知 section/key：警告，不删除；`local.ini` 里的未知 key 在保存时原样保留。
+- 单个 key 校验失败：报 `file:line`，该值不生效，下一层有效值继续生效；
+  如果没有任何低层值，则使用编译期默认值。加载不会因为单个坏值而失败。
+- 语法错误：报 `file:line`，继续加载该文件里已经解析出的内容。
+
+schema 类型：
+
+| 类型 | 写法 | 规则 |
+|---|---|---|
+| `bool` | `true` / `false` | 也接受 `yes/no/1/0/on/off`，不区分大小写 |
+| `int` | `600` | 十进制整数，必须在 schema 的 min..max 内 |
+| `enum` | `dark` | 必须在枚举表中，不区分大小写，输出规范化为小写/标准拼写 |
+| `string` | `zh-CN` | 长度上限见各 key；必填 string 不能为空；不接受换行；不做通配或路径展开 |
+| `accent` | `persimmon` / `#e07a5f` | 预设名或 `#RRGGBB`；非法值报行号 |
+| `duration` | `180s` | 支持 `ms`、`s`、`min`；不带单位时按 key 的默认单位 |
+| `combo` | `L1+R1+Start` | 组合键/序列语法，见第 6 节 |
+
+没有实现的架构类型：`path`、`frequency`。主题/资源路径暂由上层自己校验；
+频率是否在设备可用表中由 M1-07 的 perfd 探测并校验。
+
+## 3. `[meta]` 与迁移
+
+每个文件都可以有：
+
+```ini
+[meta]
+schema_version = 1
+```
+
+当前支持版本是 1。
+
+- 缺失 `[meta]` 或版本低于 1：视为版本 0。主程序、`get`、`set`、`dump`
+  会先迁移，把原文件备份为 `<file>.bak.v0`，再原子写回带
+  `schema_version = 1` 的文件；只做结构迁移，不改变用户值。
+- `brickdesk-config check` 不迁移，只报告“migration needed”警告；CI 用它
+  校验默认文件时不会修改仓库。
+- 版本高于当前：报错，进入只读安全模式；已知 key 仍可读，`set`/`save` 拒绝写入。
+- 迁移失败：保留原文件，报错并进入只读模式。
+- 迁移会重写文件，原文件的注释不保留（备份里有原始内容）。
+
+迁移钩子表在 `src/config/config.c` 的 `migrations[]`；当前只有 `0 -> 1`。
+新增结构变化时加一个 `N -> N+1` 钩子并把 `BD_CONFIG_SCHEMA_VERSION` 加一。
+
+## 4. `brickdesk.ini`
+
+### 4.1 `[theme]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `mode` | enum | `dark` | `dark`、`light`、`auto` | 主题模式；`auto` 目前等同 `dark`，等系统/环境光信号接入后再解析 |
+| `accent` | accent | `persimmon` | 预设名或 `#RRGGBB` | 强调色；焦点、开关、进度、当前标记使用 |
+| `ambient` | enum | `baked` | `baked`、`solid` | 背景：预烘焙封面底图 + 纱层，或纯色 |
+
+强调色预设（主题层可用 `bd_config_accent_hex()` 解析）：
+
+| 预设 | 深色 | 浅色 |
+|---|---|---|
+| `persimmon`（柿红，默认） | `#e07a5f` | `#ae432b` |
+| `coral` | `#fd5c47` | `#c23b2a` |
+| `teal` | `#4fb3a9` | `#1f6f68` |
+| `blue` | `#6c9bd1` | `#2f6690` |
+| `green` | `#86b36b` | `#4a7a3a` |
+| `violet` | `#a98bd6` | `#6a4c9c` |
+
+自定义 `#RRGGBB` 在深浅两个模式都使用同一个值；用户自己负责对比度。
+
+### 4.2 `[ui]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `language` | enum | `zh-CN` | `zh-CN`、`en-US` | 界面语言 |
+| `animations` | bool | `true` | — | 过渡/焦点动画；关闭可降低 CPU |
+| `time_format` | enum | `24h` | `24h`、`12h` | 时钟格式 |
+| `clock_seconds` | bool | `false` | — | 时钟是否显示秒 |
+| `cover_cache_mb` | int | `96` | 8..512 | 封面缩略图缓存上限（MB） |
+
+### 4.3 `[display]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `width` | int | `1024` | 320..4096 | 逻辑宽度；Brick Pro 为 1024 |
+| `height` | int | `768` | 240..4096 | 逻辑高度；Brick Pro 为 768 |
+| `refresh_hz` | int | `60` | 30..120 | 刷新率 |
+| `brightness` | int | `70` | 0..100 | 背光百分比 |
+
+### 4.4 `[input]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `repeat_delay_ms` | int | `400` | 0..2000 | 方向键首次重复前延迟 |
+| `repeat_interval_ms` | int | `80` | 10..1000 | 方向键重复间隔 |
+| `chord_window_ms` | int | `50` | 10..500 | chord 判定窗口 |
+| `long_press_ms` | int | `500` | 100..3000 | 全局长按阈值；热键可用 `hold_ms` 覆盖 |
+| `double_tap_ms` | int | `300` | 100..1000 | 双击判定窗口 |
+
+### 4.5 `[power]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `sleep_after` | duration | `180s` | 0..24h | 无操作休眠时间；不带单位按秒 |
+| `low_battery_percent` | int | `5` | 0..100 | 低电量阈值 |
+| `shutdown_on_low_battery` | bool | `true` | — | 低于阈值是否关机 |
+
+### 4.6 `[plugins]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `enabled` | bool | `true` | — | 插件总开关 |
+| `max_total_rss_mb` | int | `128` | 16..1024 | 插件常驻内存总上限 |
+| `idle_stop` | duration | `60s` | 0..24h | 插件空闲停止时间；不带单位按秒 |
+| `autostart_delay` | duration | `2s` | 0..10min | 开机后延迟启动插件；不带单位按秒 |
+
+### 4.7 `[session]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `state_quota_mb` | int | `512` | 64..4096 | 每个应用的存档配额 |
+| `quick_resume` | enum | `auto` | `auto`、`always`、`never` | 快速恢复策略 |
+
+## 5. `perf.ini`
+
+profile 段是动态的：`[profile.<name>]`、`[app.<id>]`、`[core.<name>]`。
+配置层校验类型和范围；profile 继承链、未知 profile、循环检测由 M1-07 的
+perfd 在应用策略时完成。
+
+### 5.1 `[profile.<name>]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `inherit` | string | 未设置 | profile 名，≤64 字符 | 继承另一个 profile |
+| `governor` | enum | 未设置 | `performance`、`schedutil`、`ondemand`、`powersave` | CPU governor |
+| `min_khz` | int | 未设置 | 0..3000000 | 最低频率（kHz） |
+| `max_khz` | int | 未设置 | 0..3000000 | 最高频率（kHz） |
+| `online_cores` | int | 未设置 | 2..4 | 在线核心数 |
+| `swappiness` | int | 未设置 | 0..100 | 内核 swappiness |
+
+未设置的字段由 `inherit` 链或 perfd 的策略决定；最终写入的频率必须是设备
+`scaling_available_frequencies` 里的值。
+
+### 5.2 `[app.<id>]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `profile` | string | 必填 | profile 名，≤64 字符 | 应用启动时使用的 profile |
+
+`<id>` 是应用 id，例如 `org.libretro.retroarch`。
+
+### 5.3 `[core.<name>]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `inherit` | string | 未设置 | profile 名，≤64 字符 | 继承 profile |
+| `governor` | enum | 未设置 | 同 profile | 覆盖 governor |
+| `min_khz` | int | 未设置 | 0..3000000 | 覆盖最低频率 |
+| `max_khz` | int | 未设置 | 0..3000000 | 覆盖最高频率 |
+| `online_cores` | int | 未设置 | 2..4 | 覆盖核心数 |
+| `swappiness` | int | 未设置 | 0..100 | 覆盖 swappiness |
+
+## 6. `hotkeys.ini`
+
+每个 `[hotkey.<id>]` 是一个绑定。同 id 的 section 按 key 合并：高优先级的
+key 覆盖低优先级的同名 key，未写的 key 继续使用低层值。这样 `local.ini`
+可以只写用户改过的一个字段，不会把系统默认的 `combo`/`action` 弄丢。
+（这比架构草案的“整个 section 覆盖”更细；理由见第 11 节。）
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `combo` | combo | 必填 | 见下 | 触发键 |
+| `hold_ms` | int | `500` | 50..5000 | 长按阈值；`Menu` 默认 600，`Select` 提示默认 400 |
+| `window_ms` | int | `50` | 10..500 | chord 判定窗口 |
+| `action` | string | 必填 | ≤64 字符 | 动作名，如 `menu.open`、`builtin.screenshot` |
+| `scope` | string | `global` | ≤64 字符 | `global`、`app:<id>`、`mode:<mode>` |
+| `suppress` | bool | `false` | — | 是否需要 grab + uinput 独占转发 |
+| `confirm` | bool | `false` | — | 触发前是否二次确认 |
+| `repeat` | bool | `false` | — | 按住时是否重复 |
+| `repeat_ms` | int | `100` | 20..1000 | 重复间隔 |
+| `plugin` | string | 空 | ≤64 字符 | `plugin.invoke` 的插件 id |
+| `action_id` | string | 空 | ≤64 字符 | `plugin.invoke` 的动作 id |
+
+组合键语法：
+
+- `A+B+C`：chord，同一 chord 里的键不能重复；最多 8 个键。
+- `A,B`：序列，每一步都可以是 chord；步与步之间按顺序匹配。
+- `Key(hold:800)`：只作用于单键，长按覆盖全局 `hold_ms`，范围 1..10000。
+- `Key(double)`：双击。
+- `*`：任意键，只能单独使用，仅用于诊断。
+- 键名来自 `include/brickdesk/input.h` 的逻辑键：`A`、`B`、`X`、`Y`、
+  `L1`、`R1`、`SELECT`、`START`、`MENU`、`UP`、`DOWN`、`LEFT`、`RIGHT`；
+  大小写不敏感，输出统一大写。
+- 冲突检测（完全相同的绑定、前缀冲突、scope 重叠）在 M1-05 的输入状态机
+  里实现；配置层目前只做语法和单 chord 重复键校验。
+
+默认绑定：
+
+| section | combo | hold_ms | action |
+|---|---|---|---|
+| `hotkey.menu` | `Menu` | 600 | `menu.open` |
+| `hotkey.hint` | `Select` | 400 | `ui.hint` |
+| `hotkey.screenshot` | `L1+R1+Start` | — | `builtin.screenshot` |
+| `hotkey.performance` | `Select+Up` | — | `perf.cycle` |
+| `hotkey.return_home` | `Menu+X` | — | `session.return_home`（confirm） |
+
+## 7. `input.ini`
+
+`[device.<name>]` 是动态 section，任意 key 都按字符串接受（≤64 字符）。
+按 `vendor`/`product` 匹配设备，不按 `/dev/input/eventN` 编号。
+
+| key | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `vendor` | string | 必填（设备段） | USB vendor id，例如 `0x1a2c` |
+| `product` | string | 必填（设备段） | USB product id，例如 `0x0001` |
+| 其他任意 key | string | — | 逻辑键名到 evdev 的映射，例如 `A = BTN_SOUTH`、`Up = ABS_HAT0Y:-1` |
+
+配置层不校验 evdev 名称/轴方向是否真实存在；M1-05 的 `bd-input --list`
+和 `--learn` 会在设备上确认，无法识别时回退到内置映射。
+
+## 8. `local.ini`
+
+- 只写用户改过的 key；不会复制整份 `brickdesk.ini`。
+- 保存时保留 `local.ini` 里的未知 section/key，方便降级到旧版本。
+- 已知 key 的非法值在加载时会被忽略；保存时不会写回该非法值。
+- 保存会重写文件，不保留手写注释；旧文件先复制为 `local.ini.bak`。
+- 写入流程：同目录临时文件 `local.ini.tmp.<pid>` → `write` → `fsync` →
+  `rename` → 目录 `fsync`。失败时删除临时文件，原文件不变。
+- 权限 0644；打开临时文件使用 `O_NOFOLLOW`，不跟随符号链接。
+- 没有实现架构里的 `flock`；并发写仍是“最后写入者胜”，但不会出现半截文件。
+
+## 9. 命令行
+
+```sh
+brickdesk-config check                      # 校验所有文件，打印 file:line
+brickdesk-config get theme.mode             # 打印有效值
+brickdesk-config set theme.accent coral     # 写 local.ini
+brickdesk-config dump                       # 每个 key 的值和来源层/文件/行
+brickdesk-config --config-dir ./config dump
+```
+
+`get`/`set`/`dump` 会在需要时迁移旧文件；`check` 不会写文件。
+`set` 只能修改已经存在的 key（包括系统文件里定义的动态 section）；要新增
+热键或设备映射，先在对应 INI 文件里写好 section，再用 `set` 覆盖字段。
+
+退出码：
+
+- `0`：成功；
+- `1`：配置错误、未知 key、保存失败，或 `get`/`dump` 遇到配置错误；
+- `2`：命令行用法错误。
+
+`dump` 输出示例：
+
+```text
+theme.mode = dark (system:/path/config/brickdesk.ini:11)
+display.brightness = 80 (user:/path/config/local.ini:5)
+hotkey.menu.window_ms = 50 (compiled)
+```
+
+`dump --json` 在 M1-04 未实现；当前是稳定的纯文本格式。
+
+## 10. C 接口
+
+公共头文件 `include/brickdesk/config.h`：
+
+```c
+bd_config *bd_config_load(const bd_config_options *options, char *error,
+                          size_t error_size);
+void bd_config_free(bd_config *config);
+
+const char *bd_config_get_string(const bd_config *, const char *key,
+                                 const char *fallback);
+long bd_config_get_int(const bd_config *, const char *key, long fallback);
+bool bd_config_get_bool(const bd_config *, const char *key, bool fallback);
+
+bool bd_config_set(bd_config *, const char *key, const char *value,
+                   char *error, size_t error_size);
+bool bd_config_save(bd_config *, char *error, size_t error_size);
+
+void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
+                                   void *user);
+```
+
+- key 是 section 和字段用 `.` 连接的完整路径，匹配时不做再次分割，所以
+  section 名可以带空格/点：`device.TrimUI Gamepad.A` 是合法 key。
+- `bd_config_set()` 只改内存并触发变化回调；`bd_config_save()` 才写
+  `local.ini`。两者分开，UI 可以先批量改再保存。
+- 变化回调只在有效值真的变化时触发；把 key 设成当前值不会触发。
+- `bd_config_get()` 返回 `bd_config_value`，可拿到类型和原始规范值；
+  `duration` 的 `integer` 单位是毫秒。
+- `bd_config_source_layer()`/`bd_config_source_file()` 用于 UI 显示来源。
+- `bd_config_accent_hex(accent, dark)` 解析预设；自定义 `#RRGGBB` 原样返回，
+  未知值返回 `NULL`。
+
+## 11. M1-04 的边界与后续
+
+已完成：
+
+- 编译期默认 → 四个系统文件 → `local.ini` 的按 key 覆盖；
+- 类型、范围、枚举、accent、duration、combo 校验和 `file:line`；
+- schema_version 0→1 迁移、备份、只读安全模式；
+- 临时文件 + fsync + rename + 目录 fsync 的原子保存；
+- `check`/`get`/`set`/`dump`；
+- 主程序启动加载和 `--config-dir`。
+
+明确留给后续 milestone：
+
+- inotify 热重载和 SIGHUP：M1-04 只提供内存 set + 回调，主程序启动时加载一次；
+- 删除/重置本地覆盖的 API；目前要移除某个覆盖需要手动编辑 `local.ini`；
+- `flock` 并发写锁；
+- 热键冲突/前缀/scope 合并：M1-05；
+- profile 继承链、循环、未知 profile：M1-07；
+- `/usr/share`、`/etc`、应用级 `[app.*]`、环境变量白名单、逐 key 命令行覆盖；
+- `path`、`frequency` 类型和 `restart_required` 标记；
+- `dump --json`；
+- 主题渲染接线：`[theme]` 值已经可读，`src/gfx/` 的主题系统在后续里程碑消费。
+
+与 `docs/research/architecture.md` 第 7 节相比的差异：
+
+1. 架构草案用 `[ui] theme = default`；按产品决定改成 `[theme] mode = dark|light|auto`，
+   并新增 `[theme] accent`、`[theme] ambient`。
+2. 架构草案的 8 层覆盖只实现到“编译期 → 系统文件 → local.ini”；其余层
+   在 M1-04 没有对应目录/生命周期，先不引入。
+3. 单个坏值采用“忽略该值、保留下一层有效值”而不是无条件重置编译默认值；
+   没有低层值时结果与架构草案一致。
+4. 热键 section 采用逐 key 合并，而不是整个 section 覆盖；这样 `local.ini`
+   只写改过的字段也能工作。
+5. 迁移重写文件会丢注释；原文件在 `.bak.vN` 里保留。
+6. 未实现 flock、inotify、`path`/`frequency` 类型、`dump --json`。
+
+## 12. 测试
+
+```sh
+BRICKDESK_WERROR=ON ./scripts/build-host.sh
+ctest --test-dir build-host --output-on-failure
+```
+
+`config` 单测覆盖：覆盖层级（含反向优先级）、坏行行号、范围/枚举/combo、
+accent 预设与自定义十六进制、变化回调、`local.ini` 只写改动、未知 key 保留、
+原子写失败不破坏原文件、0→1 迁移、未来版本只读。
+
+`config_check` 直接运行：
+
+```sh
+./build-host/brickdesk-config check --config-dir ./config
+```
+
+默认配置必须保持零错误；CI 在 `ctest` 里执行同一条检查。

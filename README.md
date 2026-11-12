@@ -70,6 +70,9 @@ semantics. `config/hotkeys.ini` and `config/input.ini` are the sources of
 truth; see [docs/input.md](docs/input.md) and
 [docs/config-reference.md](docs/config-reference.md) section 6.
 
+Application packages and the session/app protocol are documented in
+[docs/app-protocol.md](docs/app-protocol.md).
+
 ## Tests
 
 ```sh
@@ -86,6 +89,9 @@ The suite includes:
 - `scenario.boot`, `scenario.focus_move`: input replay + exact pixel compare
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
+- `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,
+  crash detection, background limit and last-frame validation (runs the demo
+  app and a purpose-built child process)
 
 Screenshots are decoded RGBA and compared pixel-by-pixel; PNG bytes are never
 compared. Failure artifacts (actual, baseline copy, diff) land under
@@ -148,6 +154,8 @@ src/gfx/               GLES2 renderer and framebuffer capture
 src/app/               M1 placeholder desktop scene
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
+src/session/           app manifests, process lifecycle, app IPC, last frame
+apps/demo/             SDL2 + GLES2 reference app for the session protocol
 tests/                 harness, scenarios, baselines, image diff self-test
 tools/bd-input.c       --list/--learn/--watch/--check input utility
 tools/imagediff.py     exact/tolerance pixel comparison + diff images

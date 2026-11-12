@@ -117,11 +117,19 @@ endif()
 
 if(BRICKDESK_BACKEND STREQUAL "target")
   set(_bd_config_dir "/mnt/SDCARD/brickdesk/config")
+  set(_bd_apps_dir "/mnt/SDCARD/Apps")
+  set(_bd_state_dir "/mnt/SDCARD/brickdesk/state")
 else()
   set(_bd_config_dir "${CMAKE_CURRENT_SOURCE_DIR}/config")
+  set(_bd_apps_dir "${CMAKE_CURRENT_SOURCE_DIR}/apps")
+  set(_bd_state_dir "/tmp/brickdesk-state")
 endif()
 set(BRICKDESK_CONFIG_DIR "${_bd_config_dir}" CACHE PATH
     "Default configuration directory baked into the binaries")
+set(BRICKDESK_APPS_DIR "${_bd_apps_dir}" CACHE PATH
+    "Default application directory baked into the session layer")
+set(BRICKDESK_STATE_DIR "${_bd_state_dir}" CACHE PATH
+    "Default application state root baked into the session layer")
 add_library(brickdesk_config STATIC
   src/config/config.c
   src/config/schema.c
@@ -155,9 +163,44 @@ target_link_libraries(brickdesk_input
   PRIVATE brickdesk_warnings
 )
 
+# --- session ------------------------------------------------------------
+# App manifests, process lifecycle, app IPC and the last-frame handoff.
+# Deliberately free of SDL/GL/config so brickdesk-session can stay small.
+add_library(brickdesk_session STATIC
+  src/session/app_protocol.c
+  src/session/json_util.c
+  src/session/last_frame.c
+  src/session/manifest.c
+  src/session/session.c
+)
+target_include_directories(brickdesk_session
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/jsmn"
+)
+target_compile_definitions(brickdesk_session PRIVATE
+  BRICKDESK_APPS_DIR="${BRICKDESK_APPS_DIR}"
+  BRICKDESK_STATE_DIR="${BRICKDESK_STATE_DIR}"
+)
+target_link_libraries(brickdesk_session PRIVATE brickdesk_warnings)
+
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
 target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
+
+# Reference app for the session protocol. It writes the last-frame handoff
+# and a state file; see docs/app-protocol.md.
+add_executable(brickdesk-demo apps/demo/main.c)
+target_include_directories(brickdesk-demo PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/jsmn"
+  "${BRICKDESK_GLES2_INCLUDE_DIR}"
+)
+target_link_libraries(brickdesk-demo PRIVATE
+  ${BRICKDESK_SDL2_TARGET}
+  ${BRICKDESK_GLES2_LIBRARY}
+  $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
+  brickdesk_warnings
+)
 
 # --- input daemon and tools ---------------------------------------------
 add_executable(brickdesk-inputd src/input/inputd.c)

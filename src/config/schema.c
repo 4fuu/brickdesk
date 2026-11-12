@@ -63,6 +63,7 @@ const bd_config_spec bd_config_specs[] = {
 
     /* session */
     {"session", "state_quota_mb", BD_CONFIG_INT, "512", 64, 4096, NULL, 0, 0, 0},
+    {"session", "max_background", BD_CONFIG_INT, "2", 1, 8, NULL, 0, 0, 0},
     {"session", "quick_resume", BD_CONFIG_ENUM, "auto", 0, 0, g_quick_resume, 0,
      0, 0},
 

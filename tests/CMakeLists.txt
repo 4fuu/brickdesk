@@ -150,3 +150,17 @@ if(BRICKDESK_BUILD_HARNESS)
     TIMEOUT 180
     FAIL_REGULAR_EXPRESSION "FAIL")
 endif()
+
+add_executable(bd_session_child session_child.c)
+target_include_directories(bd_session_child PRIVATE
+  "${PROJECT_SOURCE_DIR}/third_party/jsmn")
+target_link_libraries(bd_session_child PRIVATE brickdesk_warnings)
+
+add_executable(bd_session_test session_test.c)
+target_link_libraries(bd_session_test PRIVATE brickdesk_session brickdesk_warnings)
+
+add_test(NAME session
+  COMMAND bd_session_test $<TARGET_FILE:brickdesk-demo> $<TARGET_FILE:bd_session_child>)
+set_tests_properties(session PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 180)

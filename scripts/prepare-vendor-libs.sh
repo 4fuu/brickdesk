@@ -7,6 +7,10 @@
 # Resolving vendor DT_NEEDED entries from this filtered directory instead keeps
 # libc/libpthread coming from the 7.5 toolchain.
 #
+# Real files are hard-linked (copied across filesystems) so CMake's find_library
+# returns this directory instead of resolving a symlink back into $SDK/usr/lib.
+# Symlinks are recreated relative to the directory.
+#
 # Usage: scripts/prepare-vendor-libs.sh SDK_DIR DEST_DIR
 set -eu
 
@@ -24,15 +28,40 @@ if [ ! -d "$SDK/usr/lib" ]; then
 fi
 
 rm -rf "$DEST"
-mkdir -p "$DEST"
+mkdir -p "$DEST/lib"
+LIBDIR=$DEST/lib
 
-for lib in "$SDK"/usr/lib/*.so*; do
-    [ -e "$lib" ] || continue
-    base=$(basename "$lib")
-    case "$base" in
-        libc.so*|libpthread*|libdl*|libm.so*|librt*|libgcc_s*|ld-*) continue ;;
+skip() {
+    case "$1" in
+        libc.so*|libpthread*|libdl*|libm.so*|librt*|libgcc_s*|ld-*) return 0 ;;
+        *) return 1 ;;
     esac
-    ln -sf "$lib" "$DEST/$base"
+}
+
+# Pass 1: real files. Hard links keep the image small; the copy fallback covers
+# destinations on another filesystem (for example a build directory on a mount).
+for lib in "$SDK"/usr/lib/*.so*; do
+    [ -f "$lib" ] || continue
+    [ -L "$lib" ] && continue
+    base=$(basename "$lib")
+    if skip "$base"; then
+        continue
+    fi
+    ln "$lib" "$LIBDIR/$base" 2>/dev/null || cp -p "$lib" "$LIBDIR/$base"
 done
 
-echo "vendor library links: $DEST"
+# Pass 2: symlinks, recreated relative to files that exist in DEST.
+for lib in "$SDK"/usr/lib/*.so*; do
+    [ -L "$lib" ] || continue
+    base=$(basename "$lib")
+    if skip "$base"; then
+        continue
+    fi
+    target=$(readlink "$lib")
+    target_base=$(basename "$target")
+    if [ -e "$LIBDIR/$target_base" ]; then
+        ln -sf "$target_base" "$LIBDIR/$base"
+    fi
+done
+
+echo "vendor library prefix: $DEST (libraries in $LIBDIR)"

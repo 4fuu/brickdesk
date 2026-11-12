@@ -64,10 +64,15 @@ if [ ! -e "$SYSROOT/lib/libSDL2-2.0.so.0" ] || [ ! -d "$SYSROOT/include/SDL2" ];
 fi
 
 # Resolve the vendor libraries' DT_NEEDED entries without exposing the SDK's
-# glibc 2.23 stubs (libpthread-2.23.so, libdl-2.23.so). Linking with
-# -L$TRIMUI_SDK/usr/lib makes ld pick those and fails on GLIBC_PRIVATE.
-VENDOR_LIBS=$BUILD_DIR/vendor-libs
-"$REPO_ROOT/scripts/prepare-vendor-libs.sh" "$TRIMUI_SDK" "$VENDOR_LIBS"
+# glibc 2.23 stubs (libpthread-2.23.so, libdl-2.23.so). The image sysroot already
+# contains the filtered directory; older or hand-made sysroots get one built in
+# the build tree.
+if [ -e "$SYSROOT/vendor-lib/lib/libEGL.so" ]; then
+    VENDOR_LIBS=$SYSROOT/vendor-lib
+else
+    VENDOR_LIBS=$BUILD_DIR/vendor-libs
+    "$REPO_ROOT/scripts/prepare-vendor-libs.sh" "$TRIMUI_SDK" "$VENDOR_LIBS"
+fi
 
 echo "==> building display_probe"
 "$CC" -std=c11 -O2 -g -Wall -Wextra \
@@ -85,6 +90,7 @@ if [ "$SKIP_CMAKE" -eq 0 ] && [ -f "$REPO_ROOT/CMakeLists.txt" ]; then
     TRIMUI_SYSROOT="$SYSROOT" cmake \
         -S "$REPO_ROOT" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchain-aarch64.cmake" \
+        -DBRICKDESK_BACKEND=target \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake --build "$BUILD_DIR"
 fi

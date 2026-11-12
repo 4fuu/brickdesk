@@ -60,11 +60,12 @@ set(CMAKE_STRIP "${TRIMUI_TOOLCHAIN_ROOT}/bin/aarch64-linux-gnu-strip" CACHE FIL
 # The compiler already carries its own glibc 2.25 sysroot. Do not set
 # CMAKE_SYSROOT: it would hide the toolchain headers. Search target headers and
 # libraries only in the toolchain sysroot, the patched SDL2 sysroot and the SDK.
-set(_trimui_vendor_lib_dir "${BRICKDESK_TARGET_SYSROOT}/vendor-lib")
+set(_trimui_vendor_prefix "${BRICKDESK_TARGET_SYSROOT}/vendor-lib")
+set(_trimui_vendor_lib_dir "${_trimui_vendor_prefix}/lib")
 if(EXISTS "${_trimui_vendor_lib_dir}/libEGL.so")
     set(CMAKE_FIND_ROOT_PATH
         "${TRIMUI_TOOLCHAIN_ROOT}/aarch64-linux-gnu/libc"
-        "${_trimui_vendor_lib_dir}"
+        "${_trimui_vendor_prefix}"
         "${BRICKDESK_TARGET_SYSROOT}"
         "${TRIMUI_SDK_ROOT}/usr"
     )

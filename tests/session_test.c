@@ -461,7 +461,8 @@ static void test_scan_and_assets(void) {
   join_path(g_root, "outside.png", outside, sizeof(outside));
   write_file(outside, "outside");
   unlink(path);
-  symlink(outside, path);
+  check(symlink(outside, path) == 0, "create symlink fixture: %s",
+        strerror(errno));
 
   join_path(root, "beta/manifest.json", path, sizeof(path));
   write_file(path,

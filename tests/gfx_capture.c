@@ -139,6 +139,8 @@ static void render_text(bd_gfx *gfx, const bd_ui_fonts *fonts) {
                    "BrickDesk 书架 · 夜航 No. 03 · 已播放 38%");
   bd_gfx_draw_text(gfx, fonts->latin, 40, 222, INK_2,
                    "The quick brown fox 跳过了懒狗。");
+  bd_gfx_draw_text(gfx, fonts->body, 40, 254, INK_2,
+                   "缺字占位：\xF0\xA0\x80\x80");
 
   section_label(gfx, fonts, 40, 280, "标题 / title");
   bd_gfx_draw_text(gfx, fonts->title, 40, 325, INK, "小镇四季 · 第 3 年夏季");
@@ -157,17 +159,19 @@ static void render_text(bd_gfx *gfx, const bd_ui_fonts *fonts) {
 
   section_label(gfx, fonts, 40, 625, "字号 / sizes");
   bd_gfx_draw_text(gfx, fonts->badge, 40, 660, INK_2,
-                   "BADGE 12 · 元信息 16 · 标题 20 · 衬线 34");
+                   "BADGE 13 · 副标题 18 · 标题 20 · 衬线 34");
   bd_gfx_draw_text(gfx, fonts->body, 40, 692, INK_2,
                    "brickdesk 0.1.0 · TrimUI Brick Pro · 1024×768");
 
-  printf("text: mixed_width=%d ellipsis_width=%d serif_width=%d\n",
+  bd_gfx_end_frame(gfx);
+  bd_gfx_stats stats = bd_gfx_get_stats(gfx);
+  printf("text: mixed_width=%d ellipsis_width=%d serif_width=%d missing=%d\n",
          bd_font_measure_text(fonts->latin,
                               "BrickDesk 书架 · 夜航 No. 03 · 已播放 38%"),
          bd_font_measure_text(fonts->title,
                               "这是一个很长很长的标题，需要在宽度不足时截断并显示省略号"),
-         bd_font_measure_text(fonts->serif, "纸面书架与封面墙"));
-  bd_gfx_end_frame(gfx);
+         bd_font_measure_text(fonts->serif, "纸面书架与封面墙"),
+         stats.missing_glyphs);
 }
 
 static bd_wall *create_wall(bd_gfx *gfx, const bd_ui_fonts *fonts) {
@@ -264,8 +268,9 @@ static void draw_capture_top_bar(bd_gfx *gfx, const bd_ui_fonts *fonts) {
   top.a = 0.72f;
   bd_color bottom = BG;
   bottom.a = 0.14f;
-  bd_gfx_blur_region(gfx, bd_rect_make(0, 0, CAPTURE_WIDTH, 76), 0, top, bottom,
-                     BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bd_rect_make(0, 0, CAPTURE_WIDTH, 76), 0, top,
+                               bottom, BD_GRADIENT_VERTICAL,
+                               BD_BLUR_EDGE_BOTTOM, 20);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, 75, CAPTURE_WIDTH, 1),
                    bd_color_rgba(30, 26, 21, 30));
   bd_gfx_fill_round_rect(gfx, bd_rect_make(32, 29, 14, 14), 4, ACCENT);
@@ -281,8 +286,9 @@ static void draw_capture_hint(bd_gfx *gfx, const bd_ui_fonts *fonts) {
   top.a = 0.62f;
   bd_color bottom = INK;
   bottom.a = 0.82f;
-  bd_gfx_blur_region(gfx, bd_rect_make(x, 700, 640, 56), 16, top, bottom,
-                     BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bd_rect_make(x, 700, 640, 56), 16, top,
+                               bottom, BD_GRADIENT_VERTICAL, BD_BLUR_EDGE_TOP,
+                               12);
   bd_gfx_draw_text(gfx, fonts->body, x + 28, 736,
                    bd_color_rgba(255, 248, 242, 230), "A 打开    B 返回    M 菜单");
 }
@@ -321,8 +327,9 @@ static void render_blur(bd_gfx *gfx, const bd_ui_fonts *fonts) {
   top.a = 0.66f;
   bd_color bottom = BG;
   bottom.a = 0.08f;
-  bd_gfx_blur_region(gfx, bd_rect_make(0, 0, CAPTURE_WIDTH, 118), 0, top, bottom,
-                     BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(gfx, bd_rect_make(0, 0, CAPTURE_WIDTH, 118), 0,
+                               top, bottom, BD_GRADIENT_VERTICAL,
+                               BD_BLUR_EDGE_BOTTOM, 24);
   bd_gfx_draw_text(gfx, fonts->serif, 40, 70, INK, "浮层模糊");
   bd_gfx_draw_text(gfx, fonts->latin, 220, 66, INK_2,
                    "1/4 downsample · 2 × 9-tap Gaussian · gradient overlay");
@@ -331,8 +338,9 @@ static void render_blur(bd_gfx *gfx, const bd_ui_fonts *fonts) {
   hint_top.a = 0.58f;
   bd_color hint_bottom = INK;
   hint_bottom.a = 0.84f;
-  bd_gfx_blur_region(gfx, bd_rect_make((CAPTURE_WIDTH - 640) / 2, 640, 640, 64),
-                     18, hint_top, hint_bottom, BD_GRADIENT_VERTICAL);
+  bd_gfx_blur_region_feathered(
+      gfx, bd_rect_make((CAPTURE_WIDTH - 640) / 2, 640, 640, 64), 18, hint_top,
+      hint_bottom, BD_GRADIENT_VERTICAL, BD_BLUR_EDGE_TOP, 14);
   bd_gfx_draw_text(gfx, fonts->body, (CAPTURE_WIDTH - 640) / 2 + 28, 678,
                    bd_color_rgba(255, 248, 242, 235),
                    "A 打开    B 返回    M 菜单");

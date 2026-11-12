@@ -133,6 +133,8 @@ struct bd_gfx {
   GLint composite_overlay0;
   GLint composite_overlay1;
   GLint composite_axis;
+  GLint composite_feather;
+  GLint composite_feather_edge;
 
   GLuint vbo;
   GLuint ibo;

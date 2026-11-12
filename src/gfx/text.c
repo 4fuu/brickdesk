@@ -271,9 +271,8 @@ static int text_advance(bd_font *font, uint32_t previous_codepoint,
                         bd_font **previous_font, uint32_t codepoint) {
   bd_font *resolved = font_for_codepoint(font, codepoint);
   if (resolved == NULL) {
-    ++font->gfx->stats.missing_glyphs;
     *previous_font = NULL;
-    return font->pixel_size / 2;
+    return font->pixel_size;
   }
   int advance = 0;
   int left_bearing = 0;
@@ -327,7 +326,7 @@ bd_font *bd_font_create(bd_gfx *gfx, const char *path, int pixel_size) {
     return NULL;
   }
   long size = ftell(file);
-  if (size <= 0 || size > 16 * 1024 * 1024) {
+  if (size <= 0 || size > 64 * 1024 * 1024) {
     fclose(file);
     bd_gfx_set_error(gfx, "font file is empty or too large");
     return NULL;
@@ -461,7 +460,11 @@ int bd_gfx_draw_text(bd_gfx *gfx, const bd_font *font, int x, int baseline_y,
     bd_font *resolved = font_for_codepoint(base, codepoint);
     if (resolved == NULL) {
       ++gfx->stats.missing_glyphs;
-      pen_x += base->pixel_size / 2;
+      int box = base->pixel_size;
+      int top = baseline_y - base->ascent;
+      bd_gfx_stroke_round_rect(gfx, bd_rect_make(pen_x, top, box, box), 2, 1,
+                               color);
+      pen_x += box;
       previous = 0;
       previous_font = NULL;
       continue;
@@ -521,7 +524,7 @@ int bd_gfx_draw_text_ellipsized(bd_gfx *gfx, const bd_font *font, int x,
     bd_font *resolved = font_for_codepoint(base, codepoint);
     int advance = 0;
     if (resolved == NULL) {
-      advance = base->pixel_size / 2;
+      advance = base->pixel_size;
       previous = 0;
       previous_font = NULL;
     } else {

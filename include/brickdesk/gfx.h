@@ -55,6 +55,13 @@ typedef enum bd_gradient_axis {
   BD_GRADIENT_HORIZONTAL = 1
 } bd_gradient_axis;
 
+/* Edge of a blur region that fades into the sharp scene. */
+typedef enum bd_blur_edge {
+  BD_BLUR_EDGE_NONE = 0,
+  BD_BLUR_EDGE_TOP = 1,
+  BD_BLUR_EDGE_BOTTOM = 2
+} bd_blur_edge;
+
 typedef enum bd_image_state {
   BD_IMAGE_PENDING = 0,
   BD_IMAGE_READY = 1,
@@ -151,6 +158,15 @@ void bd_gfx_pop_clip(bd_gfx *gfx);
  */
 void bd_gfx_blur_region(bd_gfx *gfx, bd_rect rect, int radius, bd_color overlay_start,
                         bd_color overlay_end, bd_gradient_axis axis);
+/*
+ * Same blur, but alpha feathers to zero over `feather` pixels at the chosen
+ * horizontal edge. This removes the hard seam where a floating bar meets the
+ * sharp content underneath it.
+ */
+void bd_gfx_blur_region_feathered(bd_gfx *gfx, bd_rect rect, int radius,
+                                  bd_color overlay_start, bd_color overlay_end,
+                                  bd_gradient_axis axis, bd_blur_edge edge,
+                                  int feather);
 
 /*
  * Texture creation takes tightly packed RGBA8 pixels with the top row first.

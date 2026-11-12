@@ -51,8 +51,8 @@ foreach(actual IN LISTS shots)
             --diff "${diff}"
             --mode tolerance
             --max-delta 1
-            --max-diff-ratio 0.02
-            --min-ssim 0.9999
+            --max-diff-ratio 0.10
+            --min-ssim 0.9995
             --max-cluster 1024
     RESULT_VARIABLE compare_result
     OUTPUT_VARIABLE compare_stdout

@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "id": "com.brickdesk.hello",
+  "name": "你好插件",
+  "version": "0.1.0",
+  "api": 1,
+  "runtime": "native",
+  "entry": [
+    "bin/hello",
+    "--socket",
+    "{socket}"
+  ],
+  "capabilities": [
+    "tile",
+    "settings"
+  ],
+  "permissions": [],
+  "tile": {
+    "w": 1,
+    "h": 1,
+    "refresh_hz": 15
+  },
+  "limits": {
+    "memory_mb": 32,
+    "nofile": 32,
+    "nice": 10
+  },
+  "settings": [
+    {
+      "key": "show_meta",
+      "type": "bool",
+      "label": "显示副标题",
+      "default": true
+    },
+    {
+      "key": "pace",
+      "type": "int",
+      "label": "节奏",
+      "default": 3
+    },
+    {
+      "key": "mode",
+      "type": "string",
+      "label": "模式",
+      "default": "calm"
+    }
+  ]
+}

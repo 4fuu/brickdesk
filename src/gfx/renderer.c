@@ -1056,6 +1056,31 @@ bd_texture *bd_gfx_texture_create(bd_gfx *gfx, int width, int height,
                                         false, false);
 }
 
+bool bd_gfx_texture_update(bd_gfx *gfx, bd_texture *texture, int width,
+                           int height, const uint8_t *rgba_pixels) {
+  if (gfx == NULL || texture == NULL || texture->id == 0 ||
+      texture->cache_managed || rgba_pixels == NULL || width <= 0 ||
+      height <= 0) {
+    return false;
+  }
+  glBindTexture(GL_TEXTURE_2D, texture->id);
+  if (width == texture->width && height == texture->height) {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA,
+                    GL_UNSIGNED_BYTE, rgba_pixels);
+  } else {
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)GL_RGBA, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, rgba_pixels);
+    texture->width = width;
+    texture->height = height;
+  }
+  GLenum error = glGetError();
+  if (error != GL_NO_ERROR) {
+    bd_gfx_set_error(gfx, "texture update failed");
+    return false;
+  }
+  return true;
+}
+
 void bd_gfx_texture_destroy(bd_gfx *gfx, bd_texture *texture) {
   (void)gfx;
   if (texture == NULL || texture->cache_managed) {

@@ -176,6 +176,9 @@ void bd_gfx_blur_region_feathered(bd_gfx *gfx, bd_rect rect, int radius,
 bd_texture *bd_gfx_texture_create(bd_gfx *gfx, int width, int height,
                                   bd_texture_filter filter,
                                   const uint8_t *rgba_pixels);
+/* Replaces the full contents; reallocates when the size changes. */
+bool bd_gfx_texture_update(bd_gfx *gfx, bd_texture *texture, int width,
+                           int height, const uint8_t *rgba_pixels);
 void bd_gfx_texture_destroy(bd_gfx *gfx, bd_texture *texture);
 void bd_gfx_draw_texture(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
                          bd_color tint);

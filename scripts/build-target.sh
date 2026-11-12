@@ -106,6 +106,14 @@ for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
     fi
 done
 
+# The sample C plugin is packaged with its manifest; the Python sample stays
+# host-only by design.
+if [ -x "$REPO_ROOT/plugins/hello/bin/hello" ] && [ -f "$REPO_ROOT/plugins/hello/plugin.json" ]; then
+    mkdir -p "$BUILD_DIR/dist/plugins/hello/bin"
+    cp -a "$REPO_ROOT/plugins/hello/plugin.json" "$BUILD_DIR/dist/plugins/hello/"
+    cp -a "$REPO_ROOT/plugins/hello/bin/hello" "$BUILD_DIR/dist/plugins/hello/bin/"
+fi
+
 echo "==> checking GLIBC requirements"
 CHECK_TARGETS="$BUILD_DIR/display_probe"
 for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do

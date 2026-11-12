@@ -21,6 +21,9 @@
 __pycache__/
 *.py[cod]
 
+# Built sample plugin binary (CMake writes it next to plugin.json)
+/plugins/hello/bin/
+
 # User configuration written by brickdesk-config
 /config/local.ini
 /config/local.ini.*

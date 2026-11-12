@@ -79,6 +79,7 @@ add_library(brickdesk_core STATIC
   src/gfx/renderer.c
   src/gfx/text.c
   src/platform/host_sdl.c
+  src/plugin/render.c
 )
 target_include_directories(brickdesk_core
   PUBLIC
@@ -93,6 +94,7 @@ target_link_libraries(brickdesk_core
     ${BRICKDESK_SDL2_TARGET}
     $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
     brickdesk_input
+    brickdesk_plugin
   PRIVATE
     ${BRICKDESK_GLES2_LIBRARY}
     bd_stb
@@ -119,10 +121,12 @@ if(BRICKDESK_BACKEND STREQUAL "target")
   set(_bd_config_dir "/mnt/SDCARD/brickdesk/config")
   set(_bd_apps_dir "/mnt/SDCARD/Apps")
   set(_bd_state_dir "/mnt/SDCARD/brickdesk/state")
+  set(_bd_plugin_dir "/mnt/SDCARD/brickdesk/plugins")
 else()
   set(_bd_config_dir "${CMAKE_CURRENT_SOURCE_DIR}/config")
   set(_bd_apps_dir "${CMAKE_CURRENT_SOURCE_DIR}/apps")
   set(_bd_state_dir "/tmp/brickdesk-state")
+  set(_bd_plugin_dir "${CMAKE_CURRENT_SOURCE_DIR}/plugins")
 endif()
 set(BRICKDESK_CONFIG_DIR "${_bd_config_dir}" CACHE PATH
     "Default configuration directory baked into the binaries")
@@ -130,6 +134,8 @@ set(BRICKDESK_APPS_DIR "${_bd_apps_dir}" CACHE PATH
     "Default application directory baked into the session layer")
 set(BRICKDESK_STATE_DIR "${_bd_state_dir}" CACHE PATH
     "Default application state root baked into the session layer")
+set(BRICKDESK_PLUGIN_DIR "${_bd_plugin_dir}" CACHE PATH
+    "Default plugin directory baked into the binaries")
 add_library(brickdesk_config STATIC
   src/config/config.c
   src/config/schema.c
@@ -199,6 +205,28 @@ target_compile_definitions(brickdesk_session PRIVATE
 )
 target_link_libraries(brickdesk_session PRIVATE brickdesk_warnings)
 
+# --- plugins ------------------------------------------------------------
+# Manifest parsing, lifecycle, JSON IPC, client SDK and the shared-memory
+# tile surface. Kept free of SDL/GL so plugin lifecycle tests can run
+# without a display; src/plugin/render.c is compiled into the core library.
+add_library(brickdesk_plugin STATIC
+  src/plugin/client.c
+  src/plugin/host.c
+  src/plugin/ipc.c
+  src/plugin/json.c
+  src/plugin/jsmn_impl.c
+  src/plugin/manifest.c
+  src/plugin/ui_tree.c
+)
+target_include_directories(brickdesk_plugin
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/jsmn"
+)
+target_compile_definitions(brickdesk_plugin
+  PUBLIC BRICKDESK_PLUGIN_DIR="${BRICKDESK_PLUGIN_DIR}"
+)
+target_link_libraries(brickdesk_plugin PRIVATE brickdesk_warnings)
+
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
 target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
@@ -217,6 +245,15 @@ target_link_libraries(brickdesk-demo PRIVATE
   $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
   brickdesk_warnings
 )
+
+# --- sample plugins -----------------------------------------------------
+# Built into plugins/hello/bin so the host default directory works from the
+# repository and staged device trees. hello-py is source-only (host tests).
+add_executable(bd_hello_plugin plugins/hello/main.c)
+target_link_libraries(bd_hello_plugin PRIVATE brickdesk_plugin brickdesk_warnings)
+set_target_properties(bd_hello_plugin PROPERTIES
+  OUTPUT_NAME hello
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/plugins/hello/bin")
 
 # --- input daemon and tools ---------------------------------------------
 add_executable(brickdesk-inputd src/input/inputd.c)

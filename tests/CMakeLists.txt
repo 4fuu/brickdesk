@@ -38,6 +38,24 @@ target_link_libraries(bd_perf_policy_test PRIVATE brickdesk_perf brickdesk_warni
 target_compile_definitions(bd_perf_policy_test PRIVATE
   BRICKDESK_PERF_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
+add_executable(bd_plugin_fixture plugin_fixture.c)
+target_include_directories(bd_plugin_fixture PRIVATE
+  "${PROJECT_SOURCE_DIR}/src/plugin")
+target_link_libraries(bd_plugin_fixture PRIVATE brickdesk_plugin brickdesk_warnings)
+
+add_executable(bd_plugin_capture plugin_capture.c)
+target_link_libraries(bd_plugin_capture PRIVATE brickdesk_core brickdesk_plugin brickdesk_warnings)
+target_compile_definitions(bd_plugin_capture PRIVATE
+  BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins")
+add_dependencies(bd_plugin_capture bd_hello_plugin)
+
+add_executable(bd_plugin_test plugin_test.c)
+target_link_libraries(bd_plugin_test PRIVATE brickdesk_core brickdesk_plugin brickdesk_warnings)
+target_compile_definitions(bd_plugin_test PRIVATE
+  BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>"
+  BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins")
+add_dependencies(bd_plugin_test bd_plugin_fixture bd_hello_plugin)
+
 if(BRICKDESK_BUILD_HARNESS)
   add_executable(bd_harness
     harness/main.c
@@ -59,6 +77,10 @@ add_test(NAME key_names COMMAND bd_key_names_test)
 add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
+add_test(NAME plugin COMMAND bd_plugin_test)
+set_tests_properties(plugin PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 120)
 add_test(NAME config_check
   COMMAND brickdesk-config check --config-dir "${PROJECT_SOURCE_DIR}/config")
 add_test(NAME input_check
@@ -142,6 +164,18 @@ if(BRICKDESK_BUILD_HARNESS)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_imagediff.py"
             --imagediff "${PROJECT_SOURCE_DIR}/tools/imagediff.py")
   set_tests_properties(imagediff_unit PROPERTIES TIMEOUT 120)
+
+  add_test(NAME plugin_capture
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCAPTURE=$<TARGET_FILE:bd_plugin_capture>"
+      "-DOUT_DIR=${BD_ARTIFACT_DIR}/plugin_capture"
+      "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_plugin_capture.cmake")
+  set_tests_properties(plugin_capture PROPERTIES
+    TIMEOUT 120
+    FAIL_REGULAR_EXPRESSION "FAIL")
 
   add_test(NAME gfx_capture
     COMMAND "${CMAKE_COMMAND}"

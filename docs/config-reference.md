@@ -205,6 +205,156 @@ perfd 在应用策略时完成。
 | `online_cores` | int | 未设置 | 2..4 | 覆盖核心数 |
 | `swappiness` | int | 未设置 | 0..100 | 覆盖 swappiness |
 
+### 5.4 预设、继承与解析
+
+随固件提供这些预设（都可在 `perf.ini` 里覆盖或删除）：
+
+| profile | governor | min/max kHz | online_cores | 用途 |
+|---|---|---|---|---|
+| `default` | `schedutil` | 408000 / 1200000 | 4 | 桌面空闲，perfd 的全局 profile |
+| `auto` | `schedutil` | 继承 `default` | 4 | NextUI 风格的自动调频预设 |
+| `balanced` | 继承 `default` | 408000 / 1416000 | 4 | 轻负载应用 |
+| `performance` | `performance` | 816000 / 1800000 | 4 | 游戏/模拟器 |
+| `powersave` | `powersave` | 408000 / 816000 | 2 | 省电 |
+
+`profile`、`app`、`core` 的名字都可以自定义。解析顺序从低到高：
+
+```text
+default（或显式 profile）
+  < [app.<id>] profile
+    < [core.<name>] 的 inherit 链与字段
+```
+
+- `inherit` 形成链，按从基类到子类的顺序覆盖字段。检测循环、超长链和
+  未知 profile：perfd 拒绝本次 apply 并返回错误，不会悄悄应用半个 profile。
+- `[core.<name>]` 没有 `inherit` 时叠加在应用/全局 profile 上；有
+  `inherit` 时以该 profile 链为新的基类，再叠加 core 自己的字段。
+- 未列出的 app id 不是错误，回退到 `default`；显式写了不存在的 profile
+  或 core 名是错误。
+- 频率单位是 kHz。`0` 表示“保持当前值”。请求先 clamp 到
+  `cpuinfo_min_freq..cpuinfo_max_freq`，再向下取
+  `scaling_available_frequencies` 中不超过请求值的最近一档。因此
+  `min_khz` 可能略低于请求值，但不会低于硬件下限。任意阶段
+  `min > max` 都拒绝，且不会写任何文件。
+- `governor` 必须在 `scaling_available_governors` 中。唯一例外是
+  `schedutil`：不可用时按 `ondemand` → `performance` 回退，并在结果里
+  返回 `governor_fallback:true`；其他 governor 不可用直接报错。
+- `online_cores` 只接受 2..4，且不能超过探测到的 CPU 数；cpu0 永远保持
+  在线。降核按 cpu3→cpu2 的顺序写 `online`，升核按低编号到高编号。
+- `swappiness` 可选，范围 0..100。节点不存在时该项标记为 unsupported 并
+  跳过，不会让 CPU 配置整体失败。
+- thermal zone 和 `/sys/class/devfreq/*` 只读展示；M1-07 不写 GPU 频率、
+  thermal trip 或 cooling device。
+
+### 5.5 `brickdesk-perfd`
+
+```sh
+brickdesk-perfd [--config-dir DIR] [--socket PATH] [--sysfs-root DIR]
+                [--profile NAME] [--verbose]
+brickdesk-perfd --dry-run [--profile NAME] [--app ID] [--core NAME] ...
+brickdesk-perfd --status [--config-dir DIR] [--sysfs-root DIR]
+```
+
+- 默认 socket：`$BRICKDESK_PERF_SOCKET`，否则
+  `/run/brickdesk/perfd.sock`；`/run/brickdesk` 不可创建时回退
+  `/tmp/brickdesk-perfd.sock`。`SOCK_STREAM`，权限 0660，带 `.lock`
+  `flock`，第二个实例会拒绝启动（单写者）。
+- `--sysfs-root DIR` 是测试前缀：`/sys/...` 和 `/proc/...` 会拼到
+  `DIR` 后面；默认空前缀表示真实的 `/sys`、`/proc`。
+- `--dry-run` 只探测、解析、打印计划（包括要写的路径和值），然后退出，
+  不创建 socket、不写 sysfs。`--status` 打印当前探测结果，不查询正在
+  运行的 daemon。
+- 启动时记录 governor/min/max/online/swappiness 原值，应用全局 profile；
+  收到 SIGINT/SIGTERM 时按原值恢复。SIGKILL 无法恢复，这是进程被强杀
+  时的已知边界。
+- 静止时阻塞在 `poll()`；超时取最近一条租约的到期时间，没有租约时无限
+  阻塞，不忙等。
+
+#### 5.5.1 协议
+
+Unix socket 上是换行分隔的 JSON，一个对象一行。请求上限 4096 字节，
+回复上限 8192 字节。连接建立后 daemon 先发：
+
+```json
+{"type":"hello","version":1,"pid":123,"socket":"/run/brickdesk/perfd.sock","profile":"default","cpufreq":true}
+```
+
+请求格式（`id` 由客户端选择，回复原样带回）：
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"perf.apply","params":{"session":"7f3c2a","profile":"performance","ttl_ms":10000}}
+```
+
+成功回复：
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"profile":"performance","app":"","core":"","governor":"performance","min_khz":816000,"max_khz":1800000,"online_cores":4,"swappiness":20,"swappiness_supported":true,"governor_fallback":false,"ttl_ms":10000}}
+```
+
+失败回复：
+
+```json
+{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"min_khz 1608000 is greater than max_khz 1200000"}}
+```
+
+方法：
+
+| method | params | 说明 |
+|---|---|---|
+| `perf.apply` | `session`（必填）、`profile`、`app`、`core`、`ttl_ms` | 申请/更新租约并立即应用；`ttl_ms` 省略或 0 表示直到 restore/断开 |
+| `perf.set` | 同上 | 运行中切换，必须已有该 session 的租约，否则 `-32002`；省略 `ttl_ms` 时保留原到期时间 |
+| `perf.restore` | `session` | 删除该 session 的租约；若它是当前生效租约则恢复上一条或全局 profile |
+| `perf.get` | — | 当前生效 profile、租约剩余时间、实际 governor/频率/在线核/swappiness、thermal、devfreq |
+| `perf.list` | — | profile/app/core 名称，以及探测到的 governor/频率/CPU 数 |
+| `perf.capabilities` | — | `cpufreq`、`governor_control`、`frequency_control`、`online_cores`、`swappiness`、`thermal`、`gpu_devfreq`、`cpu_count`、`policy_count` |
+| `perf.ping` | — | `{"pong":true}` |
+
+`perf.get` 的 `result`（`lease` 为 null 表示当前由全局 profile 生效）：
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"profile":"default","app":"","core":"","lease":null,"cpufreq":true,"governor":"schedutil","cur_freq_khz":1200000,"min_khz":408000,"max_khz":1200000,"online_cores":4,"cpu_count":4,"swappiness":20,"thermal":[{"zone":"thermal_zone0","type":"cpu-thermal","temp_mc":42000}],"devfreq":[{"name":"5000000.gpu","cur_freq":660000000,"available_frequencies":[400000000,660000000]}]}}
+```
+
+`perf.restore` 的 `result`：
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"restored":true,"profile":"default"}}
+```
+
+租约语义：
+
+- 新租约的 order 最大，优先于旧租约；同一 session 重复 apply 会更新租约，
+  带 `ttl_ms` 时按新的 ttl 续期。
+- 客户端断开：该连接拥有的租约全部删除；若删掉的是生效租约，重新计算
+  下一条租约或全局 profile 并恢复。
+- `ttl_ms > 0`：`poll` 按最近到期时间醒来，到期后自动恢复。`ttl_ms = 0`
+  不会自动过期，适合由 session 管理进程显式 restore。
+- 多条租约同时存在时，最新的一条生效；它结束后由下一条最新租约接管，
+  没有租约时回到全局 profile。
+- 所有 apply/set/restore/断开/到期都会写日志（含 old→new 值）；`--verbose`
+  额外打印启动/恢复细节，但不会把 profile 持久化到 `/etc`。
+
+写事务顺序：读旧值 → 校验/白名单 → 写 governor → 按升降频方向选择
+先写 max 还是 min（通常先写 max；目标 max 低于当前 min 时先写 min），
+避免中间态出现 `min > max` → 写 online → 写 swappiness → 回读校验。
+任一步失败按已写步骤的逆序恢复旧值；回滚失败会同时报告原始错误和
+rollback 错误。客户端只能传 `session`/`profile`/`app`/`core`/`ttl_ms`，
+不能传 governor、频率值或 sysfs 路径；所有路径都在 daemon 启动时固定。
+
+错误码沿用 JSON-RPC 语义：`-32600` 缺 method，`-32601` 未知 method，
+`-32602` 参数错误，`-32002` 没有租约，`-32000` profile 解析或 sysfs
+写入失败。
+
+与架构草案的差异：M1-07 只管理探测到的第一个 cpufreq policy（A133P
+通常只有 `policy0`，`policy_count` 会在 `perf.capabilities` 中报告）；
+thermal 只读展示、电量未接入，不实现 80 °C 降频或低电量禁
+performance；未知 profile 采用拒绝而不是静默回退 default；日志写
+stderr，未实现 512 KB × 3 文件轮转（交给 supervisor/journal 收集）；
+VM 组只接线 `swappiness`，
+`vfs_cache_pressure`、`dirty_writeback_centisecs`、IO scheduler/read_ahead
+未接线；`perf.ini` 仅在启动时加载，没有 SIGHUP 热重载；这些留给后续
+milestone 或上层策略。
+
 ## 6. `hotkeys.ini`
 
 每个 `[hotkey.<id>]` 是一个绑定。同 id 的 section 按 key 合并：高优先级的
@@ -420,8 +570,8 @@ void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
 - `flock` 并发写锁；
 - 热键冲突/前缀/scope 合并：M1-05 已实现，见 `docs/input.md` 和
   `bd-input --check`；应用级 scope 切换仍待 M1-09；
-- profile 继承链、循环、未知 profile：M1-07；
-- `/usr/share`、`/etc`、应用级 `[app.*]`、环境变量白名单、逐 key 命令行覆盖；
+- profile 继承链、循环、未知 profile：M1-07 已实现，见 5.4/5.5；
+- `/usr/share`、`/etc`、环境变量白名单、逐 key 命令行覆盖；
 - `path`、`frequency` 类型和 `restart_required` 标记；
 - `dump --json`；
 - 主题渲染接线：`[theme]` 值已经可读，`src/gfx/` 的主题系统在后续里程碑消费。
@@ -449,6 +599,12 @@ ctest --test-dir build-host --output-on-failure
 `config` 单测覆盖：覆盖层级（含反向优先级）、坏行行号、范围/枚举/combo、
 accent 预设与自定义十六进制、变化回调、`local.ini` 只写改动、未知 key 保留、
 原子写失败不破坏原文件、0→1 迁移、未来版本只读。
+
+`perf_policy` 单测用 `tests/fixtures/sysfs/` 假 sysfs 和
+`tests/fixtures/perf/perf.ini` 覆盖：inherit 链、循环/未知 profile、
+cpuinfo clamp 与频率下取整、min>max 拒绝、governor 白名单与 schedutil
+回退、online cores/swappiness 写入、写一半失败后的逆序回滚，以及租约
+到期后恢复 default。测试会复制假 sysfs 到 `/tmp`，不修改仓库文件。
 
 `config_check` 直接运行：
 

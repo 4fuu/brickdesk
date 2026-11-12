@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>brickdesk — 视觉稿 v2</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/panels.css">
+<link rel="stylesheet" href="css/settings.css">
+<link rel="stylesheet" href="css/overlays.css">
+</head>
+<body>
+<div id="fit">
+  <div class="stage" id="stage" data-theme="dark">
+    <div class="ambient" aria-hidden="true">
+      <div class="ambient-layer" id="amb0"></div>
+      <div class="ambient-layer" id="amb1"></div>
+    </div>
+    <div class="ambient-veil" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
+
+    <div id="view"></div>
+    <div class="edge edge-right" aria-hidden="true"></div>
+    <div class="edge edge-bottom" aria-hidden="true"></div>
+
+    <div class="scrim" id="scrim"></div>
+    <aside class="panel side" id="side" aria-label="侧边栏"></aside>
+    <aside class="panel quick" id="quick" aria-label="快捷设置"></aside>
+
+    <div class="hint" id="hint" aria-live="polite"></div>
+    <div class="toast" id="toast" aria-live="polite"></div>
+
+    <div class="veil" id="veil"></div>
+    <div class="dialog" id="dialog" role="dialog" aria-modal="true"></div>
+  </div>
+</div>
+
+<div class="pad" id="pad">
+  <button data-k="left">←</button>
+  <button data-k="up">↑</button>
+  <button data-k="down">↓</button>
+  <button data-k="right">→</button>
+  <span class="gap"></span>
+  <button data-k="a">A</button>
+  <button data-k="b">B</button>
+  <button data-k="x">X</button>
+  <button data-k="y">Y</button>
+  <span class="gap"></span>
+  <button data-k="l1">L1</button>
+  <button data-k="r1">R1</button>
+  <span class="gap"></span>
+  <button data-k="menu">Menu</button>
+  <button data-k="select">Select（按住）</button>
+  <button data-k="start">Start</button>
+  <span class="gap"></span>
+  <button data-act="theme">主题</button>
+  <button data-act="side">侧边栏</button>
+  <button data-act="quick">快捷设置</button>
+  <button data-act="settings">设置页</button>
+  <button data-act="hint">提示栏</button>
+</div>
+
+<p class="note">
+  键盘：方向键 = 十字键，<kbd>Z</kbd>/<kbd>Enter</kbd> = A，<kbd>X</kbd>/<kbd>Esc</kbd> = B，<kbd>C</kbd>/<kbd>V</kbd> = X/Y，<kbd>Q</kbd>/<kbd>E</kbd> = L1/R1，<kbd>M</kbd> = Menu，<kbd>S</kbd> = Start，<kbd>T</kbd> = 主题，<kbd>Tab</kbd> = 按住显示提示栏。<br>
+  主页十字键移动焦点，L1/R1 切换分类；Menu 开左栏，Start 开右栏；音乐封面获得焦点时 X 暂停、Y 下一首。
+</p>
+
+<script src="js/icons.js"></script>
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

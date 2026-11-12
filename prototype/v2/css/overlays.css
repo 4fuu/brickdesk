@@ -1,0 +1,104 @@
+/* brickdesk v2 — hold hint bar, toast, dialog */
+
+.hint {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 8;
+  height: 60px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  border-radius: var(--r-lg);
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: 0 16px 34px -24px var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, 10px, 0);
+  transition: opacity var(--t-quick) var(--ease-out), transform var(--t-quick) var(--ease-out);
+  white-space: nowrap;
+}
+.hint.on { opacity: 1; transform: translate3d(-50%, 0, 0); }
+.hint-group { display: flex; align-items: center; gap: 18px; }
+.hint-item { display: flex; align-items: center; gap: 7px; color: var(--bg); font-size: 17px; font-weight: 500; }
+.hint-item .kbd {
+  background: transparent;
+  color: inherit;
+  border-color: color-mix(in srgb, currentColor 34%, transparent);
+}
+.hint-sep { width: 1px; height: 24px; background: currentColor; opacity: .18; }
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  z-index: 9;
+  height: 54px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  border-radius: 14px;
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: 0 16px 32px -24px var(--shadow);
+  font-size: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, -8px, 0);
+  transition: opacity var(--t-quick) var(--ease-out), transform var(--t-quick) var(--ease-out);
+}
+.toast.on { opacity: 1; transform: translate3d(-50%, 0, 0); }
+
+/* ---------- dialog ---------- */
+.veil {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--scrim);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-quick) var(--ease-out);
+}
+.veil.on { opacity: 1; pointer-events: auto; }
+
+.dialog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 11;
+  width: 560px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: 0 30px 60px -36px var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, calc(-50% + 12px), 0);
+  transition: opacity var(--t-quick) var(--ease-out), transform var(--t-quick) var(--ease-out);
+}
+.dialog.on { opacity: 1; pointer-events: auto; transform: translate3d(-50%, -50%, 0); }
+.dialog h3 { font-family: var(--serif); font-size: 30px; font-weight: 500; line-height: 1.25; letter-spacing: .01em; }
+.dialog p { margin-top: 10px; color: var(--ink-2); font-size: 18px; line-height: 1.55; }
+.dialog-actions { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; }
+.btn {
+  min-width: 112px;
+  height: 48px;
+  padding: 0 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--surface-2);
+  font-size: 18px;
+  font-weight: 600;
+}
+.btn.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.btn.f { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.primary.f { outline-color: var(--ink); }

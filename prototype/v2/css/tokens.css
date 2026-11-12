@@ -1,0 +1,97 @@
+/* brickdesk v2 — design tokens
+   1024×768, 3.95 in, 4:3, gamepad only.
+   One warm neutral family per theme; one persimmon accent. */
+
+@font-face {
+  font-family: "BD Sans";
+  src: url("../../fonts/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "BD Sans CJK";
+  src: url("../../fonts/noto-sans-sc-subset.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "BD Serif CJK";
+  src: url("../../fonts/noto-serif-sc-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  --sans: "BD Sans", "BD Sans CJK", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --serif: "BD Serif CJK", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --mono: "SFMono-Regular", "Cascadia Mono", "Noto Sans Mono CJK SC", monospace;
+
+  --r-xs: 6px;
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  --ease-out: cubic-bezier(.2, .7, .2, 1);
+  --ease-std: cubic-bezier(.4, 0, .2, 1);
+  --t-micro: 120ms;
+  --t-quick: 160ms;
+  --t-panel: 200ms;
+  --t-wall: 220ms;
+  --t-ambient: 260ms;
+  --t-page: 280ms;
+
+  --header-h: 76px;
+  --margin: 32px;
+  --tile-gap: 16px;
+  --tile-unit: 180px;
+}
+
+.stage[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #12100d;
+  --bg-deep: #0b0a08;
+  --surface: #1c1915;
+  --surface-2: #25211b;
+  --surface-3: #2f2a22;
+  --ink: #f3ede2;
+  --ink-2: #b9afa0;
+  --ink-3: #918879;
+  --line: rgba(243, 237, 226, .12);
+  --line-strong: rgba(243, 237, 226, .22);
+  --accent: #e07a5f;
+  --accent-strong: #f08d71;
+  --accent-soft: rgba(224, 122, 95, .18);
+  --on-accent: #1a120e;
+  --scrim: rgba(0, 0, 0, .62);
+  --shadow: rgba(0, 0, 0, .5);
+  --ambient-veil: .88;
+  --art-veil: rgba(18, 16, 13, .26);
+  --grain-opacity: .035;
+}
+
+.stage[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f2ede3;
+  --bg-deep: #e7e0d3;
+  --surface: #fbf7ef;
+  --surface-2: #eee7da;
+  --surface-3: #e3dacb;
+  --ink: #1e1a15;
+  --ink-2: #5c554a;
+  --ink-3: #6f675b;
+  --line: rgba(30, 26, 21, .12);
+  --line-strong: rgba(30, 26, 21, .22);
+  --accent: #ae432b;
+  --accent-strong: #963823;
+  --accent-soft: rgba(174, 67, 43, .14);
+  --on-accent: #fff8f2;
+  --scrim: rgba(26, 21, 16, .42);
+  --shadow: rgba(30, 26, 21, .18);
+  --ambient-veil: .9;
+  --art-veil: rgba(242, 237, 227, .12);
+  --grain-opacity: .025;
+}

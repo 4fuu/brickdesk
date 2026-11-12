@@ -20,3 +20,7 @@
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# User configuration written by brickdesk-config
+/config/local.ini
+/config/local.ini.*

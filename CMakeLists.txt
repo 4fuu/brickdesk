@@ -91,9 +91,45 @@ target_compile_definitions(brickdesk_core PRIVATE
   BRICKDESK_BACKEND_NAME="${BRICKDESK_BACKEND}"
 )
 
+# --- configuration ------------------------------------------------------
+add_library(bd_inih STATIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/inih/ini.c")
+target_include_directories(bd_inih PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/inih")
+# The config layer reports file:line for every diagnostic.
+target_compile_definitions(bd_inih PUBLIC INI_HANDLER_LINENO=1)
+if(NOT MSVC)
+  # Vendored code is not ours to keep warning-clean.
+  target_compile_options(bd_inih PRIVATE -w)
+endif()
+
+if(BRICKDESK_BACKEND STREQUAL "target")
+  set(_bd_config_dir "/mnt/SDCARD/brickdesk/config")
+else()
+  set(_bd_config_dir "${CMAKE_CURRENT_SOURCE_DIR}/config")
+endif()
+set(BRICKDESK_CONFIG_DIR "${_bd_config_dir}" CACHE PATH
+    "Default configuration directory baked into the binaries")
+add_library(brickdesk_config STATIC
+  src/config/config.c
+  src/config/schema.c
+)
+target_include_directories(brickdesk_config
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_compile_definitions(brickdesk_config PRIVATE
+  BRICKDESK_BUILTIN_CONFIG_DIR="${BRICKDESK_CONFIG_DIR}"
+)
+target_link_libraries(brickdesk_config
+  PUBLIC bd_inih
+  PRIVATE brickdesk_warnings
+)
+
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
-target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_warnings)
+target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
+
+# --- tools --------------------------------------------------------------
+add_executable(brickdesk-config tools/brickdesk-config.c)
+target_link_libraries(brickdesk-config PRIVATE brickdesk_config brickdesk_warnings)
 
 # --- tests --------------------------------------------------------------
 include(CTest)

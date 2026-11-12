@@ -55,7 +55,8 @@ static void remove_temp_copy(char *directory) {
   }
   char command[PATH_SIZE * 2];
   snprintf(command, sizeof(command), "rm -rf '%s'", directory);
-  (void)system(command);
+  int result = system(command);
+  (void)result;
   free(directory);
 }
 

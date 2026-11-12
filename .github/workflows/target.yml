@@ -82,7 +82,7 @@ jobs:
               test -x build-target/bd-input
               test -f build-target/libbrickdesk-menu.so
               file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input build-target/libbrickdesk-menu.so
-              if readelf -d build-target/libbrickdesk-menu.so | grep -Eq 'NEEDED.*(libSDL2|libEGL|libGLESv2)'; then
+              if readelf -d build-target/libbrickdesk-menu.so | grep -Eq "NEEDED.*(libSDL2|libEGL|libGLESv2)"; then
                 echo "libbrickdesk-menu.so must not link SDL/EGL/GLES directly" >&2
                 exit 1
               fi

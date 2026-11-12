@@ -1,0 +1,95 @@
+set(BD_ARTIFACT_DIR "${CMAKE_BINARY_DIR}/tests/artifacts")
+file(MAKE_DIRECTORY "${BD_ARTIFACT_DIR}")
+
+set(BD_HEADLESS_ENV
+  "SDL_VIDEODRIVER=offscreen"
+  "SDL_AUDIODRIVER=dummy"
+  "BRICKDESK_HEADLESS=1"
+)
+
+add_executable(bd_smoke_render smoke_render.c)
+target_link_libraries(bd_smoke_render PRIVATE brickdesk_core brickdesk_warnings)
+
+add_executable(bd_key_names_test key_names_test.c)
+target_link_libraries(bd_key_names_test PRIVATE brickdesk_core brickdesk_warnings)
+
+if(BRICKDESK_BUILD_HARNESS)
+  add_executable(bd_harness
+    harness/main.c
+    harness/scenario.c
+  )
+  target_include_directories(bd_harness PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/harness"
+    "${PROJECT_SOURCE_DIR}/third_party/jsmn"
+  )
+  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_warnings)
+endif()
+
+if(CMAKE_CROSSCOMPILING)
+  message(STATUS "Cross build: test executables are built but not registered with CTest")
+  return()
+endif()
+
+add_test(NAME key_names COMMAND bd_key_names_test)
+
+add_test(NAME smoke_render
+  COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")
+set_tests_properties(smoke_render PROPERTIES ENVIRONMENT "${BD_HEADLESS_ENV}")
+
+add_test(NAME version COMMAND brickdesk --version)
+set_tests_properties(version PROPERTIES
+  PASS_REGULAR_EXPRESSION "brickdesk [0-9]+[.][0-9]+[.][0-9]+ [(]host[)]")
+
+add_test(NAME idle_loop COMMAND brickdesk --idle-check 500)
+set_tests_properties(idle_loop PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  PASS_REGULAR_EXPRESSION "idle: duration_ms=500 presents=0 ")
+
+if(BRICKDESK_BUILD_HARNESS)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import PIL, numpy"
+    RESULT_VARIABLE BD_PYTHON_IMPORT_RESULT
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+  if(NOT BD_PYTHON_IMPORT_RESULT EQUAL 0)
+    message(WARNING
+      "Python modules Pillow and numpy are missing; install python3-pil and python3-numpy "
+      "to run screenshot and image-diff tests")
+  endif()
+
+  set(BD_BASELINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/baselines/host")
+
+  foreach(scenario_name IN ITEMS boot focus_move)
+    set(scenario_file "${CMAKE_CURRENT_SOURCE_DIR}/scenarios/${scenario_name}.json")
+    add_test(NAME "scenario.${scenario_name}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DHARNESS=$<TARGET_FILE:bd_harness>"
+        "-DSCENARIO=${scenario_file}"
+        "-DOUT_DIR=${BD_ARTIFACT_DIR}/${scenario_name}"
+        "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+        "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+        "-DPYTHON=${Python3_EXECUTABLE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/run_scenario.cmake")
+    set_tests_properties("scenario.${scenario_name}" PROPERTIES
+      TIMEOUT 120
+      FAIL_REGULAR_EXPRESSION "FAIL"
+    )
+  endforeach()
+
+  add_test(NAME determinism_boot
+    COMMAND "${CMAKE_COMMAND}"
+      "-DHARNESS=$<TARGET_FILE:bd_harness>"
+      "-DSCENARIO=${CMAKE_CURRENT_SOURCE_DIR}/scenarios/boot.json"
+      "-DOUT_ROOT=${BD_ARTIFACT_DIR}/determinism_boot"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/check_determinism.cmake")
+  set_tests_properties(determinism_boot PROPERTIES TIMEOUT 120)
+
+  add_test(NAME imagediff_unit
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_imagediff.py"
+            --imagediff "${PROJECT_SOURCE_DIR}/tools/imagediff.py")
+  set_tests_properties(imagediff_unit PROPERTIES TIMEOUT 120)
+endif()

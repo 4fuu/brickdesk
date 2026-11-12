@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: host build and screenshot tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install SDL2, Mesa, Python test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libsdl2-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri \
+            python3 python3-pil python3-numpy
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-host -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBRICKDESK_WERROR=ON
+
+      - name: Build
+        run: cmake --build build-host --parallel
+
+      - name: Test
+        run: ctest --test-dir build-host --output-on-failure
+
+      - name: Upload screenshot artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-test-artifacts
+          path: build-host/tests/artifacts
+          if-no-files-found: ignore
+          retention-days: 14

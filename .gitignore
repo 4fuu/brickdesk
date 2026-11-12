@@ -1,0 +1,22 @@
+# Build trees
+/build/
+/build-*/
+/cmake-build-*/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local tooling / agent state
+/.amp/
+/.cache/
+/compile_commands.json
+
+# Test output that is not checked in
+/tests/artifacts/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

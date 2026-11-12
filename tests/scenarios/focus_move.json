@@ -1,0 +1,22 @@
+{
+  "name": "focus_move",
+  "size": [1024, 768],
+  "fixed_dt_ms": 16,
+  "steps": [
+    { "type": "wait", "frames": 2 },
+    { "type": "screenshot", "name": "focus_start" },
+    { "type": "key", "key": "right", "action": "down" },
+    { "type": "wait", "frames": 2 },
+    { "type": "key", "key": "right", "action": "up" },
+    { "type": "wait", "frames": 1 },
+    { "type": "key", "key": "right", "action": "down" },
+    { "type": "wait", "frames": 2 },
+    { "type": "key", "key": "right", "action": "up" },
+    { "type": "wait", "frames": 1 },
+    { "type": "key", "key": "down", "action": "down" },
+    { "type": "wait", "frames": 2 },
+    { "type": "key", "key": "down", "action": "up" },
+    { "type": "wait", "frames": 10 },
+    { "type": "screenshot", "name": "focus_move" }
+  ]
+}

@@ -16,3 +16,7 @@
 
 # Test output that is not checked in
 /tests/artifacts/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

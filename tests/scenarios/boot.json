@@ -1,0 +1,9 @@
+{
+  "name": "boot",
+  "size": [1024, 768],
+  "fixed_dt_ms": 16,
+  "steps": [
+    { "type": "wait", "frames": 3 },
+    { "type": "screenshot", "name": "boot" }
+  ]
+}

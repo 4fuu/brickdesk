@@ -94,3 +94,9 @@ target_compile_definitions(brickdesk_core PRIVATE
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
 target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_warnings)
+
+# --- tests --------------------------------------------------------------
+include(CTest)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

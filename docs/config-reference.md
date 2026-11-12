@@ -165,6 +165,7 @@ schema_version = 1
 |---|---|---|---|---|
 | `state_quota_mb` | int | `512` | 64..4096 | 每个应用的存档配额 |
 | `quick_resume` | enum | `auto` | `auto`、`always`、`never` | 快速恢复策略 |
+| `max_background` | int | `2` | 1..8 | 同时保留在后台的应用数量上限 |
 
 ## 5. `perf.ini`
 

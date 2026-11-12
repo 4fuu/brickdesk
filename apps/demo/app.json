@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "dev.brickdesk.demo",
+  "name": "Brickdesk Demo",
+  "subtitle": "Session, IPC and last-frame demo",
+  "version": "0.1.0",
+  "type": "app",
+  "category": "app",
+  "exec": ["/mnt/SDCARD/Apps/demo/brickdesk-demo"],
+  "cwd": ".",
+  "env": {},
+  "accent": "#7B5A8C",
+  "art": {
+    "fallbackColor": "#7B5A8C"
+  },
+  "capabilities": {
+    "pause": true,
+    "resume": true,
+    "save_state": true,
+    "load_state": true,
+    "screenshot": true,
+    "background": false,
+    "display_release": true
+  },
+  "hooks": {
+    "pause": { "type": "ipc", "method": "app.pause", "timeout_ms": 500 },
+    "resume": { "type": "ipc", "method": "app.resume", "timeout_ms": 2000 },
+    "save": { "type": "ipc", "method": "state.save", "timeout_ms": 2000 },
+    "load": { "type": "ipc", "method": "state.load", "timeout_ms": 2000 },
+    "quit": { "type": "ipc", "method": "app.quit", "timeout_ms": 1000 },
+    "screenshot": { "type": "ipc", "method": "app.screenshot", "timeout_ms": 500 }
+  },
+  "menu": { "mode": "overlay", "overlay": { "safe": true } },
+  "perf": { "profile": "balanced" },
+  "state": { "path": "state.txt", "format": "text", "max_slots": 1 }
+}

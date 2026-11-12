@@ -70,6 +70,9 @@ endif()
 # --- core library -------------------------------------------------------
 add_library(brickdesk_core STATIC
   src/app/desktop.c
+  src/app/theme.c
+  src/app/ui.c
+  src/app/wall.c
   src/gfx/batch.c
   src/gfx/capture.c
   src/gfx/image.c
@@ -95,8 +98,11 @@ target_link_libraries(brickdesk_core
     bd_stb
     brickdesk_warnings
 )
-target_compile_definitions(brickdesk_core PRIVATE
-  BRICKDESK_BACKEND_NAME="${BRICKDESK_BACKEND}"
+target_compile_definitions(brickdesk_core
+  PUBLIC
+    BRICKDESK_ASSET_DIR="${BRICKDESK_ASSET_DIR}"
+  PRIVATE
+    BRICKDESK_BACKEND_NAME="${BRICKDESK_BACKEND}"
 )
 
 # --- configuration ------------------------------------------------------

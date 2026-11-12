@@ -8,6 +8,7 @@
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
+#include "brickdesk/theme.h"
 #include "brickdesk/version.h"
 
 static void print_usage(FILE *stream) {
@@ -25,15 +26,26 @@ static double process_cpu_ms(void) {
   return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
-static void render_frame(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop) {
+static void render_frame(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
+                         bool verbose) {
   bd_gfx_begin_frame(gfx);
   bd_desktop_draw(desktop, gfx);
   bd_gfx_end_frame(gfx);
-  bd_platform_present(platform);
+  bd_gfx_stats stats = bd_gfx_get_stats(gfx);
+  if (stats.presented) {
+    bd_platform_present(platform);
+  }
+  if (verbose) {
+    printf("frame: damage=%lldpx rects=%d draws=%d verts=%d glyphs=%d missing=%d "
+           "blur=%d full=%d presented=%d\n",
+           (long long)stats.damage_pixels, stats.damage_rects, stats.draw_calls,
+           stats.vertices, stats.glyphs_rasterized, stats.missing_glyphs,
+           stats.blur_passes, stats.full_redraw ? 1 : 0, stats.presented ? 1 : 0);
+  }
 }
 
 static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
-                    int idle_check_ms) {
+                    int idle_check_ms, bool verbose) {
   const bool idle_check = idle_check_ms > 0;
   bool dirty = true;
   bool initial_presented = false;
@@ -43,7 +55,7 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
 
   for (;;) {
     if (dirty) {
-      render_frame(platform, gfx, desktop);
+      render_frame(platform, gfx, desktop, verbose);
       dirty = false;
       if (initial_presented) {
         if (idle_check) {
@@ -65,6 +77,9 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
         break;
       }
       timeout_ms = (int)remaining;
+    } else if (bd_desktop_has_pending_images(desktop)) {
+      /* Decode results are uploaded in begin_frame; poll while work exists. */
+      timeout_ms = 16;
     }
 
     bd_event event;
@@ -74,6 +89,9 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
       return 1;
     }
     if (result == 0) {
+      if (!idle_check && bd_desktop_has_pending_images(desktop)) {
+        dirty = true;
+      }
       continue;
     }
 
@@ -160,6 +178,21 @@ int main(int argc, char **argv) {
             bd_config_diagnostic_count(settings), bd_config_dir(settings));
   }
 
+  const char *theme_mode = bd_config_get_string(settings, "theme.mode", "dark");
+  bool dark = strcmp(theme_mode, "light") != 0;
+  const char *accent_name = bd_config_get_string(settings, "theme.accent", "persimmon");
+  const char *accent_hex = bd_config_accent_hex(accent_name, dark);
+  const char *ambient = bd_config_get_string(settings, "theme.ambient", "baked");
+  bd_desktop_theme theme;
+  theme.dark = dark;
+  theme.ambient_baked = strcmp(ambient, "baked") == 0;
+  if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &theme.accent)) {
+    fprintf(stderr, "brickdesk: config: invalid theme accent '%s'\n", accent_name);
+    bd_config_free(settings);
+    return 1;
+  }
+  printf("theme: mode=%s accent=%s ambient=%s\n", theme_mode, accent_hex, ambient);
+
   bd_platform_config config;
   config.title = "brickdesk";
   config.width = BD_DEFAULT_WIDTH;
@@ -185,7 +218,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  bd_desktop *desktop = bd_desktop_create();
+  long cover_cache_mb = bd_config_get_int(settings, "ui.cover_cache_mb", 16);
+  if (cover_cache_mb < 1) {
+    cover_cache_mb = 1;
+  }
+  bd_gfx_image_cache_set_budget(gfx, (size_t)cover_cache_mb * 1024u * 1024u);
+
+  bd_desktop *desktop = bd_desktop_create(gfx, &theme);
   if (desktop == NULL) {
     fprintf(stderr, "brickdesk: out of memory\n");
     bd_gfx_destroy(gfx);
@@ -194,7 +233,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int result = run_loop(platform, gfx, desktop, idle_check_ms);
+  int result = run_loop(platform, gfx, desktop, idle_check_ms, verbose);
 
   bd_desktop_destroy(desktop);
   bd_gfx_destroy(gfx);

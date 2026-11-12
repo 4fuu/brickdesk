@@ -25,7 +25,7 @@ if(BRICKDESK_BUILD_HARNESS)
     "${CMAKE_CURRENT_SOURCE_DIR}/harness"
     "${PROJECT_SOURCE_DIR}/third_party/jsmn"
   )
-  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_warnings)
+  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
 endif()
 
 if(CMAKE_CROSSCOMPILING)

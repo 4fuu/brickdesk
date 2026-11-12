@@ -7,9 +7,11 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "brickdesk/config.h"
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
+#include "brickdesk/theme.h"
 #include "scenario.h"
 
 #define BD_PATH_MAX 1024
@@ -68,7 +70,17 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
     return 1;
   }
 
-  bd_desktop *desktop = bd_desktop_create();
+  bd_desktop_theme theme;
+  theme.dark = true;
+  theme.ambient_baked = true;
+  const char *accent_hex = bd_config_accent_hex("persimmon", true);
+  if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &theme.accent)) {
+    fprintf(stderr, "harness: cannot resolve theme accent\n");
+    bd_gfx_destroy(gfx);
+    bd_platform_destroy(platform);
+    return 1;
+  }
+  bd_desktop *desktop = bd_desktop_create(gfx, &theme);
   if (desktop == NULL) {
     fprintf(stderr, "harness: out of memory\n");
     bd_gfx_destroy(gfx);
@@ -98,9 +110,19 @@ static int run_scenario(const bd_scenario *scenario, const char *out_dir,
         break;
 
       case BD_STEP_SCREENSHOT: {
-        bd_gfx_begin_frame(gfx);
-        bd_desktop_draw(desktop, gfx);
-        bd_gfx_end_frame(gfx);
+        int quiet = 0;
+        for (int wait = 0; wait < 300 && quiet < 2; ++wait) {
+          bd_gfx_begin_frame(gfx);
+          bd_desktop_draw(desktop, gfx);
+          bd_gfx_end_frame(gfx);
+          if (bd_desktop_has_pending_images(desktop)) {
+            quiet = 0;
+          } else {
+            ++quiet;
+          }
+          bd_event event;
+          bd_platform_wait_event(platform, &event, 5);
+        }
 
         char path[BD_PATH_MAX];
         char filename[80];

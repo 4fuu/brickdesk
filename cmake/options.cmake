@@ -14,3 +14,5 @@ if(NOT BRICKDESK_BACKEND STREQUAL "host" AND NOT BRICKDESK_BACKEND STREQUAL "tar
 endif()
 
 option(BRICKDESK_BUILD_HARNESS "Build the screenshot/input replay harness" ON)
+set(BRICKDESK_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets" CACHE PATH
+    "Directory containing fonts and demo assets at runtime")

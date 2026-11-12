@@ -1,0 +1,67 @@
+# Official TrimUI GCC 7.5 toolchain, SDK and patched SDL2 for the Brick Pro.
+#
+# The image is built and pushed to ghcr.io/4fuu/brickdesk-toolchain by
+# .github/workflows/target.yml. It is intentionally project-independent: any
+# CMake project can use it with cmake/toolchain-aarch64.cmake.
+#
+# All downloaded archives are versioned by URL and verified by SHA256. The
+# values match the 20231018 release used by docs/research/architecture.md.
+FROM ubuntu:20.04
+
+ARG TOOLCHAIN_URL=https://github.com/trimui/toolchain_sdk_smartpro/releases/download/20231018/aarch64-linux-gnu-7.5.0-linaro.tgz
+ARG TOOLCHAIN_SHA=604d97c1f5fadc88d6ebff577ea648d0fbc650411af98a3bd8783dbe4e3ed154
+ARG SDK_URL=https://github.com/trimui/toolchain_sdk_smartpro/releases/download/20231018/SDK_usr_tg5040_a133p.tgz
+ARG SDK_SHA=b6b615d03204e9d9bb1a91c31de0c3402434f6b8fc780743fa88a5f1da6f3c79
+ARG SDL2_URL=https://github.com/trimui/toolchain_sdk_smartpro/releases/download/20231018/SDL2-2.26.1.GE8300.tgz
+ARG SDL2_SHA=a37fbed6c8771f1050e6520fa9c48354e01519de813fe176ae53089f2087bb87
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        file \
+        binutils \
+        make \
+        ninja-build \
+        patch \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/trimui/toolchain /opt/trimui/sdk /opt/trimui/sdl2-src /opt/trimui/sysroot /opt/trimui/dl \
+    && curl -fsSL "$TOOLCHAIN_URL" -o /opt/trimui/dl/toolchain.tgz \
+    && echo "$TOOLCHAIN_SHA  /opt/trimui/dl/toolchain.tgz" | sha256sum -c - \
+    && tar -xzf /opt/trimui/dl/toolchain.tgz -C /opt/trimui/toolchain --strip-components=1 \
+    && curl -fsSL "$SDK_URL" -o /opt/trimui/dl/sdk.tgz \
+    && echo "$SDK_SHA  /opt/trimui/dl/sdk.tgz" | sha256sum -c - \
+    && tar -xzf /opt/trimui/dl/sdk.tgz -C /opt/trimui/sdk \
+    && curl -fsSL "$SDL2_URL" -o /opt/trimui/dl/sdl2.tgz \
+    && echo "$SDL2_SHA  /opt/trimui/dl/sdl2.tgz" | sha256sum -c - \
+    && tar -xzf /opt/trimui/dl/sdl2.tgz -C /opt/trimui/sdl2-src \
+    && rm -f /opt/trimui/dl/*.tgz
+
+ENV TRIMUI_TOOLCHAIN=/opt/trimui/toolchain
+ENV TRIMUI_SDK=/opt/trimui/sdk
+ENV TRIMUI_SYSROOT=/opt/trimui/sysroot
+ENV PATH=/opt/trimui/toolchain/bin:$PATH
+
+# Build the vendor SDL2 from source with patches/sdl2/0001-read-fb-mode.patch and
+# install it into the sysroot used by cmake/toolchain-aarch64.cmake.
+WORKDIR /opt/brickdesk-build
+COPY scripts/build-sdl2.sh scripts/build-sdl2.sh
+COPY scripts/prepare-vendor-libs.sh scripts/prepare-vendor-libs.sh
+COPY ci/check-glibc.sh ci/check-glibc.sh
+COPY patches/sdl2/ patches/sdl2/
+RUN chmod +x scripts/build-sdl2.sh scripts/prepare-vendor-libs.sh ci/check-glibc.sh \
+    && ./scripts/build-sdl2.sh \
+        --prefix /opt/trimui/sysroot \
+        --src /opt/trimui/sdl2-src/SDL2-2.26.1 \
+        --build /opt/trimui/sdl2-build \
+    && rm -rf /opt/trimui/sdl2-build \
+    && rm -rf /opt/brickdesk-build
+
+WORKDIR /src
+
+CMD ["/bin/bash"]

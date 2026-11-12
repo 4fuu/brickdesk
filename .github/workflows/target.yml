@@ -71,6 +71,19 @@ jobs:
             -v "$PWD:/src" -w /src \
             "$IMAGE:$TAG" ./scripts/build-target.sh
 
+      - name: Verify brickdesk target and GLIBC symbols
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/src" -w /src \
+            "$IMAGE:$TAG" sh -c '
+              test -x build-target/brickdesk
+              file build-target/brickdesk
+              ./ci/check-glibc.sh --max 2.23 \
+                build-target/brickdesk \
+                build-target/display_probe \
+                build-target/dist/lib/libSDL2-2.0.so.0
+            '
+
       - name: Verify toolchain file with an unrelated CMake project
         run: |
           docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \

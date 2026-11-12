@@ -68,7 +68,7 @@ fi
 # contains the filtered directory; older or hand-made sysroots get one built in
 # the build tree.
 if [ -e "$SYSROOT/vendor-lib/lib/libEGL.so" ]; then
-    VENDOR_LIBS=$SYSROOT/vendor-lib
+    VENDOR_LIBS=$SYSROOT/vendor-lib/lib
 else
     VENDOR_LIBS=$BUILD_DIR/vendor-libs
     "$REPO_ROOT/scripts/prepare-vendor-libs.sh" "$TRIMUI_SDK" "$VENDOR_LIBS"

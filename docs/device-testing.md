@@ -13,7 +13,7 @@
 | 组件 | 位置 | 已验证 | 待真机确认 |
 |---|---|---|---|
 | 官方工具链 + SDK 镜像 | `ci/Dockerfile.toolchain` | GitHub Actions 构建、GHCR 推送 | — |
-| CMake 工具链文件 | `cmake/toolchain-aarch64.cmake` | 独立 CMake 冒烟工程交叉编译 | 接入 brickdesk 目标（等 M1-A） |
+| CMake 工具链文件 | `cmake/toolchain-aarch64.cmake` | 独立 CMake 冒烟工程 + 真正 `brickdesk` 目标交叉编译 | 设备上运行 `brickdesk` |
 | SDL2 fb0 分辨率 patch | `patches/sdl2/0001-read-fb-mode.patch` | 源码可应用、aarch64 共享库可构建、GLIBC 2.17 | `SDL_GetWindowSize()`/EGL surface 是否 1024×768 |
 | 显示探针 | `tools/display_probe.c` | aarch64 交叉编译、`file`/`readelf` 检查 | fb0/EGL/GL/swap 的真实值 |
 | 部署/运行/日志/截图/性能/恢复/冒烟 | `scripts/device/` | shellcheck + 假 adb 全流程 | 真实 adb、真实 SD 路径、原厂进程 |
@@ -40,16 +40,19 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 产物：
 
 ```text
+build-target/brickdesk
 build-target/display_probe
-build-target/dist/lib/libSDL2-2.0.so.0 -> libSDL2-2.0.so.0.2600.1
+build-target/dist/bin/brickdesk
 build-target/dist/bin/display_probe
+build-target/dist/lib/libSDL2-2.0.so.0 -> libSDL2-2.0.so.0.2600.1
 build-target/glibc-report.txt
 ```
 
 `scripts/build-target.sh` 会优先使用 `/opt/trimui/sysroot` 里预装好的 patched SDL2；
-没有时才调用 `scripts/build-sdl2.sh`。之后如果仓库根出现 `CMakeLists.txt`，它还会用
-`cmake/toolchain-aarch64.cmake` 构建 brickdesk 目标，并把 `brickdesk` 一起放进
-`dist/bin/` 和 glibc 检查。
+没有时才调用 `scripts/build-sdl2.sh`。它随后用 `cmake/toolchain-aarch64.cmake` 和
+`-DBRICKDESK_BACKEND=target` 构建真正的 `brickdesk` 目标（当前 target 后端暂时复用
+`src/platform/host_sdl.c`），把 `brickdesk` 和 `display_probe` 一起放进 `dist/bin/`，
+并对两者和 SDL2 跑 glibc 检查。
 
 ### 2.2 本机直接交叉编译
 
@@ -59,14 +62,15 @@ build-target/glibc-report.txt
 
 ```sh
 scripts/build-sdl2.sh --prefix /opt/trimui/sysroot
-scripts/build-target.sh --skip-cmake
-file build-target/display_probe
-aarch64-linux-gnu-readelf --version-info build-target/display_probe \
+scripts/build-target.sh
+file build-target/brickdesk build-target/display_probe
+aarch64-linux-gnu-readelf --version-info build-target/brickdesk \
   | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1
 ```
 
-预期：`ELF 64-bit LSB executable, ARM aarch64`，最高 `GLIBC_2.17`（上限 2.23）。
-SDL2 共享库也应是 `GLIBC_2.17`。
+预期：`brickdesk` 和 `display_probe` 都是 `ELF 64-bit LSB executable, ARM aarch64`，
+最高 `GLIBC_2.17`（上限 2.23）。SDL2 共享库也应是 `GLIBC_2.17`。
+只构建探针可用 `scripts/build-target.sh --skip-cmake`。
 
 ### 2.3 工具链文件
 
@@ -442,5 +446,5 @@ adb shell 'readelf -d /mnt/SDCARD/Apps/brickdesk/bin/display_probe | grep NEEDED
   `egl_surface_size: 1024x768`、`RESULT: PASS`；SDL2 patch 在源码和构建产物中生效。
 - M1-12：`deploy → run/foreground probe → logs → screenshot → perf → recover`
   在真机跑通；`recover.sh` 能回到原厂 MainUI；所有写操作只在 SD 卡应用目录。
-- M1-11（target 部分）：target workflow 绿、GHCR 镜像可拉取、`display_probe` 和
-  SDL2 产物可下载、`GLIBC <= 2.23`。
+- M1-11（target 部分）：target workflow 绿、GHCR 镜像可拉取、`brickdesk`、
+  `display_probe` 和 SDL2 产物可下载、`GLIBC <= 2.23`。

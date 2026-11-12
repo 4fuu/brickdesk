@@ -44,13 +44,19 @@ foreach(actual IN LISTS shots)
     message(FATAL_ERROR "missing baseline ${expected} (run scripts/update-baselines.sh)")
   endif()
 
+  # Mesa versions differ by rare 1-LSB rounding in SDF/text/blur output.
+  # Keep strict pixel deltas but allow those driver-level differences.
   set(diff "${OUT_DIR}/${stem}.diff.png")
   execute_process(
     COMMAND "${PYTHON}" "${IMAGEDIFF}"
             --expected "${expected}"
             --actual "${actual}"
             --diff "${diff}"
-            --mode exact
+            --mode tolerance
+            --max-delta 1
+            --max-diff-ratio 0.001
+            --min-ssim 0.9999
+            --max-cluster 4
     RESULT_VARIABLE compare_result
     OUTPUT_VARIABLE compare_stdout
     ERROR_VARIABLE compare_stderr

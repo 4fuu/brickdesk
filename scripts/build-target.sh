@@ -100,15 +100,19 @@ rm -rf "$BUILD_DIR/dist"
 mkdir -p "$BUILD_DIR/dist/lib" "$BUILD_DIR/dist/bin"
 cp -a "$SYSROOT/lib/libSDL2-2.0.so.0"* "$BUILD_DIR/dist/lib/"
 cp -a "$BUILD_DIR/display_probe" "$BUILD_DIR/dist/bin/"
-if [ -e "$BUILD_DIR/brickdesk" ]; then
-    cp -a "$BUILD_DIR/brickdesk" "$BUILD_DIR/dist/bin/"
-fi
+for binary in brickdesk brickdesk-inputd bd-input; do
+    if [ -e "$BUILD_DIR/$binary" ]; then
+        cp -a "$BUILD_DIR/$binary" "$BUILD_DIR/dist/bin/"
+    fi
+done
 
 echo "==> checking GLIBC requirements"
 CHECK_TARGETS="$BUILD_DIR/display_probe"
-if [ -e "$BUILD_DIR/brickdesk" ]; then
-    CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/brickdesk"
-fi
+for binary in brickdesk brickdesk-inputd bd-input; do
+    if [ -e "$BUILD_DIR/$binary" ]; then
+        CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/$binary"
+    fi
+done
 # shellcheck disable=SC2086
 "$REPO_ROOT/ci/check-glibc.sh" --max 2.23 $CHECK_TARGETS | tee "$BUILD_DIR/glibc-report.txt"
 "$REPO_ROOT/ci/check-glibc.sh" --max 2.23 "$SYSROOT/lib/libSDL2-2.0.so.0" |

@@ -7,6 +7,7 @@
 #include "brickdesk/config.h"
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
+#include "brickdesk/input.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/theme.h"
 #include "brickdesk/version.h"
@@ -44,14 +45,45 @@ static void render_frame(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop
   }
 }
 
+typedef struct main_input {
+  bd_desktop *desktop;
+  const bd_hotkey_table *hotkeys;
+  bool *dirty;
+  bool verbose;
+} main_input;
+
+static void main_emit(void *user, const bd_input_output *event) {
+  main_input *input = (main_input *)user;
+  if (event->kind == BD_INPUT_OUTPUT_KEY) {
+    if (bd_desktop_handle_key(input->desktop, event->key, event->pressed)) {
+      *input->dirty = true;
+    }
+    return;
+  }
+  if (input->verbose && event->binding >= 0 &&
+      (size_t)event->binding < input->hotkeys->count) {
+    const bd_hotkey *hotkey = &input->hotkeys->items[event->binding];
+    printf("hotkey: %s trigger=%s phase=%s\n", hotkey->action,
+           bd_hotkey_trigger_name((int)event->trigger),
+           event->pressed ? "down" : "up");
+  }
+}
+
 static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
-                    int idle_check_ms, bool verbose) {
+                    bd_input_state *input_state,
+                    const bd_hotkey_table *hotkeys, int idle_check_ms,
+                    bool verbose) {
   const bool idle_check = idle_check_ms > 0;
   bool dirty = true;
   bool initial_presented = false;
   int idle_presents = 0;
   double cpu_start = 0.0;
   uint32_t deadline = 0;
+  main_input input;
+  input.desktop = desktop;
+  input.hotkeys = hotkeys;
+  input.dirty = &dirty;
+  input.verbose = verbose;
 
   for (;;) {
     if (dirty) {
@@ -81,6 +113,15 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
       /* Decode results are uploaded in begin_frame; poll while work exists. */
       timeout_ms = 16;
     }
+    uint64_t hotkey_deadline = 0;
+    if (bd_input_state_next_deadline(input_state, &hotkey_deadline)) {
+      uint64_t now = bd_platform_ticks_ms();
+      uint64_t remaining = hotkey_deadline > now ? hotkey_deadline - now : 0;
+      int hotkey_timeout = remaining > 60000 ? 60000 : (int)remaining;
+      if (timeout_ms < 0 || hotkey_timeout < timeout_ms) {
+        timeout_ms = hotkey_timeout;
+      }
+    }
 
     bd_event event;
     int result = bd_platform_wait_event(platform, &event, timeout_ms);
@@ -92,6 +133,8 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
       if (!idle_check && bd_desktop_has_pending_images(desktop)) {
         dirty = true;
       }
+      bd_input_state_advance(input_state, bd_platform_ticks_ms(), main_emit,
+                             &input);
       continue;
     }
 
@@ -102,14 +145,15 @@ static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
         dirty = true;
         break;
       case BD_EVENT_KEY:
-        if (bd_desktop_handle_key(desktop, event.key, event.pressed)) {
-          dirty = true;
-        }
+        bd_input_state_feed(input_state, event.key, event.pressed,
+                            bd_platform_ticks_ms(), main_emit, &input);
         break;
       case BD_EVENT_NONE:
       default:
         break;
     }
+    bd_input_state_advance(input_state, bd_platform_ticks_ms(), main_emit,
+                           &input);
   }
 
   printf("idle: duration_ms=%d presents=%d cpu_ms=%.3f\n", idle_check_ms,
@@ -233,7 +277,20 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int result = run_loop(platform, gfx, desktop, idle_check_ms, verbose);
+  bd_hotkey_table hotkeys;
+  bd_hotkey_table_load(&hotkeys, settings);
+  if (verbose &&
+      (hotkeys.diagnostic_count > 0 || hotkeys.conflict_count > 0)) {
+    fprintf(stderr, "brickdesk: %zu hotkey diagnostic(s), %zu conflict(s)\n",
+            hotkeys.diagnostic_count, hotkeys.conflict_count);
+  }
+  bd_input_state input_state;
+  bd_input_state_init(&input_state, &hotkeys, "global",
+                      (int)bd_config_get_int(settings, "input.double_tap_ms",
+                                             300));
+
+  int result = run_loop(platform, gfx, desktop, &input_state, &hotkeys,
+                        idle_check_ms, verbose);
 
   bd_desktop_destroy(desktop);
   bd_gfx_destroy(gfx);

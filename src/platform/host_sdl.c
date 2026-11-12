@@ -111,6 +111,17 @@ bd_platform *bd_platform_create(const bd_platform_config *config) {
     return NULL;
   }
 
+  const char *version = gl_string(GL_VERSION);
+  if (version == NULL || strncmp(version, "OpenGL ES", 9) != 0) {
+    fprintf(stderr, "platform: expected a GLES2 context, got '%s'\n",
+            version != NULL ? version : "(unknown)");
+    SDL_GL_DeleteContext(platform->context);
+    SDL_DestroyWindow(platform->window);
+    free(platform);
+    SDL_Quit();
+    return NULL;
+  }
+
   /* Vsync is best-effort: the offscreen driver may not implement it. */
   SDL_GL_SetSwapInterval(1);
 

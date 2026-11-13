@@ -128,6 +128,13 @@ typedef struct bd_plugin_host_config {
   uint32_t accent; /* 0xRRGGBB */
   const char *locale;
   bool verbose;
+  /*
+   * Host-owned state root for persisted plugin settings. NULL or empty uses
+   * BRICKDESK_STATE_DIR from the environment, then the build-time state root.
+   * The host appends "plugin-settings/<plugin-id>/settings.json"; plugin
+   * package directories are never used for state.
+   */
+  const char *state_dir;
 } bd_plugin_host_config;
 
 typedef enum bd_plugin_state {
@@ -243,7 +250,11 @@ const bd_plugin_ui *bd_plugin_ui_settings(const bd_plugin *plugin);
 int bd_plugin_ui_generation(const bd_plugin *plugin);
 
 const char *bd_plugin_get_setting(const bd_plugin *plugin, const char *key);
-/* Updates the value and notifies the plugin with settings.changed. */
+/*
+ * Updates the value and notifies the plugin with settings.changed. The host
+ * persists the value before reporting success; false means the value was
+ * rejected or could not be written.
+ */
 bool bd_plugin_set_setting(bd_plugin *plugin, const char *key,
                            const char *value);
 /* Sends host.event {"type":type, ...extra}. extra_json may be NULL. */

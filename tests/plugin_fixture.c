@@ -276,6 +276,212 @@ static int run_silent(void) {
   return 0;
 }
 
+static void write_result_text(const char *path, const char *text) {
+  if (path == NULL) {
+    return;
+  }
+  FILE *file = fopen(path, "wb");
+  if (file == NULL) {
+    return;
+  }
+  fwrite(text, 1, strlen(text), file);
+  fclose(file);
+}
+
+static bool find_long_field(const char *text, const char *field, long *out) {
+  const char *position = strstr(text, field);
+  if (position == NULL) {
+    return false;
+  }
+  position += strlen(field);
+  return sscanf(position, "%ld", out) == 1;
+}
+
+static bool find_string_field(const char *text, const char *field, char *out,
+                              size_t out_size) {
+  const char *position = strstr(text, field);
+  if (position == NULL) {
+    return false;
+  }
+  position += strlen(field);
+  while (*position == ' ' || *position == '\t') {
+    ++position;
+  }
+  if (*position != '"') {
+    return false;
+  }
+  ++position;
+  size_t used = 0;
+  while (*position != '\0' && *position != '"' && used + 1 < out_size) {
+    if (*position == '\\' && position[1] != '\0') {
+      ++position;
+    }
+    out[used++] = *position++;
+  }
+  out[used] = '\0';
+  return true;
+}
+
+static int send_ready(int fd, const char *hello) {
+  long id = 1;
+  find_long_field(hello, "\"id\":", &id);
+  char reply[128];
+  int written = snprintf(reply, sizeof(reply),
+                         "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{"
+                         "\"pid\":%ld,\"api\":%d}}",
+                         id, (long)getpid(), BD_PLUGIN_API_VERSION);
+  if (written <= 0 || (size_t)written >= sizeof(reply)) {
+    return -1;
+  }
+  return bd_plugin_send_line(fd, reply, (size_t)written) ? 0 : -1;
+}
+
+static int serve_host_message(int fd, const char *line) {
+  if (strstr(line, "\"host.shutdown\"") != NULL) {
+    return 0;
+  }
+  if (strstr(line, "\"host.ping\"") != NULL) {
+    long id = 0;
+    find_long_field(line, "\"id\":", &id);
+    char reply[128];
+    int written = snprintf(reply, sizeof(reply),
+                           "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{"
+                           "\"pong\":true}}",
+                           id);
+    if (written <= 0 || (size_t)written >= sizeof(reply) ||
+        !bd_plugin_send_line(fd, reply, (size_t)written)) {
+      return -1;
+    }
+  }
+  return 1;
+}
+
+static int settings_request(int fd, long id, const char *method,
+                            const char *key, const char *value, char *out,
+                            size_t out_size) {
+  char params[512];
+  int written;
+  if (value != NULL) {
+    written = snprintf(params, sizeof(params),
+                       "{\"key\":\"%s\",\"value\":%s}", key, value);
+  } else {
+    written = snprintf(params, sizeof(params), "{\"key\":\"%s\"}", key);
+  }
+  if (written <= 0 || (size_t)written >= sizeof(params)) {
+    return -1;
+  }
+  char line[1024];
+  written = snprintf(line, sizeof(line),
+                     "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"method\":\"%s\","
+                     "\"params\":%s}",
+                     id, method, params);
+  if (written <= 0 || (size_t)written >= sizeof(line) ||
+      !bd_plugin_send_line(fd, line, (size_t)written)) {
+    return -1;
+  }
+  for (;;) {
+    char reply[BD_PLUGIN_LINE_MAX];
+    if (read_line(fd, reply, sizeof(reply)) < 0) {
+      return -1;
+    }
+    if (strstr(reply, "\"method\"") != NULL) {
+      serve_host_message(fd, reply);
+      continue;
+    }
+    long reply_id = 0;
+    if (!find_long_field(reply, "\"id\":", &reply_id) || reply_id != id) {
+      continue;
+    }
+    if (strstr(reply, "\"error\"") != NULL) {
+      long code = 0;
+      char message[128] = {0};
+      find_long_field(reply, "\"code\":", &code);
+      find_string_field(reply, "\"message\":", message, sizeof(message));
+      snprintf(out, out_size, "error %ld %s", code, message);
+      return 0;
+    }
+    if (value != NULL) {
+      snprintf(out, out_size, "ok");
+      return 0;
+    }
+    const char *value_field = strstr(reply, "\"value\":");
+    if (value_field == NULL) {
+      snprintf(out, out_size, "error missing value");
+      return 0;
+    }
+    value_field += strlen("\"value\":");
+    while (*value_field == ' ' || *value_field == '\t') {
+      ++value_field;
+    }
+    size_t used = 0;
+    if (*value_field == '"') {
+      ++value_field;
+      while (*value_field != '\0' && *value_field != '"' &&
+             used + 1 < out_size) {
+        out[used++] = *value_field++;
+      }
+    } else {
+      while (*value_field != '\0' && *value_field != ',' &&
+             *value_field != '}' && used + 1 < out_size) {
+        out[used++] = *value_field++;
+      }
+    }
+    out[used] = '\0';
+    char normalized[256];
+    snprintf(normalized, sizeof(normalized), "value %s", out);
+    snprintf(out, out_size, "%s", normalized);
+    return 0;
+  }
+}
+
+static int run_settings_mode(void) {
+  int fd = raw_connect();
+  if (fd < 0) {
+    return 1;
+  }
+  char hello[BD_PLUGIN_LINE_MAX];
+  if (read_line(fd, hello, sizeof(hello)) < 0 || send_ready(fd, hello) != 0) {
+    close(fd);
+    return 1;
+  }
+  const char *action = getenv("BD_FIXTURE_SETTINGS_ACTION");
+  const char *key = getenv("BD_FIXTURE_SETTINGS_KEY");
+  const char *value = getenv("BD_FIXTURE_SETTINGS_VALUE");
+  const char *result_path = getenv("BD_FIXTURE_SETTINGS_RESULT");
+  if (action == NULL) {
+    action = "get";
+  }
+  if (key == NULL) {
+    key = "show_meta";
+  }
+  if (value == NULL) {
+    value = "false";
+  }
+  char result[256] = {0};
+  int request = -1;
+  if (strcmp(action, "set") == 0) {
+    request = settings_request(fd, 2, "plugin.settings.set", key, value,
+                               result, sizeof(result));
+  } else if (strcmp(action, "get") == 0) {
+    request = settings_request(fd, 2, "plugin.settings.get", key, NULL,
+                               result, sizeof(result));
+  } else {
+    snprintf(result, sizeof(result), "error unknown action");
+    request = 0;
+  }
+  if (request < 0) {
+    snprintf(result, sizeof(result), "error connection failed");
+  }
+  write_result_text(result_path, result);
+  while (read_line(fd, hello, sizeof(hello)) > 0) {
+    if (serve_host_message(fd, hello) <= 0) {
+      break;
+    }
+  }
+  close(fd);
+  return 0;
+}
+
 static int run_spin(void) {
   int fd = raw_connect();
   if (fd < 0) {
@@ -321,7 +527,9 @@ static int run_spin(void) {
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    fprintf(stderr, "usage: bd_plugin_fixture good|long|silent|crash|badui|spin|alloc\n");
+    fprintf(stderr,
+            "usage: bd_plugin_fixture "
+            "good|long|silent|crash|badui|spin|alloc|settings\n");
     return 2;
   }
   const char *mode = argv[1];
@@ -330,6 +538,9 @@ int main(int argc, char **argv) {
   }
   if (strcmp(mode, "spin") == 0) {
     return run_spin();
+  }
+  if (strcmp(mode, "settings") == 0) {
+    return run_settings_mode();
   }
   return run_client_mode(mode);
 }

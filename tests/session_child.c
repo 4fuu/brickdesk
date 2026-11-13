@@ -286,6 +286,18 @@ int main(int argc, char **argv) {
     _exit(3);
   }
 
+  if (strcmp(g_mode, "exit0") == 0) {
+    return 0;
+  }
+
+  if (strcmp(g_mode, "tick") == 0) {
+    for (;;) {
+      log_line("tick");
+      struct timespec delay = {0, 10 * 1000 * 1000};
+      nanosleep(&delay, NULL);
+    }
+  }
+
   int fd = -1;
   if (strcmp(g_mode, "idle") != 0) {
     fd = connect_session();

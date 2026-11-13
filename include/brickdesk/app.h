@@ -393,6 +393,7 @@ typedef struct bd_session_timeouts {
   int term_ms;    /* SIGTERM -> SIGKILL grace */
   int kill_ms;    /* SIGKILL -> give up grace */
   int display_ms; /* app.display_release/acquire */
+  int freeze_ms;  /* SIGSTOP -> confirm stopped for light sleep */
 } bd_session_timeouts;
 
 /*
@@ -461,6 +462,7 @@ typedef struct bd_session_app_info {
   bd_session_state state;
   bool ipc_connected;
   bool stopped_by_session; /* stopped with SIGSTOP (fast-resume slot) */
+  bool frozen;             /* stopped by bd_session_freeze() for light sleep */
   bool display_released;
   bool background;         /* state == BD_SESSION_BACKGROUND */
   bool exited;
@@ -501,6 +503,36 @@ bd_session_result bd_session_launch(bd_session *session, const bd_app *app,
 bd_session_result bd_session_background(bd_session *session,
                                         const char *app_id);
 bd_session_result bd_session_resume(bd_session *session, const char *app_id);
+
+/*
+ * RAM-only light-sleep freeze of the foreground app.
+ *
+ * bd_session_freeze() sends SIGSTOP to the instance's process group and waits
+ * up to timeouts.freeze_ms for waitpid(WUNTRACED) to report that the managed
+ * leader stopped.  It returns BD_SESSION_OK only after that confirmation; the
+ * instance stays FOREGROUND, with the same app id, pid and perf lease.
+ * Freezing does not emit a STATE/BACKGROUND event, does not change the
+ * background count or limit, and does not run app.pause, state.save or any
+ * other IPC hook.  It preserves RAM only: it is not power-loss protection and
+ * the caller must not treat it as app.pause/save.  Calling it again while
+ * frozen returns BD_SESSION_OK.
+ *
+ * bd_session_thaw() sends SIGCONT only for an instance this session froze.  It
+ * never resumes an instance stopped externally, by the background path or by
+ * another lifecycle action.  Thawing a running foreground instance returns
+ * BD_SESSION_OK without signalling.
+ *
+ * Both calls return BD_SESSION_INVALID_STATE when the app is not a running
+ * foreground instance (including one stopped externally).  freeze() returns
+ * BD_SESSION_BUSY while the app is launching, suspending, resuming or
+ * terminating, and thaw() returns BD_SESSION_BUSY if a hook/state transfer is
+ * pending.  background() and terminate() continue a frozen instance before
+ * their normal hooks; destroy() kills it, and poll() keeps reaping exits while
+ * it is frozen.  A failed freeze resumes the process before returning an
+ * error.
+ */
+bd_session_result bd_session_freeze(bd_session *session, const char *app_id);
+bd_session_result bd_session_thaw(bd_session *session, const char *app_id);
 
 /*
  * Termination order: declared save hook, declared quit hook, SIGTERM after

@@ -328,10 +328,40 @@ Transitions:
 | terminate | `TERMINATING`; SIGCONT if stopped; save hook → quit hook → SIGTERM (`term_ms`) → SIGKILL (`kill_ms`); `TERMINATING → EXITED` |
 | unexpected exit | `EXITED` for code 0, `CRASHED` for non-zero or a signal |
 
+### 7.1 Light-sleep freeze
+
+`bd_session_freeze()` and `bd_session_thaw()` support the RAM-only light-sleep
+path. They are not `app.pause`/`state.save` and do not protect against power
+loss. Freeze sends `SIGSTOP` to the foreground instance's process group and
+waits (bounded by `freeze_ms`) for `waitpid(WUNTRACED)` to report that the
+managed leader stopped. It returns `BD_SESSION_OK` only after that report.
+
+A frozen instance stays `FOREGROUND` with the same id and pid: no `STATE` or
+`BACKGROUND` event is emitted, `background_count` and the background limit are
+unchanged, the perf lease is not touched, and no IPC hook runs. The public
+snapshot reports `frozen = true`.
+
+Thaw sends `SIGCONT` only for the instance this session froze. An instance
+stopped by someone else, or by the background path, is never continued by
+thaw; it returns `BD_SESSION_INVALID_STATE`. Both operations are idempotent:
+freezing a frozen app and thawing a running foreground app return
+`BD_SESSION_OK`.
+
+Freezing while the app is launching, suspending, resuming or terminating
+returns `BD_SESSION_BUSY`; thawing a non-foreground instance returns
+`BD_SESSION_INVALID_STATE`. A hook/state transfer pending during either call
+returns `BD_SESSION_BUSY` and leaves the state unchanged. A state transfer on a
+frozen app also returns `BD_SESSION_BUSY` so it cannot wait on a stopped
+process. `background()` and `terminate()` continue a frozen app before their
+normal hooks; `bd_session_destroy()` kills it; `bd_session_poll()` keeps
+reaping exits while it is frozen. If stop confirmation times out or the child
+exits during freeze, the session sends `SIGCONT` as needed and returns an error
+instead of claiming success.
+
 Default timeouts: hello 2000, pause 300, resume 2000, save 5000, quit 3000,
-SIGTERM grace 1000, SIGKILL grace 1000, display 500 ms. The manifest hook
-`timeout_ms` overrides the matching default; `bd_session_timeouts` overrides
-all defaults for tests or a future daemon.
+SIGTERM grace 1000, SIGKILL grace 1000, display 500, freeze 1000 ms. The
+manifest hook `timeout_ms` overrides the matching default;
+`bd_session_timeouts` overrides all defaults for tests or a future daemon.
 
 Only one foreground app is allowed. Launching while another app is
 foreground/launching/terminating returns `BD_SESSION_BUSY`; background the
@@ -380,9 +410,14 @@ device. For a host run, copy `build-host/brickdesk-demo` next to a copy of
 directly.
 
 `tests/session_child.c` is a smaller protocol peer used to force SIGSTOP,
-crashes, ignored SIGTERM and hook timeouts. The test verifies `/proc/<pid>/stat`
-state `T` while suspended, `R/S` after resume, exit codes/signals, the
-background limit, manifest errors, image fallback and last-frame validation.
+crashes, immediate exit, heartbeat ticks, ignored SIGTERM and hook timeouts.
+The test verifies `/proc/<pid>/stat` state `T` while suspended, `R/S` after
+resume, exit codes/signals, the background limit, manifest errors, image
+fallback and last-frame validation. It also covers light-sleep freeze with a
+real ticking child: execution stops and resumes, foreground identity and the
+background quota stay unchanged at a full quota, polling stays live, duplicate
+freeze/thaw calls are idempotent, pending hooks report busy, an externally
+stopped app is never thawed, and termination works while frozen.
 
 `tests/menu_test.c` covers the menu shim end to end: a real
 `brickdesk-inputd --replay` stream opens the overlay, the menu control socket
@@ -401,6 +436,10 @@ state and pixels after the menu closes. See `docs/menu-shim.md`.
 - If `app.pause` times out, the session SIGSTOPs the process; if the driver does
   not allow another surface, the menu must use a different fallback (save and
   quit) on that device.
+- `bd_session_freeze()` is a RAM-only light-sleep primitive: the foreground
+  app stays in RAM and its process group is SIGSTOPed. It does not call
+  `app.pause`/`state.save`, does not touch the PMIC or any power rail, and does
+  not protect state across a power loss.
 - Command hooks are parsed but not executed in M1.
 - `app.perf.request` from an app is rejected for now; default perf apply/restore
   before launch/after exit is wired through `bd_session_perf_ops`.

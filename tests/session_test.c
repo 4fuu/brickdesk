@@ -116,6 +116,22 @@ static char *read_file(const char *path) {
   return content;
 }
 
+static size_t count_occurrences(const char *path, const char *needle) {
+  char *content = read_file(path);
+  if (content == NULL) {
+    return 0;
+  }
+  size_t count = 0;
+  size_t length = strlen(needle);
+  const char *cursor = content;
+  while ((cursor = strstr(cursor, needle)) != NULL) {
+    ++count;
+    cursor += length;
+  }
+  free(content);
+  return count;
+}
+
 static void on_event(void *user, const bd_session_event *event) {
   event_log *log = (event_log *)user;
   if (log->count >= TEST_EVENTS) {
@@ -1029,6 +1045,391 @@ static void test_perf_calls(void) {
   bd_session_destroy(session);
 }
 
+static void test_session_freeze(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  fake_perf perf;
+  memset(&perf, 0, sizeof(perf));
+  bd_session_perf_ops ops;
+  memset(&ops, 0, sizeof(ops));
+  ops.user = &perf;
+  ops.apply = fake_apply;
+  ops.restore = fake_restore;
+  bd_session *session = create_session("freeze", 1, &log,
+                                       (bd_session_timeouts){0}, ops);
+  check(session != NULL, "freeze session");
+  if (session == NULL) {
+    return;
+  }
+
+  bd_app background_app;
+  bd_app frozen_app;
+  check(make_app("freeze-bg", "dev.freeze.bg", "FreezeBg", g_child_path,
+                 "idle", "", "", NULL, NULL, &background_app),
+        "make freeze background app");
+  check(make_app("freeze-fg", "dev.freeze.fg", "FreezeFg", g_child_path,
+                 "tick", "", "", NULL, NULL, &frozen_app),
+        "make freeze foreground app");
+
+  check(bd_session_launch(session, &background_app, NULL, 0) == BD_SESSION_OK,
+        "freeze launch background app");
+  check(wait_for_state(session, "dev.freeze.bg", BD_SESSION_FOREGROUND, 2000),
+        "freeze background app foreground");
+  check(bd_session_background(session, "dev.freeze.bg") == BD_SESSION_OK,
+        "freeze background app request");
+  check(wait_for_state(session, "dev.freeze.bg", BD_SESSION_BACKGROUND, 2000),
+        "freeze background app state");
+  check(bd_session_background_count(session) == 1 &&
+            bd_session_max_background(session) == 1,
+        "freeze quota was not full (%d/%d)",
+        bd_session_background_count(session),
+        bd_session_max_background(session));
+  bd_session_app_info background_info;
+  check(bd_session_find(session, "dev.freeze.bg", &background_info),
+        "freeze background info");
+  int background_pid = background_info.pid;
+  check(background_pid > 0 && proc_state(background_pid) == 'T',
+        "background app was not stopped");
+
+  check(bd_session_launch(session, &frozen_app, NULL, 0) == BD_SESSION_OK,
+        "freeze launch foreground app");
+  check(wait_for_state(session, "dev.freeze.fg", BD_SESSION_FOREGROUND, 2000),
+        "freeze foreground app state");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.fg", &info), "freeze info");
+  int pid = info.pid;
+  check(pid > 0, "freeze pid %d", pid);
+  check(info.state == BD_SESSION_FOREGROUND && !info.frozen &&
+            !info.background && !info.stopped_by_session,
+        "freeze initial info state=%s frozen=%d background=%d stopped=%d",
+        bd_session_state_name(info.state), info.frozen, info.background,
+        info.stopped_by_session);
+
+  char tick_path[TEST_PATH];
+  snprintf(tick_path, sizeof(tick_path), "%s/apps/freeze-fg/child.log", g_root);
+  int waited = 0;
+  while (count_occurrences(tick_path, "tick") == 0 && waited < 2000) {
+    bd_session_poll(session);
+    sleep_ms(5);
+    waited += 5;
+  }
+  size_t ticks_before = count_occurrences(tick_path, "tick");
+  check(ticks_before > 0, "tick child never ran");
+  int apply_before = perf.apply_count;
+  int restore_before = perf.restore_count;
+  size_t events_before = log.count;
+
+  bd_session_result result = bd_session_freeze(session, "dev.freeze.fg");
+  check(result == BD_SESSION_OK, "freeze returned %s",
+        bd_session_result_name(result));
+  check(bd_session_find(session, "dev.freeze.fg", &info), "frozen info");
+  check(strcmp(info.app_id, "dev.freeze.fg") == 0 &&
+            info.state == BD_SESSION_FOREGROUND && info.frozen &&
+            !info.background && !info.stopped_by_session,
+        "freeze identity/state app=%s state=%s frozen=%d background=%d "
+        "stopped=%d",
+        info.app_id, bd_session_state_name(info.state), info.frozen,
+        info.background, info.stopped_by_session);
+  check(proc_state(pid) == 'T', "frozen child state %c", proc_state(pid));
+  check(bd_session_background_count(session) == 1 &&
+            bd_session_max_background(session) == 1,
+        "freeze changed quota %d/%d", bd_session_background_count(session),
+        bd_session_max_background(session));
+  check(bd_session_running_count(session) == 2,
+        "freeze running count %zu", bd_session_running_count(session));
+  check(perf.apply_count == apply_before &&
+            perf.restore_count == restore_before,
+        "freeze changed perf leases apply=%d restore=%d", perf.apply_count,
+        perf.restore_count);
+
+  size_t ticks_at_stop = count_occurrences(tick_path, "tick");
+  for (int i = 0; i < 20; ++i) {
+    int next = bd_session_poll(session);
+    check(next >= 0, "poll while frozen returned %d", next);
+    sleep_ms(5);
+  }
+  check(count_occurrences(tick_path, "tick") == ticks_at_stop,
+        "child executed while frozen (%zu -> %zu)", ticks_at_stop,
+        count_occurrences(tick_path, "tick"));
+  check(bd_session_find(session, "dev.freeze.fg", &info) && info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "poll changed frozen state");
+  check(log.count == events_before,
+        "freeze/poll emitted %zu event(s)", log.count - events_before);
+
+  check(bd_session_freeze(session, "dev.freeze.fg") == BD_SESSION_OK,
+        "duplicate freeze");
+  sleep_ms(30);
+  check(count_occurrences(tick_path, "tick") == ticks_at_stop,
+        "duplicate freeze resumed execution");
+  check(proc_state(pid) == 'T', "duplicate freeze child state %c",
+        proc_state(pid));
+
+  check(bd_session_thaw(session, "dev.freeze.fg") == BD_SESSION_OK, "thaw");
+  check(bd_session_find(session, "dev.freeze.fg", &info), "thaw info");
+  check(info.state == BD_SESSION_FOREGROUND && !info.frozen &&
+            !info.background,
+        "thaw state=%s frozen=%d background=%d",
+        bd_session_state_name(info.state), info.frozen, info.background);
+  check(wait_proc_not_stopped(pid, 1000), "child stayed stopped after thaw");
+  size_t ticks_after_thaw = ticks_at_stop;
+  waited = 0;
+  while (waited < 2000) {
+    bd_session_poll(session);
+    ticks_after_thaw = count_occurrences(tick_path, "tick");
+    if (ticks_after_thaw > ticks_at_stop) {
+      break;
+    }
+    sleep_ms(5);
+    waited += 5;
+  }
+  check(ticks_after_thaw > ticks_at_stop,
+        "child did not resume ticking (%zu -> %zu)", ticks_at_stop,
+        ticks_after_thaw);
+  check(bd_session_thaw(session, "dev.freeze.fg") == BD_SESSION_OK,
+        "duplicate thaw");
+  check(bd_session_find(session, "dev.freeze.fg", &info) && !info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "duplicate thaw changed state");
+  check(bd_session_background_count(session) == 1 &&
+            bd_session_running_count(session) == 2,
+        "thaw changed quota or foreground");
+  check(proc_state(background_pid) == 'T',
+        "thaw resumed the background app");
+  check(perf.apply_count == apply_before &&
+            perf.restore_count == restore_before,
+        "thaw changed perf leases apply=%d restore=%d", perf.apply_count,
+        perf.restore_count);
+  check(log.count == events_before,
+        "freeze/thaw emitted %zu event(s)", log.count - events_before);
+
+  check(bd_session_freeze(session, "dev.freeze.fg") == BD_SESSION_OK,
+        "freeze before terminate");
+  check(proc_state(pid) == 'T', "terminate target not frozen");
+  check(bd_session_terminate(session, "dev.freeze.fg") == BD_SESSION_OK,
+        "terminate frozen foreground");
+  check(wait_for_state(session, "dev.freeze.fg", BD_SESSION_EXITED, 3000),
+        "frozen app did not exit on terminate");
+  check(bd_session_find(session, "dev.freeze.fg", &info), "terminated info");
+  check(info.exited && !info.frozen && !info.background &&
+            info.term_signal == SIGTERM,
+        "terminated frozen info exited=%d frozen=%d signal=%d", info.exited,
+        info.frozen, info.term_signal);
+  check(perf.restore_count == restore_before + 1,
+        "terminate restore count %d", perf.restore_count);
+  check(bd_session_background_count(session) == 1,
+        "foreground exit changed background quota");
+
+  check(bd_session_freeze(session, "dev.freeze.bg") ==
+            BD_SESSION_INVALID_STATE,
+        "freeze background app accepted");
+  check(bd_session_thaw(session, "dev.freeze.bg") == BD_SESSION_INVALID_STATE,
+        "thaw background app accepted");
+  check(bd_session_freeze(session, "dev.freeze.fg") ==
+            BD_SESSION_INVALID_STATE,
+        "freeze exited app accepted");
+  check(bd_session_thaw(session, "dev.freeze.fg") == BD_SESSION_INVALID_STATE,
+        "thaw exited app accepted");
+  check(bd_session_freeze(session, "dev.missing") == BD_SESSION_NOT_FOUND,
+        "freeze missing app");
+  check(bd_session_thaw(session, "dev.missing") == BD_SESSION_NOT_FOUND,
+        "thaw missing app");
+
+  bd_app_destroy(&background_app);
+  bd_app_destroy(&frozen_app);
+  bd_session_destroy(session);
+}
+
+static void test_session_freeze_busy(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session *session = create_session("freeze-busy", 2, &log,
+                                       (bd_session_timeouts){0},
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "freeze busy session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("freeze-busy", "dev.freeze.busy", "FreezeBusy", g_child_path,
+                 "ipc",
+                 "\"save\":{\"type\":\"ipc\",\"method\":\"state.save\","
+                 "\"timeout_ms\":500}",
+                 "\"save_state\":true", NULL, NULL, &app),
+        "make freeze busy app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "freeze busy launch");
+  check(wait_for_state(session, "dev.freeze.busy", BD_SESSION_FOREGROUND,
+                       3000),
+        "freeze busy foreground");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.busy", &info) &&
+            info.ipc_connected,
+        "freeze busy IPC");
+
+  check(bd_session_save_state(session, "dev.freeze.busy", 0) == BD_SESSION_OK,
+        "freeze busy save request");
+  check(bd_session_freeze(session, "dev.freeze.busy") == BD_SESSION_BUSY,
+        "freeze during pending hook was not busy");
+  check(bd_session_find(session, "dev.freeze.busy", &info) && !info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "busy freeze changed state");
+
+  bool save_ok = false;
+  int waited = 0;
+  while (!find_hook_event(&log, "dev.freeze.busy", "save", NULL) &&
+         waited < 3000) {
+    bd_session_poll(session);
+    sleep_ms(5);
+    waited += 5;
+  }
+  check(find_hook_event(&log, "dev.freeze.busy", "save", &save_ok) && save_ok,
+        "freeze busy save hook");
+
+  check(bd_session_freeze(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "freeze after pending hook");
+  check(bd_session_find(session, "dev.freeze.busy", &info) && info.frozen,
+        "freeze after pending hook not applied");
+  check(proc_state(info.pid) == 'T', "freeze busy child state %c",
+        proc_state(info.pid));
+  check(bd_session_thaw(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "freeze busy thaw");
+  check(bd_session_freeze(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "freeze before background");
+  check(bd_session_background(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "background while frozen");
+  check(wait_for_state(session, "dev.freeze.busy", BD_SESSION_BACKGROUND,
+                       3000),
+        "background while frozen state");
+  check(bd_session_find(session, "dev.freeze.busy", &info) && !info.frozen &&
+            info.background,
+        "background while frozen did not clear freeze");
+  check(wait_proc_state(info.pid, 'T', 1000),
+        "background while frozen did not stop the child");
+  check(bd_session_resume(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "resume after frozen background");
+  check(wait_for_state(session, "dev.freeze.busy", BD_SESSION_FOREGROUND,
+                       3000),
+        "foreground after frozen background");
+  check(bd_session_find(session, "dev.freeze.busy", &info) && !info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "resume after frozen background state");
+  check(bd_session_terminate(session, "dev.freeze.busy") == BD_SESSION_OK,
+        "freeze busy terminate");
+  check(bd_session_freeze(session, "dev.freeze.busy") == BD_SESSION_BUSY,
+        "freeze during termination was not busy");
+  check(wait_for_state(session, "dev.freeze.busy", BD_SESSION_EXITED, 3000),
+        "freeze busy did not exit");
+  check(bd_session_find(session, "dev.freeze.busy", &info) && info.exited &&
+            !info.frozen,
+        "freeze busy final info");
+
+  bd_app_destroy(&app);
+  bd_session_destroy(session);
+}
+
+static void test_session_freeze_external(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session *session = create_session("freeze-ext", 2, &log,
+                                       (bd_session_timeouts){0},
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "freeze external session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("freeze-ext", "dev.freeze.ext", "FreezeExt", g_child_path,
+                 "idle", "", "", NULL, NULL, &app),
+        "make freeze external app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "freeze external launch");
+  check(wait_for_state(session, "dev.freeze.ext", BD_SESSION_FOREGROUND, 2000),
+        "freeze external foreground");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.ext", &info), "freeze external info");
+  int pid = info.pid;
+  check(kill(pid, SIGSTOP) == 0, "external SIGSTOP failed: %s",
+        strerror(errno));
+  int waited = 0;
+  while (waited < 2000) {
+    bd_session_poll(session);
+    bd_session_find(session, "dev.freeze.ext", &info);
+    if (info.stopped_by_session) {
+      break;
+    }
+    sleep_ms(5);
+    waited += 5;
+  }
+  check(info.stopped_by_session, "session did not observe the external stop");
+  check(proc_state(pid) == 'T', "external stop state %c", proc_state(pid));
+  check(bd_session_thaw(session, "dev.freeze.ext") == BD_SESSION_INVALID_STATE,
+        "thaw accepted an externally stopped app");
+  check(proc_state(pid) == 'T', "thaw resumed an externally stopped app");
+  check(bd_session_freeze(session, "dev.freeze.ext") ==
+            BD_SESSION_INVALID_STATE,
+        "freeze claimed an externally stopped app");
+  check(bd_session_terminate(session, "dev.freeze.ext") == BD_SESSION_OK,
+        "terminate external stop");
+  check(wait_for_state(session, "dev.freeze.ext", BD_SESSION_EXITED, 3000),
+        "external stop did not terminate");
+
+  bd_app exit_app;
+  check(make_app("freeze-exit", "dev.freeze.exit", "FreezeExit", g_child_path,
+                 "exit0", "", "", NULL, NULL, &exit_app),
+        "make freeze exit app");
+  check(bd_session_launch(session, &exit_app, NULL, 0) == BD_SESSION_OK,
+        "freeze exit launch");
+  sleep_ms(100);
+  check(bd_session_freeze(session, "dev.freeze.exit") ==
+            BD_SESSION_INVALID_STATE,
+        "freeze accepted an already-exited child");
+  check(bd_session_find(session, "dev.freeze.exit", &info), "freeze exit info");
+  check(info.exited && !info.frozen && info.exit_code == 0,
+        "freeze exit info exited=%d frozen=%d code=%d", info.exited,
+        info.frozen, info.exit_code);
+  check(bd_session_running_count(session) == 0,
+        "exited child is still running");
+
+  bd_app_destroy(&app);
+  bd_app_destroy(&exit_app);
+  bd_session_destroy(session);
+}
+
+static void test_session_freeze_destroy(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session *session = create_session("freeze-destroy", 1, &log,
+                                       (bd_session_timeouts){0},
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "freeze destroy session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("freeze-destroy", "dev.freeze.destroy", "FreezeDestroy",
+                 g_child_path, "idle", "", "", NULL, NULL, &app),
+        "make freeze destroy app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "freeze destroy launch");
+  check(wait_for_state(session, "dev.freeze.destroy", BD_SESSION_FOREGROUND,
+                       2000),
+        "freeze destroy foreground");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.destroy", &info),
+        "freeze destroy info");
+  int pid = info.pid;
+  check(bd_session_freeze(session, "dev.freeze.destroy") == BD_SESSION_OK,
+        "freeze before destroy");
+  check(proc_state(pid) == 'T', "destroy target not frozen");
+  bd_session_destroy(session);
+  errno = 0;
+  int alive = kill(pid, 0);
+  check(alive != 0 && errno == ESRCH,
+        "destroy left frozen pid %d alive=%d errno=%d", pid, alive, errno);
+  bd_app_destroy(&app);
+}
+
 int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr, "usage: %s <demo> <child>\n", argv[0]);
@@ -1058,6 +1459,10 @@ int main(int argc, char **argv) {
   test_background_limit();
   test_terminate_escalation();
   test_perf_calls();
+  test_session_freeze();
+  test_session_freeze_busy();
+  test_session_freeze_external();
+  test_session_freeze_destroy();
 
   if (g_failures != 0) {
     fprintf(stderr, "session_test: %d failure(s), artifacts in %s\n", g_failures,

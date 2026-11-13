@@ -55,6 +55,14 @@ typedef enum session_op {
   OP_LOAD_STATE
 } session_op;
 
+typedef enum session_child_status {
+  SESSION_CHILD_RUNNING = 0,
+  SESSION_CHILD_STOPPED,
+  SESSION_CHILD_EXITED,
+  SESSION_CHILD_TIMEOUT,
+  SESSION_CHILD_UNKNOWN
+} session_child_status;
+
 typedef struct session_instance {
   bd_session *session;
   bd_app app;
@@ -72,6 +80,7 @@ typedef struct session_instance {
   bool hello_received;
   unsigned hello_capabilities;
   bool stopped_by_session;
+  bool frozen_for_sleep;
   bool display_released;
   bool perf_applied;
   bool reaped;
@@ -463,6 +472,15 @@ static void start_sigstop(bd_session *session, session_instance *instance) {
   finish_background(session, instance);
 }
 
+/* Continues a light-sleep-frozen foreground app before a normal transition. */
+static void continue_frozen(session_instance *instance) {
+  if (!instance->frozen_for_sleep) {
+    return;
+  }
+  send_signal(instance, SIGCONT);
+  instance->frozen_for_sleep = false;
+}
+
 static bool begin_request(bd_session *session, session_instance *instance,
                           session_op op, const char *method,
                           const char *params, int timeout,
@@ -572,6 +590,7 @@ static void start_quit(bd_session *session, session_instance *instance) {
 
 static void begin_terminate(bd_session *session, session_instance *instance) {
   set_state(session, instance, BD_SESSION_TERMINATING);
+  continue_frozen(instance);
   if (instance->stopped_by_session) {
     send_signal(instance, SIGCONT);
     instance->stopped_by_session = false;
@@ -597,6 +616,7 @@ static void do_finalize(bd_session *session, session_instance *instance,
   instance->reaped = true;
   instance->exit_code = -1;
   instance->term_signal = 0;
+  instance->frozen_for_sleep = false;
   bool exited_normally = false;
   if (status_valid) {
     if (WIFEXITED(status)) {
@@ -643,27 +663,63 @@ static void force_reap(bd_session *session, session_instance *instance) {
   }
 }
 
+static void sleep_slice(void) {
+  struct timespec delay = {0, 1000000L};
+  nanosleep(&delay, NULL);
+}
+
+static session_child_status poll_child_status(session_instance *instance) {
+  if (instance->reaped || instance->pid <= 0) {
+    return SESSION_CHILD_EXITED;
+  }
+  for (;;) {
+    int status = 0;
+    pid_t result = waitpid(instance->pid, &status, WNOHANG | WUNTRACED);
+    if (result == instance->pid) {
+      if (WIFSTOPPED(status)) {
+        return SESSION_CHILD_STOPPED;
+      }
+      if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        do_finalize(instance->session, instance, status, true);
+        return SESSION_CHILD_EXITED;
+      }
+      continue;
+    }
+    if (result == 0) {
+      return SESSION_CHILD_RUNNING;
+    }
+    if (errno == EINTR) {
+      continue;
+    }
+    if (errno == ECHILD) {
+      do_finalize(instance->session, instance, 0, false);
+      return SESSION_CHILD_EXITED;
+    }
+    return SESSION_CHILD_UNKNOWN;
+  }
+}
+
+static session_child_status wait_child_status(session_instance *instance,
+                                              uint64_t deadline_ms) {
+  for (;;) {
+    session_child_status status = poll_child_status(instance);
+    if (status != SESSION_CHILD_RUNNING) {
+      return status;
+    }
+    if (monotonic_ms() >= deadline_ms) {
+      return SESSION_CHILD_TIMEOUT;
+    }
+    sleep_slice();
+  }
+}
+
 static void check_child(bd_session *session, session_instance *instance) {
+  (void)session;
   if (instance->reaped || instance->pid <= 0) {
     return;
   }
-  int status = 0;
-  pid_t result = waitpid(instance->pid, &status, WNOHANG | WUNTRACED);
-  if (result == 0) {
-    return;
-  }
-  if (result < 0) {
-    if (errno == ECHILD) {
-      do_finalize(session, instance, 0, false);
-    }
-    return;
-  }
-  if (WIFSTOPPED(status)) {
+  if (poll_child_status(instance) == SESSION_CHILD_STOPPED) {
     instance->stopped_by_session = true;
-    return;
-  }
-  if (WIFEXITED(status) || WIFSIGNALED(status)) {
-    do_finalize(session, instance, status, true);
   }
 }
 
@@ -824,6 +880,7 @@ static void fill_info(const session_instance *instance,
   out->state = instance->state;
   out->ipc_connected = instance->ipc_connected;
   out->stopped_by_session = instance->stopped_by_session;
+  out->frozen = instance->frozen_for_sleep;
   out->display_released = instance->display_released;
   out->background = instance->state == BD_SESSION_BACKGROUND;
   out->exited = instance->state == BD_SESSION_EXITED ||
@@ -1345,6 +1402,7 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
   session->timeouts.term_ms = 1000;
   session->timeouts.kill_ms = 1000;
   session->timeouts.display_ms = 500;
+  session->timeouts.freeze_ms = 1000;
   if (config != NULL) {
     if (config->timeouts.hello_ms > 0) {
       session->timeouts.hello_ms = config->timeouts.hello_ms;
@@ -1369,6 +1427,9 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
     }
     if (config->timeouts.display_ms > 0) {
       session->timeouts.display_ms = config->timeouts.display_ms;
+    }
+    if (config->timeouts.freeze_ms > 0) {
+      session->timeouts.freeze_ms = config->timeouts.freeze_ms;
     }
   }
   menu_socket_create(session);
@@ -1589,6 +1650,7 @@ bd_session_result bd_session_background(bd_session *session,
     }
     return BD_SESSION_NEEDS_CONFIRM;
   }
+  continue_frozen(instance);
   set_state(session, instance, BD_SESSION_SUSPENDING);
   start_background(session, instance);
   return BD_SESSION_OK;
@@ -1609,6 +1671,97 @@ bd_session_result bd_session_resume(bd_session *session, const char *app_id) {
     return BD_SESSION_BUSY;
   }
   start_resume(session, instance);
+  return BD_SESSION_OK;
+}
+
+bd_session_result bd_session_freeze(bd_session *session, const char *app_id) {
+  session_instance *instance = find_instance(session, app_id);
+  if (instance == NULL) {
+    return BD_SESSION_NOT_FOUND;
+  }
+  switch (instance->state) {
+    case BD_SESSION_LAUNCHING:
+    case BD_SESSION_SUSPENDING:
+    case BD_SESSION_RESUMING:
+    case BD_SESSION_TERMINATING:
+      return BD_SESSION_BUSY;
+    case BD_SESSION_FOREGROUND:
+      break;
+    default:
+      return BD_SESSION_INVALID_STATE;
+  }
+  if (instance->frozen_for_sleep) {
+    return BD_SESSION_OK;
+  }
+  if (instance->stopped_by_session) {
+    return BD_SESSION_INVALID_STATE;
+  }
+  if (instance->op != OP_NONE || instance->request_id >= 0) {
+    return BD_SESSION_BUSY;
+  }
+
+  session_child_status pending = poll_child_status(instance);
+  if (pending == SESSION_CHILD_STOPPED) {
+    /* Already stopped, but not by this session: never claim that stop. */
+    instance->stopped_by_session = true;
+    return BD_SESSION_INVALID_STATE;
+  }
+  if (pending == SESSION_CHILD_EXITED) {
+    return BD_SESSION_INVALID_STATE;
+  }
+  if (pending == SESSION_CHILD_UNKNOWN) {
+    return BD_SESSION_IO_ERROR;
+  }
+
+  if (!send_signal(instance, SIGSTOP)) {
+    int saved = errno;
+    poll_child_status(instance);
+    return saved == ESRCH ? BD_SESSION_INVALID_STATE : BD_SESSION_IO_ERROR;
+  }
+  uint64_t deadline = monotonic_ms() + (uint64_t)session->timeouts.freeze_ms;
+  session_child_status status = wait_child_status(instance, deadline);
+  if (status == SESSION_CHILD_STOPPED) {
+    instance->frozen_for_sleep = true;
+    return BD_SESSION_OK;
+  }
+
+  /* Failed confirmation: undo our SIGSTOP so the app is never left stopped. */
+  if (!instance->reaped) {
+    send_signal(instance, SIGCONT);
+    if (poll_child_status(instance) == SESSION_CHILD_STOPPED) {
+      send_signal(instance, SIGCONT);
+    }
+  }
+  return status == SESSION_CHILD_EXITED ? BD_SESSION_INVALID_STATE
+                                        : BD_SESSION_IO_ERROR;
+}
+
+bd_session_result bd_session_thaw(bd_session *session, const char *app_id) {
+  session_instance *instance = find_instance(session, app_id);
+  if (instance == NULL) {
+    return BD_SESSION_NOT_FOUND;
+  }
+  if (instance->state != BD_SESSION_FOREGROUND) {
+    instance->frozen_for_sleep = false;
+    return BD_SESSION_INVALID_STATE;
+  }
+  if (!instance->frozen_for_sleep) {
+    return instance->stopped_by_session ? BD_SESSION_INVALID_STATE
+                                        : BD_SESSION_OK;
+  }
+  if (instance->op != OP_NONE || instance->request_id >= 0) {
+    return BD_SESSION_BUSY;
+  }
+  if (!send_signal(instance, SIGCONT)) {
+    int saved = errno;
+    instance->frozen_for_sleep = false;
+    poll_child_status(instance);
+    return saved == ESRCH ? BD_SESSION_INVALID_STATE : BD_SESSION_IO_ERROR;
+  }
+  instance->frozen_for_sleep = false;
+  if (poll_child_status(instance) == SESSION_CHILD_EXITED) {
+    return BD_SESSION_INVALID_STATE;
+  }
   return BD_SESSION_OK;
 }
 
@@ -1644,6 +1797,9 @@ static bd_session_result request_state_transfer(bd_session *session,
     return BD_SESSION_INVALID_STATE;
   }
   if (instance->op != OP_NONE) {
+    return BD_SESSION_BUSY;
+  }
+  if (instance->frozen_for_sleep) {
     return BD_SESSION_BUSY;
   }
   const bd_app_hook_kind kind = save ? BD_APP_HOOK_SAVE : BD_APP_HOOK_LOAD;

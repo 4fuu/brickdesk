@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "brickdesk/config.h"
+#include "brickdesk/battery_history.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/input.h"
 #include "brickdesk/plugin.h"
@@ -152,6 +153,9 @@ void bd_settings_set_perf(bd_settings *settings,
 void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host);
 void bd_settings_set_status(bd_settings *settings,
                             const bd_settings_status *status);
+/* Borrowed read-only series used by the system page's battery chart. */
+void bd_settings_set_battery_history(bd_settings *settings,
+                                     const bd_battery_history *history);
 void bd_settings_set_storage(bd_settings *settings,
                              const bd_settings_storage *storage);
 

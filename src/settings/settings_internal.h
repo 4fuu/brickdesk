@@ -63,6 +63,7 @@ typedef enum bd_settings_row_kind {
   BD_SETTINGS_ROW_INFO,
   BD_SETTINGS_ROW_CONFLICT,
   BD_SETTINGS_ROW_PLUGIN,
+  BD_SETTINGS_ROW_HISTORY,
   BD_SETTINGS_ROW_RESET
 } bd_settings_row_kind;
 
@@ -121,6 +122,7 @@ struct bd_settings {
   bd_settings_system system;
   bd_settings_perf perf_apply;
   bd_plugin_host *host;
+  const bd_battery_history *battery_history;
   bd_settings_status status;
   char clock[16];
   bd_settings_storage storage;

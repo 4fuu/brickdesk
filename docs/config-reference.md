@@ -157,9 +157,12 @@ stub，M4 接入设备后端。
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
-| `sleep_after` | duration | `180s` | 0..24h | 无操作休眠时间；不带单位按秒 |
-| `low_battery_percent` | int | `5` | 0..100 | 低电量阈值 |
-| `shutdown_on_low_battery` | bool | `true` | — | 低于阈值是否关机 |
+| `sleep_after` | duration | `60s` | 0..24h | 无操作进入轻睡前的时间；不带单位按秒；0 禁用自动轻睡 |
+| `deep_sleep_after` | duration | `30s` | 0..24h | 轻睡多久后深睡；0 禁用自动深睡 |
+| `long_press_action` | enum | `shutdown` | `shutdown`/`reboot`/`none` | 电源键按住 1 秒的动作 |
+| `safe_shutdown` | bool | `true` | — | 关机前经 `/dev/i2c-6` 对 AXP2202 软断开，失败回退标准关机 |
+| `low_battery_percent` | int | `5` | 0..100 | 低电量关机阈值 |
+| `shutdown_on_low_battery` | bool | `true` | — | 临界电量倒计时结束后是否自动关机 |
 
 ### 4.7 `[plugins]`
 

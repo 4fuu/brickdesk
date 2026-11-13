@@ -6,10 +6,12 @@
 #include <stdint.h>
 
 #include "brickdesk/app.h"
+#include "brickdesk/battery_history.h"
 #include "brickdesk/config.h"
 #include "brickdesk/device_power.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/home.h"
+#include "brickdesk/notice.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/plugin.h"
 #include "brickdesk/settings.h"
@@ -89,8 +91,25 @@ const bd_app *bd_shell_app_at(const bd_shell *shell, size_t index);
 bd_home *bd_shell_home(bd_shell *shell);
 /* Borrowed settings page and the home->settings entry/exit path. */
 bd_settings *bd_shell_settings(bd_shell *shell);
+/* Borrowed battery series for the settings chart; never NULL after create. */
+const bd_battery_history *bd_shell_battery_history(const bd_shell *shell);
 bool bd_shell_settings_visible(const bd_shell *shell);
 bool bd_shell_open_settings(bd_shell *shell, int category);
+
+/*
+ * Desktop notice and confirmation layer.  Both are safe to call from any
+ * module that already holds the shell; they queue while an app is foreground
+ * and appear when the desktop returns.  timeout_ms 0 uses the defaults.
+ * bd_shell_confirm() is asynchronous: on_done runs on the desktop thread with
+ * confirmed=true only when the user picks 确认; cancellation, a second
+ * confirmation, or shell destruction delivers false.
+ */
+bool bd_shell_notice(bd_shell *shell, bd_notice_level level,
+                     const char *text, uint32_t timeout_ms);
+bool bd_shell_confirm(bd_shell *shell, const char *title, const char *text,
+                      uint32_t timeout_ms, bd_notice_confirm_fn on_done,
+                      void *user);
+bool bd_shell_confirm_open(const bd_shell *shell);
 
 /*
  * Test hooks: the scenario harness feeds timestamped logical keys through the

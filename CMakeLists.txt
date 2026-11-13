@@ -230,6 +230,7 @@ target_link_libraries(bd-power PRIVATE brickdesk_power brickdesk_warnings)
 # PMIC registers or the power state machine; the consumer owns safety actions.
 add_library(brickdesk_battery STATIC
   src/device/battery.c
+  src/device/battery_history.c
   src/device/battery_linux.c
 )
 target_include_directories(brickdesk_battery
@@ -313,6 +314,7 @@ target_link_libraries(brickdesk_home
 # about the other's callers.
 add_library(brickdesk_shell STATIC
   src/app/shell.c
+  src/app/notice.c
   src/app/perf_client.c
 )
 target_include_directories(brickdesk_shell
@@ -371,7 +373,7 @@ target_include_directories(brickdesk_settings
 )
 target_link_libraries(brickdesk_settings
   PUBLIC brickdesk_core brickdesk_config brickdesk_input brickdesk_plugin
-  PRIVATE brickdesk_perf brickdesk_warnings
+  PRIVATE brickdesk_perf brickdesk_battery brickdesk_warnings
 )
 
 target_link_libraries(brickdesk_shell PUBLIC brickdesk_settings)

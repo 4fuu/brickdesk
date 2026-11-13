@@ -282,7 +282,10 @@ typedef struct bd_power_probe {
 typedef struct bd_power_linux {
   char sysfs_root[BD_POWER_PATH_MAX];
   char mem_sleep_mode[32];
+  char i2c_device[64];
   bool allow_state_changes;
+  /* Use the AXP2202 soft-disconnect sequence before the standard poweroff. */
+  bool safe_poweroff;
 } bd_power_linux;
 
 /*
@@ -305,7 +308,15 @@ bool bd_power_linux_probe(const bd_power_linux *linux,
                           bd_power_probe *probe);
 bd_power_backend bd_power_linux_backend(bd_power_linux *linux);
 
-/* Always BD_POWER_BACKEND_UNSUPPORTED; see the blocker text for the reason. */
+/*
+ * Enables the same "safe poweroff" path NextUI uses on tg5040: unmount the SD
+ * card, write the AXP2202 soft-disconnect registers through /dev/i2c-6, then
+ * fall back to the standard Linux poweroff when the PMIC sequence fails.
+ * The default i2c device is /dev/i2c-6; tests can point i2c_device elsewhere.
+ * Returns BD_POWER_BACKEND_UNSUPPORTED when the device cannot be opened or
+ * when state changes are disabled.
+ */
+void bd_power_linux_set_safe_poweroff(bd_power_linux *linux, bool enabled);
 bd_power_backend_status bd_power_linux_pmic_poweroff(bd_power_linux *linux);
 const char *bd_power_linux_pmic_blocker(void);
 

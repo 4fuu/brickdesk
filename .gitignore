@@ -27,3 +27,6 @@ __pycache__/
 # User configuration written by brickdesk-config
 /config/local.ini
 /config/local.ini.*
+
+# runtime battery samples when running a host build against config/
+config/battery-history.csv

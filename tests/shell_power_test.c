@@ -1004,6 +1004,8 @@ static void test_source_switch_and_event_time(const char *child_path) {
   CHECK(runtime_power_state(&runtime) == BD_POWER_STATE_IDLE,
         "queued 1500 ms hold became a sleep");
   CHECK(!runtime_sleeping(&runtime), "queued long hold marked sleeping");
+  CHECK(runtime.backend.shutdown_calls >= 1,
+        "queued 1500 ms hold did not request the long-press action");
 
   /* Exactly 1000 ms remains inside the documented short-tap window. */
   uint64_t boundary_time = real_ms();

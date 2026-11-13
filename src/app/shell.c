@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
 
 #include "brickdesk/shell.h"
 
@@ -19,6 +20,8 @@
 
 #include "brickdesk/device_av.h"
 #include "brickdesk/device_battery.h"
+#include "brickdesk/battery_history.h"
+#include "brickdesk/notice.h"
 #include "brickdesk/perf_client.h"
 #include "brickdesk/sysinfo.h"
 #include "brickdesk/theme.h"
@@ -62,8 +65,17 @@ typedef enum shell_pending_kind {
 typedef enum shell_power_request {
   SHELL_POWER_REQUEST_NONE = 0,
   SHELL_POWER_REQUEST_SLEEP,
-  SHELL_POWER_REQUEST_WAKE
+  SHELL_POWER_REQUEST_DEEP_SLEEP,
+  SHELL_POWER_REQUEST_WAKE,
+  SHELL_POWER_REQUEST_POWEROFF,
+  SHELL_POWER_REQUEST_REBOOT
 } shell_power_request;
+
+typedef enum shell_power_long_action {
+  SHELL_POWER_LONG_SHUTDOWN = 0,
+  SHELL_POWER_LONG_REBOOT,
+  SHELL_POWER_LONG_NONE
+} shell_power_long_action;
 
 typedef struct shell_pending {
   shell_pending_kind kind;
@@ -88,6 +100,7 @@ struct bd_shell {
   bool verbose;
 
   bd_settings *settings_page;
+  bd_notice *notice;
   bd_settings_system system;
   bd_av_brightness av_brightness;
   bool av_brightness_ready;
@@ -101,7 +114,14 @@ struct bd_shell {
   bd_battery_policy battery_policy;
   bool battery_policy_ready;
   bool battery_opened;
+  bool battery_charging;
+  int battery_stage; /* 0 normal, 1 reminder, 2 critical */
   uint64_t battery_next_ms;
+  bd_battery_history *battery_history;
+  char battery_history_path[BD_SHELL_PATH_MAX];
+  bool shutdown_on_low_battery;
+  uint64_t low_battery_shutdown_ms;
+  bool low_battery_shutdown_armed;
 
   bd_app_list *apps;
   shell_app_runtime *runtime;
@@ -123,8 +143,16 @@ struct bd_shell {
   bd_power *power;
   shell_power_request power_request;
   bool power_key_down;
+  bool power_long_fired;
+  bool power_press_ignored;
+  shell_power_long_action power_long_action;
+  uint32_t power_sleep_after_ms;
+  uint32_t power_deep_sleep_after_ms;
   uint64_t power_down_ms;
   uint64_t power_ignore_until_ms;
+  uint64_t last_activity_ms;
+  uint64_t light_sleep_since_ms;
+  bool recovery_notified;
   bool power_input_suspended;
   bool power_swallow;
   bool power_brightness_known;
@@ -514,10 +542,38 @@ static void shell_config_changed(void *user, const char *key) {
     shell_home_quick_refresh(shell);
   } else if (strcmp(key, "session.max_background") == 0) {
     shell_publish_status(shell, true);
+  } else if (strcmp(key, "power.sleep_after") == 0 ||
+             strcmp(key, "power.deep_sleep_after") == 0) {
+    long sleep_after =
+        bd_config_get_int(shell->settings, "power.sleep_after", 60000);
+    if (sleep_after < 0 || sleep_after > 86400000) {
+      sleep_after = 60000;
+    }
+    long deep_sleep_after =
+        bd_config_get_int(shell->settings, "power.deep_sleep_after", 30000);
+    if (deep_sleep_after < 0 || deep_sleep_after > 86400000) {
+      deep_sleep_after = 30000;
+    }
+    shell->power_sleep_after_ms = (uint32_t)sleep_after;
+    shell->power_deep_sleep_after_ms = (uint32_t)deep_sleep_after;
+  } else if (strcmp(key, "power.long_press_action") == 0) {
+    const char *action = bd_config_get_string(
+        shell->settings, "power.long_press_action", "shutdown");
+    if (action != NULL && strcmp(action, "reboot") == 0) {
+      shell->power_long_action = SHELL_POWER_LONG_REBOOT;
+    } else if (action != NULL && strcmp(action, "none") == 0) {
+      shell->power_long_action = SHELL_POWER_LONG_NONE;
+    } else {
+      shell->power_long_action = SHELL_POWER_LONG_SHUTDOWN;
+    }
+  } else if (strcmp(key, "power.safe_shutdown") == 0) {
+    bd_power_linux_set_safe_poweroff(
+        &shell->power_linux,
+        bd_config_get_bool(shell->settings, "power.safe_shutdown", true));
   }
 }
 
-static void shell_battery_policy_config(int low_percent,
+static void shell_battery_policy_config(int low_percent, bool recommend_shutdown,
                                         bd_battery_policy_config *config) {
   bd_battery_policy_config_default(config);
   int critical = low_percent;
@@ -543,8 +599,7 @@ static void shell_battery_policy_config(int low_percent,
   if (critical + config->critical_hysteresis_percent > 100) {
     config->critical_hysteresis_percent = 100 - critical;
   }
-  /* This round only displays capacity; shutdown/PMIC is a separate task. */
-  config->recommend_shutdown = false;
+  config->recommend_shutdown = recommend_shutdown;
 }
 
 static void shell_battery_sample(bd_shell *shell, uint64_t now) {
@@ -572,8 +627,31 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
     shell->battery_opened = false;
   }
   int percent = -1;
+  bool charging = false;
   if (read == BD_BATTERY_OK && status.capacity_known) {
     percent = status.capacity_percent;
+  }
+  if (read == BD_BATTERY_OK) {
+    if (status.external_power_known) {
+      charging = status.external_power;
+    } else if (status.status_known &&
+               (status.status == BD_BATTERY_CHARGE_CHARGING ||
+                status.status == BD_BATTERY_CHARGE_FULL)) {
+      charging = true;
+    }
+  }
+  shell->battery_charging = charging;
+  if (percent >= 0 && shell->battery_history != NULL &&
+      getenv("BRICKDESK_HEADLESS") == NULL) {
+    /* Headless tests use the repository config dir; never write samples there. */
+    size_t before = bd_battery_history_count(shell->battery_history);
+    bd_battery_history_record(shell->battery_history, (int64_t)time(NULL),
+                              percent, charging);
+    if (bd_battery_history_count(shell->battery_history) > before &&
+        shell->battery_history_path[0] != '\0') {
+      bd_battery_history_save(shell->battery_history,
+                              shell->battery_history_path);
+    }
   }
   if (percent != shell->status_battery) {
     shell->status_battery = percent;
@@ -591,6 +669,41 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
       shell->battery_policy_ready = false;
     } else {
       shell->battery_next_ms = output.next_sample_ms;
+      if (output.events & BD_BATTERY_EVENT_CRITICAL) {
+        if (shell->battery_stage < 2) {
+          shell->battery_stage = 2;
+          bd_shell_notice(shell, BD_NOTICE_ERROR, "电量极低，请立即连接充电器",
+                          0);
+        }
+        if (shell->shutdown_on_low_battery && !charging &&
+            !shell->low_battery_shutdown_armed) {
+          shell->low_battery_shutdown_armed = true;
+          shell->low_battery_shutdown_ms = now + 30000u;
+          bd_shell_notice(shell, BD_NOTICE_WARNING,
+                          "电量极低，30 秒后自动关机", 6000);
+        }
+      } else if (output.events & BD_BATTERY_EVENT_LOW) {
+        if (shell->battery_stage < 1) {
+          shell->battery_stage = 1;
+          bd_shell_notice(shell, BD_NOTICE_WARNING, "电量低，请充电", 0);
+        }
+      }
+      if (output.events & BD_BATTERY_EVENT_RECOVERED) {
+        shell->battery_stage = 0;
+        shell->low_battery_shutdown_armed = false;
+      }
+      if (output.events & BD_BATTERY_EVENT_PLUGGED) {
+        shell->low_battery_shutdown_armed = false;
+      }
+      if (output.recommendation == BD_BATTERY_RECOMMEND_PREPARE_SHUTDOWN) {
+        if (shell->shutdown_on_low_battery && !charging &&
+            !shell->low_battery_shutdown_armed) {
+          shell->low_battery_shutdown_armed = true;
+          shell->low_battery_shutdown_ms = now + 30000u;
+          bd_shell_notice(shell, BD_NOTICE_WARNING,
+                          "电量极低，30 秒后自动关机", 6000);
+        }
+      }
     }
   }
   if (!shell->battery_policy_ready || shell->battery_next_ms == 0) {
@@ -733,6 +846,10 @@ static void shell_refresh_running(bd_shell *shell);
 static void shell_service(bd_shell *shell);
 static void shell_close_settings(bd_shell *shell);
 static void shell_power_service(bd_shell *shell);
+static void shell_power_check_hold(bd_shell *shell);
+static void shell_auto_sleep_check(bd_shell *shell, uint64_t now);
+static void shell_battery_deadline_check(bd_shell *shell, uint64_t now);
+static void shell_mark_activity(bd_shell *shell);
 static bool shell_power_asleep(const bd_shell *shell);
 static void shell_power_cancel_gesture(bd_shell *shell);
 
@@ -1611,10 +1728,16 @@ static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
   bool asleep = shell_power_asleep(shell);
   inputd_service(shell, monotonic_ms());
+  shell_battery_deadline_check(shell, now);
+  shell_auto_sleep_check(shell, now);
   if (!asleep) {
     shell_update_home(shell, now);
     shell_refresh_status(shell, false);
     shell_battery_sample(shell, now);
+    if (shell->notice != NULL && shell->visible &&
+        bd_notice_update(shell->notice, now)) {
+      shell->dirty = true;
+    }
     if (shell->settings_page != NULL &&
         bd_settings_is_open(shell->settings_page)) {
       bd_settings_update(shell->settings_page, now);
@@ -1931,11 +2054,36 @@ static bool shell_power_capture_foreground(bd_shell *shell) {
 
 static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {
   char error[256] = {0};
-  if (!bd_power_linux_init(&shell->power_linux, NULL, false, NULL, error,
+  long sleep_after =
+      bd_config_get_int(shell->settings, "power.sleep_after", 60000);
+  if (sleep_after < 0 || sleep_after > 86400000) {
+    sleep_after = 60000;
+  }
+  long deep_sleep_after =
+      bd_config_get_int(shell->settings, "power.deep_sleep_after", 30000);
+  if (deep_sleep_after < 0 || deep_sleep_after > 86400000) {
+    deep_sleep_after = 30000;
+  }
+  shell->power_sleep_after_ms = (uint32_t)sleep_after;
+  shell->power_deep_sleep_after_ms = (uint32_t)deep_sleep_after;
+  const char *long_action =
+      bd_config_get_string(shell->settings, "power.long_press_action",
+                           "shutdown");
+  if (long_action != NULL && strcmp(long_action, "reboot") == 0) {
+    shell->power_long_action = SHELL_POWER_LONG_REBOOT;
+  } else if (long_action != NULL && strcmp(long_action, "none") == 0) {
+    shell->power_long_action = SHELL_POWER_LONG_NONE;
+  } else {
+    shell->power_long_action = SHELL_POWER_LONG_SHUTDOWN;
+  }
+  bool safe_shutdown =
+      bd_config_get_bool(shell->settings, "power.safe_shutdown", true);
+  if (!bd_power_linux_init(&shell->power_linux, NULL, true, NULL, error,
                            sizeof(error))) {
     fprintf(stderr, "brickdesk: power backend: %s\n", error);
     return false;
   }
+  bd_power_linux_set_safe_poweroff(&shell->power_linux, safe_shutdown);
   bd_power_backend backend = bd_power_linux_backend(&shell->power_linux);
   if (config->power_backend != NULL) {
     backend = *config->power_backend;
@@ -1951,19 +2099,15 @@ static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {
   power_config.hooks.input_acquire = shell_power_input_acquire;
   power_config.backend = backend;
   power_config.allow_light_sleep = true;
-  /*
-   * Deep sleep, shutdown and reboot stay disabled in this slice.  The Linux
-   * backend is also permanently initialized with allow_state_changes=false;
-   * there is no configuration or test path that arms it.
-   */
-  power_config.allow_deep_sleep = false;
-  power_config.allow_poweroff = false;
-  power_config.allow_reboot = false;
+  power_config.allow_deep_sleep = true;
+  power_config.allow_poweroff = true;
+  power_config.allow_reboot = true;
   shell->power = bd_power_create(&power_config, error, sizeof(error));
   if (shell->power == NULL) {
     fprintf(stderr, "brickdesk: power state machine: %s\n", error);
     return false;
   }
+  shell->last_activity_ms = shell_now(shell);
   return true;
 }
 
@@ -1987,9 +2131,118 @@ static void shell_power_log(const bd_shell *shell, const char *action,
   fputc('\n', stderr);
 }
 
+static void shell_battery_deadline_check(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || !shell->low_battery_shutdown_armed) {
+    return;
+  }
+  if (shell->battery_charging) {
+    shell->low_battery_shutdown_armed = false;
+    return;
+  }
+  if (now < shell->low_battery_shutdown_ms ||
+      shell->power_request != SHELL_POWER_REQUEST_NONE) {
+    return;
+  }
+  shell->low_battery_shutdown_armed = false;
+  shell->power_request = SHELL_POWER_REQUEST_POWEROFF;
+}
+
+static void shell_auto_sleep_check(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || shell->power == NULL) {
+    return;
+  }
+  bd_power_state state = bd_power_current_state(shell->power);
+  if (state == BD_POWER_STATE_IDLE) {
+    if (shell->power_sleep_after_ms == 0 ||
+        shell->power_request != SHELL_POWER_REQUEST_NONE) {
+      return;
+    }
+    if (now >= shell->last_activity_ms + shell->power_sleep_after_ms) {
+      shell->power_request = SHELL_POWER_REQUEST_SLEEP;
+    }
+    return;
+  }
+  if (state != BD_POWER_STATE_LIGHT_SLEEP ||
+      shell->power_deep_sleep_after_ms == 0 ||
+      shell->power_request != SHELL_POWER_REQUEST_NONE) {
+    return;
+  }
+  if (shell->light_sleep_since_ms == 0) {
+    shell->light_sleep_since_ms = now;
+  }
+  if (shell->battery_charging) {
+    /* NextUI re-checks charging once a minute instead of deep sleeping. */
+    if (now >= shell->light_sleep_since_ms + shell->power_deep_sleep_after_ms) {
+      shell->light_sleep_since_ms = now;
+    }
+    return;
+  }
+  if (now >= shell->light_sleep_since_ms + shell->power_deep_sleep_after_ms) {
+    shell->power_request = SHELL_POWER_REQUEST_DEEP_SLEEP;
+  }
+}
+
+static void shell_mark_activity(bd_shell *shell) {
+  if (shell != NULL) {
+    shell->last_activity_ms = shell_now(shell);
+  }
+}
+
+static void shell_end_all_sessions(bd_shell *shell) {
+  if (shell == NULL || shell->session == NULL) {
+    return;
+  }
+  size_t count = bd_session_running_count(shell->session);
+  for (size_t i = 0; i < count; ++i) {
+    bd_session_app_info info;
+    if (!bd_session_running_at(shell->session, i, &info) ||
+        !session_running_state(info.state)) {
+      continue;
+    }
+    bd_session_result result =
+        bd_session_terminate(shell->session, info.app_id);
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: shutdown end %s -> %s\n", info.app_id,
+              bd_session_result_name(result));
+    }
+  }
+}
+
+static void shell_execute_shutdown(bd_shell *shell, bool reboot) {
+  if (shell == NULL || shell->power == NULL) {
+    return;
+  }
+  shell_end_all_sessions(shell);
+  sync();
+  bd_power_report report;
+  memset(&report, 0, sizeof(report));
+  bd_power_result result =
+      reboot ? bd_power_reboot(shell->power, &report)
+             : bd_power_poweroff(shell->power, BD_POWER_POWEROFF_STANDARD,
+                                 &report);
+  shell_power_log(shell, reboot ? "reboot" : "poweroff", result, &report);
+  if (result != BD_POWER_OK && result != BD_POWER_NO_EFFECT &&
+      result != BD_POWER_DISABLED && result != BD_POWER_UNSUPPORTED) {
+    bd_shell_notice(shell, BD_NOTICE_ERROR,
+                    reboot ? "重启失败，请检查电源后端"
+                           : "关机失败，请检查电源后端",
+                    0);
+  } else if (result == BD_POWER_DISABLED || result == BD_POWER_UNSUPPORTED) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING,
+                    "电源后端不可用，操作已取消", 0);
+  }
+  /* A backend that returned left the machine alive; restore the desktop. */
+  shell->power_brightness_known = false;
+  shell->power_input_suspended = false;
+  shell->dirty = true;
+}
+
 static void shell_power_service(bd_shell *shell) {
-  if (shell == NULL || shell->power == NULL ||
-      shell->power_request == SHELL_POWER_REQUEST_NONE) {
+  if (shell == NULL || shell->power == NULL) {
+    return;
+  }
+  shell_power_check_hold(shell);
+  if (shell->power_request == SHELL_POWER_REQUEST_NONE) {
     return;
   }
   shell_power_request request = shell->power_request;
@@ -2005,8 +2258,10 @@ static void shell_power_service(bd_shell *shell) {
     shell_power_log(shell, "wake", result, &report);
     if (bd_power_current_state(shell->power) == BD_POWER_STATE_IDLE) {
       shell->power_input_suspended = false;
+      shell->recovery_notified = false;
       shell->power_ignore_until_ms =
           monotonic_ms() + BD_SHELL_POWER_WAKE_IGNORE_MS;
+      shell->last_activity_ms = shell_now(shell);
       shell_power_leave_ui(shell);
     } else {
       /*
@@ -2018,7 +2273,45 @@ static void shell_power_service(bd_shell *shell) {
         bd_home_set_surface_visible(shell->home, false);
       }
       shell->dirty = false;
+      if (!shell->recovery_notified) {
+        shell->recovery_notified = true;
+        bd_shell_notice(shell, BD_NOTICE_WARNING,
+                        "唤醒恢复失败，请再按一次电源键重试", 0);
+      }
     }
+    return;
+  }
+
+  if (request == SHELL_POWER_REQUEST_POWEROFF ||
+      request == SHELL_POWER_REQUEST_REBOOT) {
+    shell_execute_shutdown(shell, request == SHELL_POWER_REQUEST_REBOOT);
+    return;
+  }
+
+  if (request == SHELL_POWER_REQUEST_DEEP_SLEEP) {
+    if (bd_power_current_state(shell->power) != BD_POWER_STATE_LIGHT_SLEEP) {
+      return;
+    }
+    bd_power_result result = bd_power_sleep_deep(shell->power, &report);
+    shell_power_log(shell, "deep sleep", result, &report);
+    shell->light_sleep_since_ms = shell_now(shell);
+    if (result == BD_POWER_OK) {
+      return;
+    }
+    if (bd_power_current_state(shell->power) == BD_POWER_STATE_DEGRADED) {
+      shell->power_input_suspended = true;
+      if (!shell->recovery_notified) {
+        shell->recovery_notified = true;
+        bd_shell_notice(shell, BD_NOTICE_WARNING,
+                        "深睡恢复失败，请按电源键重试", 0);
+      }
+      return;
+    }
+    /*
+     * NextUI powers the device off when deep sleep is unsupported or keeps
+     * failing, rather than leaving it awake in light sleep forever.
+     */
+    shell_execute_shutdown(shell, false);
     return;
   }
 
@@ -2032,6 +2325,7 @@ static void shell_power_service(bd_shell *shell) {
   shell_power_log(shell, "light sleep", result, &report);
   if (shell_power_asleep(shell)) {
     shell->power_input_suspended = true;
+    shell->light_sleep_since_ms = shell_now(shell);
     shell_power_enter_ui(shell);
   } else {
     /* Recovery completed and the machine is IDLE again. */
@@ -2237,6 +2531,41 @@ static void shell_accept(bd_shell *shell) {
   }
 }
 
+static void shell_power_fire_long_action(bd_shell *shell) {
+  if (shell == NULL || shell->power == NULL || shell_power_asleep(shell)) {
+    return;
+  }
+  switch (shell->power_long_action) {
+    case SHELL_POWER_LONG_REBOOT:
+      if (shell->power_request == SHELL_POWER_REQUEST_NONE) {
+        shell->power_request = SHELL_POWER_REQUEST_REBOOT;
+      }
+      break;
+    case SHELL_POWER_LONG_SHUTDOWN:
+      if (shell->power_request == SHELL_POWER_REQUEST_NONE) {
+        shell->power_request = SHELL_POWER_REQUEST_POWEROFF;
+      }
+      break;
+    case SHELL_POWER_LONG_NONE:
+    default:
+      break;
+  }
+}
+
+static void shell_power_check_hold(bd_shell *shell) {
+  if (shell == NULL || shell->power == NULL || !shell->power_key_down ||
+      shell->power_long_fired || shell_power_asleep(shell)) {
+    return;
+  }
+  uint64_t now = shell_now(shell);
+  if (now < shell->power_down_ms + BD_SHELL_POWER_TAP_MS) {
+    return;
+  }
+  shell->power_long_fired = true;
+  shell->power_down_ms = 0;
+  shell_power_fire_long_action(shell);
+}
+
 static void shell_power_key_event(bd_shell *shell, bool pressed,
                                   uint64_t time_ms) {
   if (shell->power == NULL || shell->power_swallow) {
@@ -2246,12 +2575,24 @@ static void shell_power_key_event(bd_shell *shell, bool pressed,
     if (shell->power_key_down) {
       return;
     }
-    shell->power_key_down = true;
-    shell->power_down_ms = time_ms;
     if (shell_power_asleep(shell)) {
       /* Wake on the press so the release cannot re-enter sleep. */
       shell->power_request = SHELL_POWER_REQUEST_WAKE;
+      return;
     }
+    if (monotonic_ms() < shell->power_ignore_until_ms) {
+      /* The press that woke the device can still be held; swallow this one. */
+      shell->power_press_ignored = true;
+      return;
+    }
+    shell->power_press_ignored = false;
+    shell->power_key_down = true;
+    shell->power_long_fired = false;
+    shell->power_down_ms = time_ms;
+    return;
+  }
+  if (shell->power_press_ignored) {
+    shell->power_press_ignored = false;
     return;
   }
   if (!shell->power_key_down) {
@@ -2270,12 +2611,15 @@ static void shell_power_key_event(bd_shell *shell, bool pressed,
                       ? time_ms - shell->power_down_ms
                       : 0;
   shell->power_down_ms = 0;
+  if (shell->power_long_fired) {
+    shell->power_long_fired = false;
+    return;
+  }
   if (held > BD_SHELL_POWER_TAP_MS) {
-    /* Long-press shutdown is a separate task; this slice ignores it. */
-    if (shell->verbose) {
-      fprintf(stderr, "brickdesk: power long press ignored (%llu ms)\n",
-              (unsigned long long)held);
-    }
+    /* The poll normally fires at the threshold; a late release still acts. */
+    shell->power_long_fired = true;
+    shell_power_fire_long_action(shell);
+    shell->power_long_fired = false;
     return;
   }
   if (shell->power_request == SHELL_POWER_REQUEST_NONE) {
@@ -2285,6 +2629,9 @@ static void shell_power_key_event(bd_shell *shell, bool pressed,
 
 static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
                                uint64_t time_ms) {
+  if (pressed) {
+    shell_mark_activity(shell);
+  }
   if (key == BD_KEY_POWER) {
     /* POWER must work while an app owns the display and while asleep. */
     shell_power_key_event(shell, pressed, time_ms);
@@ -2295,6 +2642,29 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
     return;
   }
   if (!shell->visible) {
+    return;
+  }
+  if (shell->notice != NULL && bd_notice_confirm_open(shell->notice)) {
+    if (!pressed) {
+      return;
+    }
+    switch (key) {
+      case BD_KEY_A:
+        bd_notice_input(shell->notice, BD_NOTICE_ACTION_ACCEPT);
+        break;
+      case BD_KEY_B:
+        bd_notice_input(shell->notice, BD_NOTICE_ACTION_CANCEL);
+        break;
+      case BD_KEY_LEFT:
+        bd_notice_input(shell->notice, BD_NOTICE_ACTION_LEFT);
+        break;
+      case BD_KEY_RIGHT:
+        bd_notice_input(shell->notice, BD_NOTICE_ACTION_RIGHT);
+        break;
+      default:
+        break;
+    }
+    shell->dirty = true;
     return;
   }
   if (shell->settings_page != NULL &&
@@ -2373,6 +2743,9 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
                                   bool pressed) {
   if (action == NULL) {
     return;
+  }
+  if (pressed) {
+    shell_mark_activity(shell);
   }
   if (shell->power_swallow || shell->power_input_suspended ||
       shell_power_asleep(shell)) {
@@ -2833,6 +3206,9 @@ bool bd_shell_render(bd_shell *shell) {
     bd_home_update(shell->home, shell_now(shell));
     bd_home_draw(shell->home, shell->gfx);
   }
+  if (shell->notice != NULL) {
+    bd_notice_draw(shell->notice, shell->gfx, shell_now(shell));
+  }
   bd_gfx_end_frame(shell->gfx);
   bd_gfx_stats stats = bd_gfx_get_stats(shell->gfx);
   if (stats.presented) {
@@ -2870,6 +3246,16 @@ static void shell_handle_platform_event(bd_shell *shell, const bd_event *event) 
 static int shell_poll_timeout(bd_shell *shell) {
   int best = -1;
   bool asleep = shell_power_asleep(shell);
+  if (shell->power_request != SHELL_POWER_REQUEST_NONE) {
+    /* A queued sleep/wake/shutdown must run on the next loop turn. */
+    return 0;
+  }
+  if (shell->power_key_down && !shell->power_long_fired && !asleep) {
+    uint64_t now = shell_now(shell);
+    uint64_t deadline = shell->power_down_ms + BD_SHELL_POWER_TAP_MS;
+    uint64_t remaining = deadline > now ? deadline - now : 0;
+    best = merge_timeout(best, (int)remaining);
+  }
   best = merge_timeout(best, shell->session_next_ms);
   if (shell->plugins != NULL) {
     best = merge_timeout(best, bd_plugin_host_next_timeout(shell->plugins));
@@ -2910,6 +3296,21 @@ static int shell_poll_timeout(bd_shell *shell) {
     uint64_t now = shell_now(shell);
     uint64_t remaining = shell->battery_next_ms > now
                              ? shell->battery_next_ms - now
+                             : 0;
+    best = merge_timeout(best, (int)remaining);
+  }
+  if (shell->notice != NULL) {
+    uint64_t deadline = bd_notice_next_deadline(shell->notice);
+    if (deadline != 0) {
+      uint64_t now = shell_now(shell);
+      uint64_t remaining = deadline > now ? deadline - now : 0;
+      best = merge_timeout(best, (int)remaining);
+    }
+  }
+  if (shell->low_battery_shutdown_armed) {
+    uint64_t now = shell_now(shell);
+    uint64_t remaining = shell->low_battery_shutdown_ms > now
+                             ? shell->low_battery_shutdown_ms - now
                              : 0;
     best = merge_timeout(best, (int)remaining);
   }
@@ -3195,6 +3596,10 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   if (config->attach_plugin_tile) {
     shell_find_plugin_tile(shell, config->gfx);
   }
+  shell->notice = bd_notice_create(config->gfx);
+  if (shell->notice == NULL) {
+    fprintf(stderr, "brickdesk: notice layer unavailable\n");
+  }
 
   shell_open_devices(shell, config);
   shell->power_input_suspended = false;
@@ -3236,7 +3641,11 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   if (low_battery < 0 || low_battery > 100) {
     low_battery = 5;
   }
-  shell_battery_policy_config((int)low_battery, &battery_config);
+  shell->shutdown_on_low_battery = bd_config_get_bool(
+      config->settings, "power.shutdown_on_low_battery", true);
+  shell_battery_policy_config((int)low_battery,
+                              shell->shutdown_on_low_battery,
+                              &battery_config);
   bd_battery_error battery_error;
   bd_battery_policy_output battery_output;
   bd_battery_policy_result battery_result = bd_battery_policy_init(
@@ -3247,6 +3656,25 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
       shell->battery_policy_ready ? shell_now(shell)
                                   : shell_now(shell) + BD_SHELL_BATTERY_RETRY_MS;
   shell->battery_opened = false;
+  shell->battery_history = bd_battery_history_create();
+  const char *data_dir = bd_config_dir(config->settings);
+  if (shell->battery_history != NULL && data_dir != NULL &&
+      data_dir[0] != '\0') {
+    int written = snprintf(shell->battery_history_path,
+                           sizeof(shell->battery_history_path),
+                           "%s/battery-history.csv", data_dir);
+    if (written <= 0 ||
+        (size_t)written >= sizeof(shell->battery_history_path)) {
+      shell->battery_history_path[0] = '\0';
+    } else {
+      bd_battery_history_load(shell->battery_history,
+                              shell->battery_history_path);
+    }
+  }
+  if (shell->settings_page != NULL) {
+    bd_settings_set_battery_history(shell->settings_page,
+                                    shell->battery_history);
+  }
   if (!shell->battery_policy_ready) {
     fprintf(stderr, "brickdesk: battery policy unavailable: %s\n",
             battery_error.message[0] != '\0' ? battery_error.message
@@ -3348,6 +3776,18 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_settings_destroy(shell->settings_page);
     shell->settings_page = NULL;
   }
+  if (shell->notice != NULL) {
+    bd_notice_destroy(shell->notice);
+    shell->notice = NULL;
+  }
+  if (shell->battery_history != NULL) {
+    if (shell->battery_history_path[0] != '\0') {
+      bd_battery_history_save(shell->battery_history,
+                              shell->battery_history_path);
+    }
+    bd_battery_history_destroy(shell->battery_history);
+    shell->battery_history = NULL;
+  }
   if (shell->home != NULL) {
     bd_home_set_surface_visible(shell->home, false);
   }
@@ -3409,6 +3849,46 @@ bd_home *bd_shell_home(bd_shell *shell) {
 
 bd_settings *bd_shell_settings(bd_shell *shell) {
   return shell != NULL ? shell->settings_page : NULL;
+}
+
+const bd_battery_history *bd_shell_battery_history(const bd_shell *shell) {
+  return shell != NULL ? shell->battery_history : NULL;
+}
+
+bool bd_shell_notice(bd_shell *shell, bd_notice_level level,
+                     const char *text, uint32_t timeout_ms) {
+  if (shell == NULL || shell->notice == NULL) {
+    return false;
+  }
+  if (!bd_notice_show(shell->notice, level, text, timeout_ms,
+                      shell_now(shell))) {
+    return false;
+  }
+  if (shell->visible) {
+    shell->dirty = true;
+  }
+  return true;
+}
+
+bool bd_shell_confirm(bd_shell *shell, const char *title, const char *text,
+                      uint32_t timeout_ms, bd_notice_confirm_fn on_done,
+                      void *user) {
+  if (shell == NULL || shell->notice == NULL) {
+    return false;
+  }
+  if (!bd_notice_confirm(shell->notice, title, text, timeout_ms, on_done, user,
+                         shell_now(shell))) {
+    return false;
+  }
+  if (shell->visible) {
+    shell->dirty = true;
+  }
+  return true;
+}
+
+bool bd_shell_confirm_open(const bd_shell *shell) {
+  return shell != NULL && shell->notice != NULL &&
+         bd_notice_confirm_open(shell->notice);
 }
 
 void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,

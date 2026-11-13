@@ -1,14 +1,18 @@
 # 电源、休眠与关机（M4-Power）
 
 > **状态：未在 Brick Pro 真机验证。**
-> 宿主状态机、shell 轻睡接线、故障注入测试和 aarch64 交叉编译已通过；真实
+> 宿主状态机、shell 电源接线、故障注入测试和 aarch64 交叉编译已通过；真实
 > 休眠/唤醒、电源键、标准关机、PMIC 和 20 轮连续休眠恢复都还没有真机证据。
 > 本文不声称任何未经真机验证的恢复可靠性。真机步骤见第 8 节。
+>
+> 2026-11-13 P0 更新：shell 已默认启用深睡、关机、重启、长按动作、自动轻睡→
+> 深睡和低电量关机；Linux 后端默认允许状态写入；安全关机按 NextUI 的 AXP2202
+> 序列实现。以下“本切片不做”的旧限制仅保留为历史背景，实际行为见第 9.9 节。
 
 本文记录 `m4/power` 的电源后端：可注入操作的轻睡/深睡/唤醒/关机/重启状态机，
-只使用公开 Linux 接口的后端，以及 shell 的 POWER 短按轻睡切片。power 模块不写
-ALSA、`/dev/disp`、背光或 LED；shell 的显示 hook 通过既有 AV getter/setter
-读写亮度。home/app/settings 的内部实现不在 power 模块范围内。
+只使用公开 Linux 接口的后端，以及 shell 的 POWER 手势、空闲睡眠和低电量消费。
+power 模块不写 ALSA、`/dev/disp`、背光或 LED；shell 的显示 hook 通过既有 AV
+getter/setter 读写亮度。home/app/settings 的内部实现不在 power 模块范围内。
 
 ## 1. 范围与边界
 
@@ -16,8 +20,9 @@ ALSA、`/dev/disp`、背光或 LED；shell 的显示 hook 通过既有 AV getter
 
 - `include/brickdesk/device_power.h`：公共 API、hook 契约、报告结构。
 - `src/device/power.c`：同步状态机、失败回滚、退化恢复、重复/取消语义。
-- `src/device/power_linux.c`：只读能力探测；`/sys/power/state` 深睡；
-  `reboot(2)` 标准关机/重启；PMIC 安全关机的显式 unsupported。
+- `src/device/power_linux.c`：能力探测；`/sys/power/state` 深睡（5 次重试、
+  超过 5 秒的假失败按成功处理）；`reboot(2)` 标准关机/重启；可选的 AXP2202
+  软断开安全关机与失败回退。
 - `src/device/power_probe_main.c`：`bd-power` 探测/诊断 CLI，默认只读。
 - `src/app/shell.c`、`include/brickdesk/shell.h`：排队 POWER 短按、前台冻结、
   亮度快照/恢复、轻睡服务循环和测试注入点。
@@ -29,11 +34,13 @@ ALSA、`/dev/disp`、背光或 LED；shell 的显示 hook 通过既有 AV getter
 
 - 不实现音频暂停/恢复、背光驱动本身、LED、震动。轻睡只使用 shell 已有的 AV
   getter/setter；不声称面板断电或音频 codec 已挂起。
-- 本切片不实现深睡、关机/重启、电源键长按配置、自动休眠或低电量策略消费。
+- 低电量提示走 shell notice；LED 指示由 WP-08 的产品层统一刷新，power 不写
+  `/sys/class/led_anim`。
 - 不实现输入守护进程、应用会话或服务监管；只定义调用顺序和失败语义。
-- 不写 AXP2202 寄存器，不打开 I2C，不实现 PMIC 安全关机序列。
 - 不把“关背光”当作休眠。`display_off` 只是轻睡的一个 hook；RAM 冻结不是
   `app.pause`、存档或掉电保护。
+- PMIC 序列按参考项目在 tg5040 上实际使用的寄存器值实现，但未经真机验证；
+  没有硬件时探测仍是只读，不会打开 I2C。
 
 ## 2. 证据、版本与许可
 
@@ -375,16 +382,18 @@ NextUI 的 suspend 脚本在写 `mem` 失败时重试 5 次，并在“实际睡
 
 库不链接 SDL/GLES/ALSA；target 构建和 host 构建使用同一份源码。
 
-### 6.2 Shell 轻睡接线（本切片已实现）
+### 6.2 Shell 电源接线
 
 `src/app/shell.c` 持有 `bd_power_linux` 和 `bd_power`，生命周期覆盖事件循环。
-生产路径固定：
+当前生产路径：
 
-- `bd_power_linux_init(..., allow_state_changes=false, ...)`；本切片没有运行时
-  arming 开关，也不会从配置读取深睡/关机开关。
-- `allow_light_sleep=true`，`allow_deep_sleep/allow_poweroff/allow_reboot=false`。
-- `bd_shell_config.power_backend` 只用于测试注入；生产总是使用上面只读的 Linux
-  后端。轻睡本身不调用深睡或关机 backend。
+- `bd_power_linux_init(..., allow_state_changes=true, ...)`；`safe_poweroff`
+  由 `power.safe_shutdown` 决定。
+- `allow_light_sleep/allow_deep_sleep/allow_poweroff/allow_reboot=true`。
+- shell 消费 `power.sleep_after`、`power.deep_sleep_after`、
+  `power.long_press_action`、`power.low_battery_percent` 和
+  `power.shutdown_on_low_battery`；配置热重载会更新对应值。
+- `bd_shell_config.power_backend` 仍只用于测试注入；生产使用 Linux 后端。
 
 hooks 的职责：
 
@@ -752,34 +761,64 @@ done
 恢复：拔卡开机进入原厂 UI，或按 `docs/device-testing.md` 的 `recover.sh`
 流程。恢复后保留日志，不要继续重复失败操作。
 
-## 9. 未证实路径与已知限制
+## 9.9 2026-11-13 P0 电源接线（当前行为）
+
+shell 现在默认启用所有电源动作，不再有“仅探测/默认禁用”的开关：
+
+- **POWER 短按**（< 1000 ms）：进入轻睡；轻睡中按 POWER 唤醒，唤醒后 1 秒内
+  的电源键按下被吞掉，避免误触再次睡眠。
+- **POWER 长按**（≥ 1000 ms）：执行 `power.long_press_action`，默认 `shutdown`，
+  可选 `reboot` / `none`。长按在按住达到阈值时触发，不需要等释放；设置页和
+  前台应用中同样生效。
+- **自动睡眠**：空闲达到 `power.sleep_after`（默认 60 s）进入轻睡；轻睡持续
+  `power.deep_sleep_after`（默认 30 s）且未充电时调用 `mem`。充电中不深睡，
+  每 30 秒重新检查。输入事件（包括前台应用期间 inputd 广播的按键）会重置空闲
+  计时。
+- **深睡**：Linux 后端对 `mem` 最多尝试 5 次，每次间隔 3 秒；某次写入返回
+  非零但调用阻塞超过 5 秒时按成功处理（厂商内核已知假失败）。`mem_sleep` 的
+  临时选择在返回后恢复。深睡失败或 `mem` 不受支持时，shell 直接走关机，避免
+  永远停留在轻睡。
+- **关机/重启**：先结束所有运行中的应用会话、`sync()`，再调用状态机；标准
+  路径是 `reboot(RB_POWER_OFF/RB_AUTOBOOT)`。后端返回（说明没有真正断电）时
+  恢复 UI 并显示错误通知。
+- **安全关机**：`power.safe_shutdown=true`（默认）时，关机先 `umount2` SD 卡
+  （`MNT_FORCE|MNT_DETACH`），再通过 `/dev/i2c-6` 地址 `0x34` 写 AXP2202：
+  `0x40..0x44=0x00`、`0x48..0x4C=0xFF`、`0x22=0x0A`、50 ms 后 `0x27=0x01`，
+  等待 1 秒；任一步失败或 PMIC 没有断开时回退标准 `RB_POWER_OFF`。
+- **低电量**：policy 的 LOW/CRITICAL 事件显示 notice；`shutdown_on_low_battery`
+  开启时临界电量启动 30 秒倒计时，插电即取消，倒计时结束请求关机；LED 指示
+  由 WP-08 的产品层刷新。
+- **恢复失败**：唤醒后状态为 DEGRADED 时显示“恢复失败，请再按一次电源键重试”，
+  恢复成功后清除；同一轮不重复刷屏。
+
+仍未经真机验证：`mem` 是否真正进入 suspend-to-RAM、PMIC 序列是否有效、标准
+关机是否 limbo、充电/唤醒时序、20 轮可靠性。真机验收仍按第 8 节执行。
+
+## 9.10 文件与集成点（当前）
+
+| 文件/目标 | 作用 |
+|---|---|
+| `include/brickdesk/notice.h`、`src/app/notice.c` | 通用 toast/确认层，shell 在 home/settings 之后叠加绘制 |
+| `include/brickdesk/device_power.h` | 公共 API、hook/backend 契约、`safe_poweroff` |
+| `src/device/power.c` | 状态机、回滚、取消、重复、报告 |
+| `src/device/power_linux.c` | probe、`mem` 5 次重试、标准/PMIC 关机 |
+| `src/app/shell.c` | POWER 手势、空闲计时、低电量倒计时、通知接线 |
+
+## 9.11 未证实路径与已知限制
 
 - **未证实**：Brick Pro 上 `/sys/power/state` 的 `mem` 是否真的进入
   Suspend-to-RAM、唤醒源、唤醒耗时、电流、20 轮恢复、Wi-Fi/BT/音频/输入 fd
-  恢复、标准关机是否 limbo、PMIC 行为、充电时自动休眠策略。
-- **未证实**：`mem_sleep` 是否存在；v4.9.191 主线没有该属性，厂商内核可能
-  backport。默认不写它。
-- **未实现**：`wakeup_count` 竞态处理、自动重试、NextUI 式假失败启发式、
-  SD 卡卸载、进程杀死、PMIC 软断电。
-- **未实现**：自动休眠定时器、电源键长按配置/关机、充电策略；这些由后续
-  任务拥有。本切片的短按窗口固定 1000 ms，长按只忽略。
-- **未实现**：深睡、关机/重启的 shell 接线；`allow_deep_sleep/poweroff/reboot`
-  在 shell 中固定为 false，Linux backend 也固定 `allow_state_changes=false`。
-- **不声称**：轻睡会停止音频、Wi-Fi、BT、面板电源或 inputd。只有被捕获的前台
-  进程组收到 SIGSTOP；亮度 0 是现有 AV 后端的背光写入。
-- **不声称**：RAM 冻结是 `app.pause`、存档或掉电保护；它不占后台配额，也不
-  改变 session 的 `FOREGROUND` 身份。
-- **不声称**：`bd_power_sleep_deep()` 返回 `OK` 只表示内核接受了 `mem` 且调用
-  返回；不代表实际功耗、恢复完整性或 20 轮可靠性。
-- **不声称**：`bd_power_sleep_light()` 是 suspend；它只是调用方 hook 的软件
-  轻睡层。深睡没有自动 fallback 到它。
-- **数据风险**：标准 `reboot(2)` 前只做 `sync()`，不 unmount SD；调用方必须在
-  `app_pause`/`resource_prepare` 中保存并 flush 自己的状态。
-- **CLI 诊断**：`bd-power --deep-sleep` 绕过 shell hook，只测内核路径，不能
-  作为生产恢复证据。
-- **构建**：`bd-power` 已加入 target `dist/bin`、发布包 `payload/bin`、离线包
-  结构和安装检查，以及 target workflow 的 GLIBC 检查；默认只读和危险动作开关
-  没有改变。
+  恢复、标准关机是否 limbo、PMIC 行为。
+- **未证实**：`/dev/i2c-6` 与 AXP2202 地址/寄存器在 TG4040 上是否与参考项目
+  一致；安全关机序列没有在真机执行过。
+- **未实现**：`wakeup_count` 竞态处理、深睡前主动停止 `bluetoothd`/
+  `wpa_supplicant`/保存 ALSA 的服务脚本。当前只做 `sync()`、SD 卸载和 PMIC；
+  网络/音频的休眠前后恢复由 WP-16/17/13 的后端负责。
+- **未实现**：自动睡眠期间的前台应用暂停语义仍沿用轻睡 hook（冻结前台进程）。
+- **不声称**：`bd_power_sleep_deep()` 返回 `OK` 代表实际功耗或恢复完整性。
+- **数据风险**：安全关机只 `MNT_DETACH` SD 卡；应用存档必须在 `app_pause`
+  或自己的保存 hook 中完成（shell 关机前会先结束会话）。
+
 
 ## 10. 文件与集成点
 
@@ -787,9 +826,9 @@ done
 |---|---|
 | `include/brickdesk/device_power.h` | 公共 API、hook/backend 契约、报告 |
 | `src/device/power.c` | 状态机、回滚、取消、重复、报告 |
-| `src/device/power_linux.c` | 只读 probe、`mem` 深睡、`reboot(2)`、PMIC unsupported |
+| `src/device/power_linux.c` | probe、`mem` 深睡、`reboot(2)`、PMIC 安全关机 |
 | `src/device/power_probe_main.c` | `bd-power` CLI，默认只读 |
-| `src/app/shell.c` | POWER 排队、冻结/亮度 hook、轻睡 service/render 门控 |
+| `src/app/shell.c` | POWER 手势、空闲/低电量策略、冻结/亮度 hook、service/render 门控 |
 | `include/brickdesk/shell.h` | 可选 fake backend 与 `bd_shell_test_power()` |
 | `tests/device_power_test.c` | 宿主状态机/故障注入/probe 测试 |
 | `tests/shell_power_test.c` | 真实 shell 循环、进程冻结、插件 heartbeat、inputd |
@@ -801,17 +840,17 @@ done
 
 当前接线：
 
-1. shell 持有 `bd_power_linux`/`bd_power`，生产固定
-   `allow_state_changes=false`，只启用 light sleep。
+1. shell 持有 `bd_power_linux`/`bd_power`，生产打开
+   `allow_state_changes=true`，启用 light/deep sleep、poweroff、reboot。
 2. input hook 只做 shell 本地 suspend；session hook 同步 freeze/thaw 确切前台；
    display hook 通过既有 AV getter/setter 快照/写 0/恢复。
 3. POWER 先入队，在 `bd_shell_iterate()` 的普通 service/render 之前执行；轻睡
-   循环继续 inputd/session/plugin 服务，不推进 UI 或帧 deadline。
+   循环继续 inputd/session/plugin 服务，不推进 UI 或帧 deadline。长按在 1 秒
+   阈值触发，自动睡眠与低电量倒计时通过同一队列执行。
 
 后续任务仍需：
 
-1. 深睡/关机/重启的配置门和 shell 消费，保持 backend 的真实写入门在真机验收后
-   才打开。
-2. 长按阈值配置、空闲计时、低电量策略消费。
-3. 面板真正断电、音频 codec/功放、Wi-Fi/BT、inputd 挂起恢复等真实设备路径。
-4. 在真机完成第 8 节，尤其是 8.5 的 20 轮。
+1. 深睡前停止 `bluetoothd`/`wpa_supplicant` 并保存 ALSA，唤醒后恢复服务
+   （WP-16/17/13 的后端与 shell hook）。
+2. 面板真正断电、音频 codec/功放、inputd 挂起恢复等真实设备路径。
+3. 在真机完成第 8 节，尤其是 8.5 的 20 轮。

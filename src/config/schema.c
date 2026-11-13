@@ -17,6 +17,8 @@ static const char *const g_time_formats[] = {"24h", "12h", NULL};
 static const char *const g_quick_resume[] = {"auto", "always", "never", NULL};
 static const char *const g_governors[] = {"performance", "schedutil", "ondemand",
                                           "powersave", NULL};
+static const char *const g_power_long_press[] = {"shutdown", "reboot", "none",
+                                                 NULL};
 static const char *const g_accents[] = {"persimmon", "coral", "teal", "blue",
                                         "green", "violet", NULL};
 
@@ -52,8 +54,13 @@ const bd_config_spec bd_config_specs[] = {
     {"input", "double_tap_ms", BD_CONFIG_INT, "300", 100, 1000, NULL, 0, 0, 0},
 
     /* power */
-    {"power", "sleep_after", BD_CONFIG_DURATION, "180s", 0, 86400000, NULL, 0,
+    {"power", "sleep_after", BD_CONFIG_DURATION, "60s", 0, 86400000, NULL, 0,
      1000, 0},
+    {"power", "deep_sleep_after", BD_CONFIG_DURATION, "30s", 0, 86400000, NULL,
+     0, 1000, 0},
+    {"power", "long_press_action", BD_CONFIG_ENUM, "shutdown", 0, 0,
+     g_power_long_press, 0, 0, 0},
+    {"power", "safe_shutdown", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
     {"power", "low_battery_percent", BD_CONFIG_INT, "5", 0, 100, NULL, 0, 0, 0},
     {"power", "shutdown_on_low_battery", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0,
      0, 0},

@@ -416,6 +416,78 @@ static void draw_plain_value(const bd_settings *settings, bd_gfx *gfx,
                              right - (rect.x + 220), color, text);
 }
 
+static void draw_battery_history(const bd_settings *settings, bd_gfx *gfx,
+                                 bd_rect rect, int right) {
+  const bd_battery_history *history = settings->battery_history;
+  int width = 200;
+  int height = 44;
+  int x = right - width;
+  int y = rect.y + (rect.h - height) / 2;
+  bd_rect chart = bd_rect_make(x, y, width, height);
+  bd_gfx_fill_round_rect(gfx, chart, 6, settings->palette.surface2);
+  bd_gfx_stroke_round_rect(gfx, chart, 6, 1, settings->palette.line);
+  size_t count =
+      history != NULL ? bd_battery_history_count(history) : 0;
+  if (count < 2) {
+    bd_gfx_draw_text(gfx, settings->fonts.caption, chart.x + 12,
+                     chart.y + chart.h / 2 + 5, settings->palette.ink3,
+                     "记录中");
+    return;
+  }
+  const bd_battery_point *first = bd_battery_history_at(history, 0);
+  const bd_battery_point *last = bd_battery_history_at(history, count - 1);
+  int64_t span = last->epoch_s - first->epoch_s;
+  if (span <= 0) {
+    span = 1;
+  }
+  int inner_x = chart.x + 8;
+  int inner_y = chart.y + 7;
+  int inner_w = chart.w - 16;
+  int inner_h = chart.h - 14;
+  /* 25/50/75% guides keep the 0..100 scale readable. */
+  for (int guide = 1; guide <= 3; ++guide) {
+    int gy = inner_y + inner_h - inner_h * guide / 4;
+    bd_gfx_fill_rect(gfx, bd_rect_make(inner_x, gy, inner_w, 1),
+                     settings->palette.line);
+  }
+  int previous_x = -1;
+  int previous_y = -1;
+  for (size_t i = 0; i < count; ++i) {
+    const bd_battery_point *point = bd_battery_history_at(history, i);
+    int px = inner_x +
+             (int)((point->epoch_s - first->epoch_s) * inner_w / span);
+    int py = inner_y + inner_h - point->percent * inner_h / 100;
+    if (py < inner_y) {
+      py = inner_y;
+    }
+    if (py > inner_y + inner_h) {
+      py = inner_y + inner_h;
+    }
+    if (previous_x >= 0) {
+      /* Interpolate a 1 px column between points so the line is continuous. */
+      int steps = px - previous_x;
+      if (steps > 0 && steps < 64) {
+        for (int step = 1; step <= steps; ++step) {
+          int ix = previous_x + step;
+          int iy = previous_y + (py - previous_y) * step / steps;
+          bd_gfx_fill_rect(gfx, bd_rect_make(ix, iy, 1, 1),
+                           point->charging ? settings->palette.ink3
+                                           : settings->accent.accent);
+        }
+      }
+    }
+    bd_gfx_fill_round_rect(gfx, bd_rect_make(px - 1, py - 1, 3, 3), 1,
+                           point->charging ? settings->palette.ink3
+                                           : settings->accent.accent);
+    previous_x = px;
+    previous_y = py;
+  }
+  char current[16];
+  snprintf(current, sizeof(current), "%d%%", last->percent);
+  bd_gfx_draw_text(gfx, settings->fonts.caption, chart.x + chart.w - 46,
+                   chart.y + 16, settings->palette.ink, current);
+}
+
 static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
   if (index < 0 || index >= settings->row_count) {
     return;
@@ -481,6 +553,9 @@ static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
       break;
     case BD_SETTINGS_ROW_ACCENT:
       draw_accent_row(settings, gfx, row, rect, right, focused);
+      break;
+    case BD_SETTINGS_ROW_HISTORY:
+      draw_battery_history(settings, gfx, rect, right);
       break;
     default:
       draw_plain_value(settings, gfx, row, rect, right);

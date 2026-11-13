@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "brickdesk/theme.h"
 #include "brickdesk/version.h"
@@ -691,6 +692,29 @@ static bool build_system_page(bd_settings *settings) {
   char storage[96];
   format_storage(settings, storage, sizeof(storage));
   add_info_row(settings, "!storage", "存储", "配置与存档所在分区", storage);
+  if (settings->battery_history != NULL) {
+    char remaining[48];
+    int minutes = bd_battery_history_remaining_minutes(
+        settings->battery_history, (int64_t)time(NULL));
+    if (minutes < 0) {
+      snprintf(remaining, sizeof(remaining), "估算中");
+    } else if (minutes >= 60) {
+      snprintf(remaining, sizeof(remaining), "%d 小时 %d 分", minutes / 60,
+               minutes % 60);
+    } else {
+      snprintf(remaining, sizeof(remaining), "%d 分钟", minutes);
+    }
+    add_info_row(settings, "!battery.remaining", "预计剩余",
+                 "按最近一小时放电速度估算，仅供参考", remaining);
+    bd_settings_row *history = append_row(settings);
+    if (history != NULL) {
+      history->kind = BD_SETTINGS_ROW_HISTORY;
+      copy_text(history->key, sizeof(history->key), "!battery.history");
+      copy_text(history->label, sizeof(history->label), "电量历史");
+      copy_text(history->description, sizeof(history->description),
+                "最近 24 小时 · 每 5 分钟采样");
+    }
+  }
   add_info_row(settings, "!about", "关于 brickdesk",
                "为 TrimUI Brick Pro 设计的桌面 · 1024×768 · 仅手柄操作", "");
   bd_settings_row *row = append_row(settings);
@@ -1635,6 +1659,19 @@ void bd_settings_set_status(bd_settings *settings,
   }
   bd_settings_mark_all(settings);
   bd_gfx_damage_all(settings->gfx);
+}
+
+void bd_settings_set_battery_history(bd_settings *settings,
+                                     const bd_battery_history *history) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->battery_history = history;
+  if (settings->category == BD_SETTINGS_CATEGORY_SYSTEM) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
 }
 
 void bd_settings_set_storage(bd_settings *settings,

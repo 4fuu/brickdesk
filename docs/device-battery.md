@@ -827,6 +827,21 @@ adb shell '/mnt/SDCARD/brickdesk/bin/bd-battery'
 - **不声称**：`PREPARE_SHUTDOWN` 是关机命令；它只是建议，消费者必须自己
   完成用户确认、状态保存和安全关机。
 
+## 11.1 电量历史与剩余时间（WP-07）
+
+`include/brickdesk/battery_history.h` + `src/device/battery_history.c` 提供独立
+于 UI 的记录层：
+
+- 采样文件：`<config_dir>/battery-history.csv`，每行
+  `epoch,percent,charging`；最多 288 点（24 小时 × 5 分钟），超出后丢最旧点。
+- 记录规则：容量变化或距上一点满 5 分钟才写；同一采样值在 5 分钟内不重复。
+  写入使用同目录临时文件 + rename，避免半写文件。
+- 剩余时间：取最近一小时内至少 3 个放电点、跨度 ≥15 分钟，按容量下降斜率
+  估算；充电、容量上升或样本不足时返回“估算中”，不做电压/容量猜测。
+- 设置页“系统”分类显示“预计剩余”和 24 小时曲线；曲线中充电段用灰色，
+  放电段用强调色，纵轴固定 0..100%。
+- 记录失败不影响电量显示或低电量策略；文件损坏时从下一个样本重新开始。
+
 ## 12. 文件与集成点
 
 | 文件/目标 | 作用 |
@@ -836,6 +851,7 @@ adb shell '/mnt/SDCARD/brickdesk/bin/bd-battery'
 | `src/device/battery_linux.c` | power_supply 枚举、选择、读取、坏值/STALE |
 | `src/device/battery_internal.h` | 私有错误/字符串 helper |
 | `src/device/battery_probe_main.c` | `bd-battery` 只读诊断 CLI |
+| `src/device/battery_history.c` | 电量历史 CSV、曲线查询、剩余时间估算 |
 | `tests/device_battery_test.c` | 读取/策略/边界/竞态测试 |
 | `tests/fixtures/battery/` | full/limited/none 假设备树 |
 | `brickdesk_battery` | CMake 静态库 |
@@ -847,10 +863,12 @@ adb shell '/mnt/SDCARD/brickdesk/bin/bd-battery'
 1. shell 持有 `bd_battery` 和 `bd_battery_policy`，生命周期覆盖事件循环。
 2. 首页/设置页使用同一状态快照；未知容量显示占位符，不显示 0%。
 3. `low_battery_percent` 映射到一组合法的 `critical_percent`/
-   `reminder_percent`/hysteresis；`recommend_shutdown` 固定为 false，本轮不接
-   自动关机。策略初始化失败会被记录并切换到明确的 60 s 降级采样。
+   `reminder_percent`/hysteresis；`recommend_shutdown` 由
+   `shutdown_on_low_battery` 决定。临界事件启动 30 秒倒计时，插电取消，结束
+   后请求 `bd_power_poweroff()`；策略本身仍然只给建议。
 4. 事件循环按 `next_sample_ms` 调度；power_supply uevent、插电/唤醒提前
-   采样仍是真机项。
-5. `PREPARE_SHUTDOWN` 的安全流程（保存、确认、`bd_power_poweroff()`）另任务。
+   采样仍是真机项。每次有效采样还会写入电量历史（WP-07）。
+5. 低电量提醒通过 `bd_shell_notice()` 显示；LED 指示由 WP-08 的
+   `bd_led_refresh` 统一刷新。
 6. 旧的 `bd_sys_battery_percent()` 和对应 sysinfo 测试已删除；RSS 与 Wi-Fi
    状态仍保留在 `sysinfo`。

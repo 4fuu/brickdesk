@@ -6,16 +6,25 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/i2c-dev.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <sys/reboot.h>
+#include <time.h>
 #include <unistd.h>
 
+#define BD_POWER_I2C_DEVICE "/dev/i2c-6"
+#define BD_POWER_AXP2202_ADDR 0x34
+#define BD_POWER_DEEP_SLEEP_TRIES 5
+#define BD_POWER_DEEP_SLEEP_RETRY_MS 3000
+#define BD_POWER_DEEP_SLEEP_FALSE_NEGATIVE_MS 5000
+
 static const char pmic_blocker[] =
-    "AXP2202 soft power-off blocked: no public TG4040/AXP2202 register "
-    "sequence; NextUI poweroff_next (PolyForm, b6ec1343) is unverified here. "
-    "No I2C access attempted.";
+    "AXP2202 soft power-off: /dev/i2c-6 is unavailable on this host; the "
+    "TG4040 register sequence is implemented but has not run here.";
 
 static void copy_text(char *dst, size_t dst_size, const char *src) {
   if (dst_size == 0) {
@@ -255,6 +264,22 @@ static void restore_mem_sleep_mode(const bd_power_linux *linux,
   }
 }
 
+static uint64_t monotonic_ms(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    return 0;
+  }
+  return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static void sleep_ms(unsigned milliseconds) {
+  struct timespec delay;
+  delay.tv_sec = (time_t)(milliseconds / 1000u);
+  delay.tv_nsec = (long)(milliseconds % 1000u) * 1000000L;
+  while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {
+  }
+}
+
 static bd_power_backend_status linux_deep_sleep(void *user) {
   bd_power_linux *linux = (bd_power_linux *)user;
   if (linux == NULL) {
@@ -290,24 +315,103 @@ static bd_power_backend_status linux_deep_sleep(void *user) {
 
   sync();
 
-  int fd = open(state_path, O_WRONLY | O_CLOEXEC);
-  if (fd < 0) {
+  /*
+   * NextUI retries "mem" five times.  The vendor kernel occasionally returns
+   * a non-zero write after a real suspend/resume cycle; a write that stayed
+   * blocked for more than five seconds is therefore treated as success so the
+   * device does not immediately suspend again after the user wakes it.
+   */
+  bd_power_backend_status result = BD_POWER_BACKEND_ERROR;
+  for (int attempt = 0; attempt < BD_POWER_DEEP_SLEEP_TRIES; ++attempt) {
+    if (attempt > 0) {
+      sleep_ms(BD_POWER_DEEP_SLEEP_RETRY_MS);
+    }
+    uint64_t started = monotonic_ms();
+    int fd = open(state_path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+      result = BD_POWER_BACKEND_ERROR;
+      continue;
+    }
+    bool ok = write_all(fd, "mem\n", 4);
     int saved = errno;
-    restore_mem_sleep_mode(linux, previous);
+    if (close(fd) != 0 && ok) {
+      ok = false;
+      saved = errno;
+    }
+    if (ok) {
+      result = BD_POWER_BACKEND_OK;
+      break;
+    }
+    uint64_t elapsed = monotonic_ms() - started;
+    if (started != 0 && elapsed > BD_POWER_DEEP_SLEEP_FALSE_NEGATIVE_MS) {
+      result = BD_POWER_BACKEND_OK;
+      break;
+    }
     errno = saved;
+    result = BD_POWER_BACKEND_ERROR;
+  }
+
+  /* The requested mem_sleep mode is scoped to the transition, not permanent. */
+  restore_mem_sleep_mode(linux, previous);
+  return result;
+}
+
+/* ------------------------------------------------------------ PMIC path */
+
+static bool axp2202_write(int fd, uint8_t reg, uint8_t value) {
+  uint8_t buffer[2] = {reg, value};
+  size_t offset = 0;
+  while (offset < sizeof(buffer)) {
+    ssize_t written = write(fd, buffer + offset, sizeof(buffer) - offset);
+    if (written < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (written == 0) {
+      errno = EIO;
+      return false;
+    }
+    offset += (size_t)written;
+  }
+  return true;
+}
+
+static bd_power_backend_status axp2202_soft_poweroff(bd_power_linux *linux) {
+  const char *device = linux->i2c_device[0] != '\0' ? linux->i2c_device
+                                                    : BD_POWER_I2C_DEVICE;
+  int fd = open(device, O_RDWR | O_CLOEXEC);
+  if (fd < 0) {
     return BD_POWER_BACKEND_ERROR;
   }
-  bool ok = write_all(fd, "mem\n", 4);
+  if (ioctl(fd, I2C_SLAVE, BD_POWER_AXP2202_ADDR) < 0) {
+    if (ioctl(fd, I2C_SLAVE_FORCE, BD_POWER_AXP2202_ADDR) < 0) {
+      int saved = errno;
+      close(fd);
+      errno = saved;
+      return BD_POWER_BACKEND_ERROR;
+    }
+  }
+
+  bool ok = true;
+  for (int reg = 0x40; reg <= 0x44; ++reg) {
+    ok = axp2202_write(fd, (uint8_t)reg, 0x00) && ok;
+  }
+  for (int reg = 0x48; reg <= 0x4C; ++reg) {
+    ok = axp2202_write(fd, (uint8_t)reg, 0xFF) && ok;
+  }
+  ok = axp2202_write(fd, 0x22, 0x0A) && ok;
+  sleep_ms(50);
+  ok = axp2202_write(fd, 0x27, 0x01) && ok;
   int saved = errno;
-  if (close(fd) != 0 && ok) {
-    ok = false;
-    saved = errno;
-  }
+  close(fd);
   if (!ok) {
-    restore_mem_sleep_mode(linux, previous);
-    errno = saved;
+    errno = saved != 0 ? saved : EIO;
     return BD_POWER_BACKEND_ERROR;
   }
+  /* The PMIC cuts VBUS/battery after the latch; give it a moment first. */
+  sleep_ms(1000);
   return BD_POWER_BACKEND_OK;
 }
 
@@ -320,6 +424,31 @@ static bd_power_backend_status linux_shutdown(void *user, bool reboot_system) {
   if (!linux->allow_state_changes) {
     errno = EPERM;
     return BD_POWER_BACKEND_DISABLED;
+  }
+
+  sync();
+  if (!reboot_system && linux->safe_poweroff) {
+    /*
+     * NextUI unloads the SD card before touching the PMIC so its filesystem
+     * cannot be left dirty by the hard cut.  MNT_DETACH is deliberate: the
+     * launcher itself runs from the card, so a normal unmount would fail.
+     */
+    if (umount2("/mnt/SDCARD", MNT_FORCE | MNT_DETACH) != 0 &&
+        errno != EINVAL && errno != ENOENT) {
+      /* Not fatal: the PMIC path still has to be attempted. */
+    }
+    bd_power_backend_status pmic = axp2202_soft_poweroff(linux);
+    if (pmic == BD_POWER_BACKEND_OK) {
+      /* The PMIC sequence already waited; this is only a safety net. */
+      sync();
+      int command = RB_POWER_OFF;
+      if (reboot(command) == 0) {
+        errno = ENOTSUP;
+        return BD_POWER_BACKEND_NO_EFFECT;
+      }
+      return BD_POWER_BACKEND_ERROR;
+    }
+    /* Fall through to the standard path; never leave the device in limbo. */
   }
 
   sync();
@@ -390,6 +519,17 @@ bool bd_power_linux_probe(const bd_power_linux *linux,
              "missing Linux power backend");
     return false;
   }
+  const char *i2c = linux->i2c_device[0] != '\0' ? linux->i2c_device
+                                                : BD_POWER_I2C_DEVICE;
+  if (access(i2c, F_OK) == 0) {
+    probe->pmic_safe_poweroff = BD_POWER_SUPPORT_SUPPORTED;
+    copy_text(probe->pmic_blocker, sizeof(probe->pmic_blocker),
+              "AXP2202 soft power-off available through the vendor I2C bus; "
+              "register writes must still be validated on TG4040 hardware.");
+  } else {
+    probe->pmic_safe_poweroff = BD_POWER_SUPPORT_UNSUPPORTED;
+    copy_text(probe->pmic_blocker, sizeof(probe->pmic_blocker), pmic_blocker);
+  }
 
   char path[BD_POWER_PATH_MAX];
   if (!build_path(linux, "sys/power/state", path, sizeof(path))) {
@@ -449,9 +589,21 @@ bd_power_backend bd_power_linux_backend(bd_power_linux *linux) {
 }
 
 bd_power_backend_status bd_power_linux_pmic_poweroff(bd_power_linux *linux) {
-  (void)linux;
-  errno = ENOTSUP;
-  return BD_POWER_BACKEND_UNSUPPORTED;
+  if (linux == NULL || !linux->allow_state_changes) {
+    errno = EPERM;
+    return BD_POWER_BACKEND_UNSUPPORTED;
+  }
+  if (!linux->safe_poweroff) {
+    errno = ENOTSUP;
+    return BD_POWER_BACKEND_UNSUPPORTED;
+  }
+  return axp2202_soft_poweroff(linux);
+}
+
+void bd_power_linux_set_safe_poweroff(bd_power_linux *linux, bool enabled) {
+  if (linux != NULL) {
+    linux->safe_poweroff = enabled;
+  }
 }
 
 const char *bd_power_linux_pmic_blocker(void) {

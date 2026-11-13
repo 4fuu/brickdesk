@@ -174,6 +174,7 @@ struct bd_home {
   int dialog_max_background;
   char dialog_pending_id[BD_HOME_ID_MAX];
   char dialog_victim_id[BD_HOME_ID_MAX];
+  char dialog_error[160];
 
   bd_home_launch_mode launch;
   int launch_item;
@@ -189,7 +190,6 @@ struct bd_home {
 
   int brightness;
   int volume;
-  bool wifi;
   bool bluetooth;
 
   uint32_t stamp;

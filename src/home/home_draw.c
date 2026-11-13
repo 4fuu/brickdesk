@@ -560,10 +560,17 @@ static void draw_wall(bd_home *home, bd_gfx *gfx) {
   home->stats.total_items = home->count;
 }
 
-static void draw_wifi_icon(bd_gfx *gfx, bd_color color, int x, int y) {
+static void draw_wifi_icon(bd_gfx *gfx, bd_color color, int x, int y,
+                           bool unknown) {
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 9, 5, 4), 2, color);
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 3, y + 5, 11, 3), 1, color);
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y + 1, 17, 3), 1, color);
+  if (unknown) {
+    for (int i = 0; i < 14; ++i) {
+      bd_gfx_fill_rect(gfx, bd_rect_make(x + i + 1, y + 12 - i * 3 / 4, 1, 1),
+                       color);
+    }
+  }
 }
 
 static void draw_battery(const bd_home *home, bd_gfx *gfx, int x, int y) {
@@ -573,7 +580,11 @@ static void draw_battery(const bd_home *home, bd_gfx *gfx, int x, int y) {
                          home->palette.ink3);
   int percent = home->status.battery_percent;
   if (percent < 0) {
-    percent = 0;
+    for (int i = 0; i < 20; ++i) {
+      bd_gfx_fill_rect(gfx, bd_rect_make(x + 3 + i, y + 10 - i * 7 / 19, 1, 1),
+                       home->palette.ink3);
+    }
+    return;
   }
   if (percent > 100) {
     percent = 100;
@@ -630,7 +641,7 @@ static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
   draw_battery(home, gfx, battery_x, 31);
   int wifi_x = battery_x - 12 - 17;
   draw_wifi_icon(gfx, home->status.wifi ? palette->ink2 : palette->ink3, wifi_x,
-                 31);
+                 31, !home->status.wifi_known);
 
   if (home->running_count > 0) {
     char chip[64];
@@ -721,8 +732,14 @@ static void hint_items(bd_home *home, hint_item *left, int left_capacity,
       ADD_RIGHT("B", "关闭");
     } else {
       ADD_LEFT("↑↓", "移动");
-      ADD_LEFT("←→", "调整");
-      ADD_RIGHT("A", "切换");
+      int option = home->quick_sel - home->running_count;
+      if (option == 0 || option == 1) {
+        ADD_LEFT("←→", "调整");
+      }
+      /* Wi-Fi is a sampled status row, not a local switch. */
+      if (option != 2) {
+        ADD_RIGHT("A", "切换");
+      }
       ADD_RIGHT("B", "关闭");
     }
   } else {
@@ -809,7 +826,8 @@ static const bd_texture *live_cover_texture(const bd_home *home) {
 }
 
 static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
-                            bd_color color, bd_color background) {
+                            bd_color color, bd_color background,
+                            bool wifi_unknown) {
   switch (icon) {
     case 0: /* brightness */
       bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 6, 8, 8), 4, color);
@@ -824,7 +842,7 @@ static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 13, y + 7, 2, 6), color);
       break;
     case 2: /* wifi */
-      draw_wifi_icon(gfx, color, x + 1, y + 5);
+      draw_wifi_icon(gfx, color, x + 1, y + 5, wifi_unknown);
       break;
     case 3: /* bluetooth */
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 9, y + 2, 2, 16), color);
@@ -877,6 +895,9 @@ static void draw_slider(bd_home *home, bd_gfx *gfx, int x, int y, int value,
 static int running_memory(const bd_home *home) {
   int memory = 0;
   for (int i = 0; i < home->running_count; ++i) {
+    if (home->running[i].memory_mb < 0) {
+      return -1;
+    }
     memory += home->running[i].memory_mb;
   }
   return memory;
@@ -913,7 +934,11 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   bd_gfx_draw_text(gfx, home->fonts.serif25, panel.x + 18, panel.y + 42,
                    palette->ink, "快捷设置");
   char battery[32];
-  snprintf(battery, sizeof(battery), "电量 %d%%", home->status.battery_percent);
+  if (home->status.battery_percent < 0) {
+    snprintf(battery, sizeof(battery), "电量 未知");
+  } else {
+    snprintf(battery, sizeof(battery), "电量 %d%%", home->status.battery_percent);
+  }
   bd_gfx_draw_text(gfx, home->fonts.badge13,
                    panel.x + panel.w - 18 -
                        bd_font_measure_text(home->fonts.badge13, battery),
@@ -978,7 +1003,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   int mem_bar_width = panel.w - 36;
   bd_gfx_fill_round_rect(gfx, bd_rect_make(panel.x + 18, mem_bar_y, mem_bar_width, 2),
                          1, palette->line);
-  int mem_fill = mem_bar_width * (memory > 1024 ? 1024 : memory) / 1024;
+  int mem_fill = memory > 0 ? mem_bar_width * (memory > 1024 ? 1024 : memory) / 1024 : 0;
   if (mem_fill > 0) {
     bd_gfx_fill_round_rect(gfx,
                            bd_rect_make(panel.x + 18, mem_bar_y, mem_fill, 2), 1,
@@ -1017,8 +1042,13 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                                                        : palette->ink2,
                                   name);
       char meta[64];
-      snprintf(meta, sizeof(meta), "%s · %d MB",
-               run->paused ? "已暂停" : "运行中", run->memory_mb);
+      if (run->memory_mb < 0) {
+        snprintf(meta, sizeof(meta), "%s · 内存未知",
+                 run->paused ? "已暂停" : "运行中");
+      } else {
+        snprintf(meta, sizeof(meta), "%s · %d MB",
+                 run->paused ? "已暂停" : "运行中", run->memory_mb);
+      }
       bd_gfx_draw_text(gfx, home->fonts.badge13,
                        row.x + row.w - 10 -
                            bd_font_measure_text(home->fonts.badge13, meta),
@@ -1029,7 +1059,11 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   }
   int foot_baseline = rows_start + rows_height + 14;
   char memory_text[64];
-  snprintf(memory_text, sizeof(memory_text), "后台内存 %d / 1024 MB", memory);
+  if (memory < 0) {
+    snprintf(memory_text, sizeof(memory_text), "后台内存 未知");
+  } else {
+    snprintf(memory_text, sizeof(memory_text), "后台内存 %d / 1024 MB", memory);
+  }
   bd_gfx_draw_text(gfx, home->fonts.badge13, panel.x + 18, foot_baseline,
                    palette->ink3, memory_text);
 
@@ -1041,7 +1075,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
     bd_color icon_color = focused ? home->accent.accent : palette->ink3;
     bd_color icon_background = focused ? palette->surface2 : palette->surface;
     draw_quick_icon(gfx, i, row.x + 10, row.y + 14, icon_color,
-                    icon_background);
+                    icon_background, !home->status.wifi_known);
     static const char *const LABELS[5] = {"亮度", "音量", "Wi-Fi", "蓝牙", "主题"};
     bd_gfx_draw_text(gfx, home->fonts.body16, row.x + 40, row.y + 29,
                      focused ? palette->ink : palette->ink2, LABELS[i]);
@@ -1054,8 +1088,16 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                        row.x + row.w - 10 -
                            bd_font_measure_text(home->fonts.body14, number),
                        row.y + 29, palette->ink2, number);
-    } else if (i == 2 || i == 3) {
-      bool on = i == 2 ? home->wifi : home->bluetooth;
+    } else if (i == 2) {
+      const char *value = !home->status.wifi_known
+                              ? "未知"
+                              : (home->status.wifi ? "已连接" : "未连接");
+      bd_gfx_draw_text(gfx, home->fonts.body14,
+                       row.x + row.w - 18 -
+                           bd_font_measure_text(home->fonts.body14, value),
+                       row.y + 29, palette->ink2, value);
+    } else if (i == 3) {
+      bool on = home->bluetooth;
       const char *value = on ? "开" : "关";
       bd_gfx_draw_text(gfx, home->fonts.body14,
                        row.x + row.w - 18 - 38 - 12 -
@@ -1071,33 +1113,6 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
     }
   }
 
-  int footer_y = panel.y + panel.h - 46;
-  bd_gfx_fill_rect(gfx,
-                   bd_rect_make(panel.x + 16, footer_y, panel.w - 32, 1),
-                   palette->line);
-  int key_y = footer_y + 13;
-  int key_x = panel.x + 18;
-  if (home->quick_sel < home->running_count) {
-    key_x += draw_keycap(home, gfx, key_x, key_y, "A", 1.0f) + 6;
-    bd_gfx_draw_text(gfx, home->fonts.body14, key_x, key_y + 16, palette->ink2,
-                     "恢复");
-    key_x += bd_font_measure_text(home->fonts.body14, "恢复") + 16;
-    key_x += draw_keycap(home, gfx, key_x, key_y, "X", 1.0f) + 6;
-    bd_gfx_draw_text(gfx, home->fonts.body14, key_x, key_y + 16, palette->ink2,
-                     "结束");
-    key_x += bd_font_measure_text(home->fonts.body14, "结束") + 16;
-    key_x += draw_keycap(home, gfx, key_x, key_y, "B", 1.0f) + 6;
-    bd_gfx_draw_text(gfx, home->fonts.body14, key_x, key_y + 16, palette->ink2,
-                     "关闭");
-  } else {
-    key_x += draw_keycap(home, gfx, key_x, key_y, "A", 1.0f) + 6;
-    bd_gfx_draw_text(gfx, home->fonts.body14, key_x, key_y + 16, palette->ink2,
-                     "切换");
-    key_x += bd_font_measure_text(home->fonts.body14, "切换") + 16;
-    key_x += draw_keycap(home, gfx, key_x, key_y, "B", 1.0f) + 6;
-    bd_gfx_draw_text(gfx, home->fonts.body14, key_x, key_y + 16, palette->ink2,
-                     "关闭");
-  }
   bd_gfx_pop_clip(gfx);
 }
 
@@ -1155,6 +1170,9 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
 
   int card_width = 500;
   int card_height = background_full ? 260 : 230;
+  if (background_full && home->dialog_error[0] != '\0') {
+    card_height += 32;
+  }
   int card_x = (home->width - card_width) / 2;
   int card_y = (home->height - card_height) / 2 + round_int((1.0f - progress) * 10.0f);
   bd_rect card = bd_rect_make(card_x, card_y, card_width, card_height);
@@ -1189,7 +1207,7 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
                               card.y + 50, card.w - 113,
                               alpha_color(palette->ink, progress), title);
 
-  int memory = 132;
+  int memory = -1;
   if (item >= 0 && item < home->count) {
     int running = bd_home_running_index(home, home->entries[item].id);
     if (running >= 0) {
@@ -1214,10 +1232,20 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
                                 card.y + 126, card.w - 48,
                                 alpha_color(palette->ink, progress), choice);
     char meta[128];
-    snprintf(meta, sizeof(meta), "最久未使用 · %d MB", memory);
+    if (memory < 0) {
+      snprintf(meta, sizeof(meta), "最久未使用 · 内存未知");
+    } else {
+      snprintf(meta, sizeof(meta), "最久未使用 · %d MB", memory);
+    }
     bd_gfx_draw_text_ellipsized(gfx, home->fonts.badge13, card.x + 24,
                                 card.y + 156, card.w - 48,
                                 alpha_color(palette->ink3, progress), meta);
+    if (home->dialog_error[0] != '\0') {
+      bd_gfx_draw_text_ellipsized(gfx, home->fonts.body14, card.x + 24,
+                                  card.y + 183, card.w - 48,
+                                  alpha_color(home->accent.accent, progress),
+                                  home->dialog_error);
+    }
   } else {
     char body[256];
     snprintf(body, sizeof(body), "未保存的进度会丢失，%s会被移出后台列表。",
@@ -1226,7 +1254,12 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
                                 card.y + 100, card.w - 48,
                                 alpha_color(palette->ink2, progress), body);
     char meta[128];
-    snprintf(meta, sizeof(meta), "已暂停 · %d MB · 返回桌面后可再次打开", memory);
+    if (memory < 0) {
+      snprintf(meta, sizeof(meta), "已暂停 · 内存未知 · 返回桌面后可再次打开");
+    } else {
+      snprintf(meta, sizeof(meta), "已暂停 · %d MB · 返回桌面后可再次打开",
+               memory);
+    }
     bd_gfx_draw_text_ellipsized(gfx, home->fonts.badge13, card.x + 24,
                                 card.y + 128, card.w - 48,
                                 alpha_color(palette->ink3, progress), meta);

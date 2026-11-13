@@ -16,12 +16,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "brickdesk/sysinfo.h"
 #include "brickdesk/theme.h"
 
 #define BD_SHELL_LINE_MAX 4096
 #define BD_SHELL_FD_MAX 64
 #define BD_SHELL_PENDING_MAX 16
 #define BD_SHELL_PATH_MAX 1024
+#define BD_SHELL_STATUS_MS 5000
+#define BD_SHELL_MEMORY_MS 1000
+#define BD_SHELL_MEMORY_RETRY_MS 5000
 
 typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
@@ -40,7 +44,8 @@ typedef struct shell_pending {
 typedef struct shell_app_runtime {
   bool running;
   bool background;
-  int memory_mb;
+  int memory_mb;           /* process-tree RSS; -1 until sampled / unknown */
+  uint64_t memory_sampled_ms;
   char frame_path[BD_APP_PATH_MAX];
 } shell_app_runtime;
 
@@ -82,6 +87,13 @@ struct bd_shell {
   char pending_launch[BD_APP_ID_MAX];/* launch waiting on an eviction */
   char evict_app[BD_APP_ID_MAX];     /* LRU app to end first */
   char return_app[BD_APP_ID_MAX];    /* return deferred by a launch */
+  bool evict_failed;                 /* terminate failed; wait for user retry */
+
+  char clock[16];
+  int status_battery;
+  bool status_wifi_known;
+  bool status_wifi;
+  uint64_t status_sampled_ms;
 
   bool dirty;
   bool visible;
@@ -626,19 +638,45 @@ static bool session_running_state(bd_session_state state) {
   }
 }
 
-static int shell_app_memory_mb(const bd_app *app) {
-  if (app == NULL) {
-    return 132;
+static int shell_test_memory_fixture(void) {
+  /*
+   * The screenshot harness sets this to keep memory text deterministic.
+   * Production never sets it, so the shell uses the real /proc sample.
+   */
+  const char *value = getenv("BRICKDESK_TEST_MEMORY_MB");
+  if (value == NULL || value[0] == '\0') {
+    return -1;
   }
-  switch (app->category) {
-    case BD_APP_CATEGORY_GAME:
-    case BD_APP_CATEGORY_EMULATOR:
-      return 210;
-    case BD_APP_CATEGORY_SERVICE:
-      return 86;
-    default:
-      return 132;
+  char *end = NULL;
+  long mb = strtol(value, &end, 10);
+  if (end == value || *end != '\0' || mb < 0 || mb > 4096) {
+    return -1;
   }
+  return (int)mb;
+}
+
+static int shell_runtime_memory(shell_app_runtime *runtime,
+                                const bd_session_app_info *info, uint64_t now,
+                                bool panel_open) {
+  if (runtime == NULL || info == NULL) {
+    return -1;
+  }
+  int fixture = shell_test_memory_fixture();
+  if (fixture >= 0) {
+    runtime->memory_mb = fixture;
+    runtime->memory_sampled_ms = now;
+    return fixture;
+  }
+  uint64_t interval =
+      runtime->memory_mb < 0 ? BD_SHELL_MEMORY_RETRY_MS : BD_SHELL_MEMORY_MS;
+  bool due = runtime->memory_sampled_ms == 0 ||
+             (panel_open && now - runtime->memory_sampled_ms >= interval);
+  if (!due) {
+    return runtime->memory_mb;
+  }
+  runtime->memory_mb = bd_sys_process_tree_rss_mb(info->pid);
+  runtime->memory_sampled_ms = now;
+  return runtime->memory_mb;
 }
 
 /*
@@ -690,6 +728,9 @@ static void shell_refresh_running(bd_shell *shell) {
   if (shell->home == NULL) {
     return;
   }
+  bool panel_open =
+      bd_home_quick_open(shell->home) || bd_home_dialog_open(shell->home);
+  uint64_t now = monotonic_ms();
   size_t app_count = shell->apps != NULL ? bd_app_list_count(shell->apps) : 0;
   for (size_t i = 0; i < app_count; ++i) {
     const bd_app *app = bd_app_list_at(shell->apps, i);
@@ -706,15 +747,16 @@ static void shell_refresh_running(bd_shell *shell) {
       const char *path = frame != NULL ? frame : "";
       bool changed = !runtime->running || !runtime->background ||
                      strcmp(runtime->frame_path, path) != 0;
+      int memory = shell_runtime_memory(runtime, &info, now, panel_open);
       if (changed) {
-        int memory = shell_app_memory_mb(app);
         if (bd_home_set_running(shell->home, app->id, frame,
                                 info.stopped_by_session, memory)) {
           runtime->running = true;
-          runtime->memory_mb = memory;
           copy_text(runtime->frame_path, sizeof(runtime->frame_path), path);
           shell->dirty = true;
         }
+      } else {
+        bd_home_set_running_memory(shell->home, app->id, memory);
       }
       runtime->background = true;
       continue;
@@ -739,7 +781,7 @@ static void shell_refresh_running(bd_shell *shell) {
  * once the session has actually dropped that instance.
  */
 static void shell_try_pending_launch(bd_shell *shell) {
-  if (shell->pending_launch[0] == '\0') {
+  if (shell->pending_launch[0] == '\0' || shell->evict_failed) {
     return;
   }
   if (shell->evict_app[0] != '\0') {
@@ -823,9 +865,45 @@ static void shell_process_pending(bd_shell *shell) {
   shell_try_pending_launch(shell);
 }
 
+static void shell_refresh_status(bd_shell *shell, bool force) {
+  if (shell == NULL || shell->home == NULL) {
+    return;
+  }
+  uint64_t now = monotonic_ms();
+  if (!force && now - shell->status_sampled_ms < BD_SHELL_STATUS_MS) {
+    return;
+  }
+  shell->status_sampled_ms = now;
+  int battery = -1;
+  if (!bd_sys_battery_percent(NULL, &battery)) {
+    battery = -1;
+  }
+  bd_wifi_state wifi = bd_sys_wifi_state(NULL);
+  bool known = wifi != BD_WIFI_UNKNOWN;
+  bool connected = wifi == BD_WIFI_CONNECTED;
+  if (!force && battery == shell->status_battery &&
+      known == shell->status_wifi_known && connected == shell->status_wifi) {
+    return;
+  }
+  shell->status_battery = battery;
+  shell->status_wifi_known = known;
+  shell->status_wifi = connected;
+  bd_home_status status;
+  memset(&status, 0, sizeof(status));
+  status.clock = shell->clock;
+  status.wifi_known = known;
+  status.wifi = connected;
+  status.battery_percent = battery;
+  status.max_background =
+      (int)bd_config_get_int(shell->settings, "session.max_background", 3);
+  bd_home_set_status(shell->home, &status);
+  shell->dirty = true;
+}
+
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
   shell_update_home(shell, now);
+  shell_refresh_status(shell, false);
   if (!shell->inputd_connected) {
     bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
   }
@@ -859,6 +937,7 @@ static void shell_handle_dialog_result(bd_shell *shell) {
   if (result == BD_HOME_DIALOG_RESULT_CANCEL) {
     shell->pending_launch[0] = '\0';
     shell->evict_app[0] = '\0';
+    shell->evict_failed = false;
     shell->dialog_app[0] = '\0';
     return;
   }
@@ -872,9 +951,28 @@ static void shell_handle_dialog_result(bd_shell *shell) {
                 bd_session_result_name(terminated));
       }
       if (terminated != BD_SESSION_OK) {
-        shell->pending_launch[0] = '\0';
-        shell->evict_app[0] = '\0';
+        const char *victim = shell->evict_app;
+        bd_session_app_info info;
+        if (bd_session_find(shell->session, shell->evict_app, &info) &&
+            info.name[0] != '\0') {
+          victim = info.name;
+        }
+        char message[160];
+        snprintf(message, sizeof(message), "无法结束「%s」，请重试或取消", victim);
+        shell->evict_failed = true;
+        if (!bd_home_open_background_full(
+                shell->home, shell->pending_launch, shell->evict_app,
+                bd_session_max_background(shell->session))) {
+          shell->pending_launch[0] = '\0';
+          shell->evict_app[0] = '\0';
+          shell->evict_failed = false;
+        } else {
+          bd_home_set_dialog_error(shell->home, message);
+        }
+        shell->dirty = true;
+        return;
       }
+      shell->evict_failed = false;
     }
   } else if (shell->dialog_app[0] != '\0' && shell->session != NULL) {
     bd_session_result terminated =
@@ -1051,6 +1149,7 @@ static bool shell_request_eviction(bd_shell *shell, const char *app_id) {
   }
   copy_text(shell->pending_launch, sizeof(shell->pending_launch), app_id);
   copy_text(shell->evict_app, sizeof(shell->evict_app), eviction.app_id);
+  shell->evict_failed = false;
   bd_home_update(shell->home, shell_now(shell));
   if (!bd_home_open_background_full(shell->home, app_id, eviction.app_id,
                                     bd_session_max_background(shell->session))) {
@@ -1326,6 +1425,9 @@ static void shell_load_apps(bd_shell *shell, const char *apps_dir) {
         (shell_app_runtime *)calloc(count, sizeof(*shell->runtime));
     if (shell->runtime != NULL) {
       shell->runtime_count = count;
+      for (size_t i = 0; i < count; ++i) {
+        shell->runtime[i].memory_mb = -1;
+      }
     }
   }
   if (!shell_set_app_items(shell)) {
@@ -1606,21 +1708,20 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
 
   bd_home_status status;
   memset(&status, 0, sizeof(status));
-  char clock[16] = "22:26";
+  copy_text(shell->clock, sizeof(shell->clock), "22:26");
   if (getenv("BRICKDESK_HEADLESS") == NULL) {
     time_t wall = time(NULL);
     struct tm local;
     if (wall != (time_t)-1 && localtime_r(&wall, &local) != NULL) {
-      strftime(clock, sizeof(clock), "%H:%M", &local);
+      strftime(shell->clock, sizeof(shell->clock), "%H:%M", &local);
     }
   }
   long max_background =
       bd_config_get_int(config->settings, "session.max_background", 3);
-  status.clock = clock;
-  status.wifi = true;
-  status.battery_percent = 82;
+  status.clock = shell->clock;
   status.max_background = (int)max_background;
   bd_home_set_status(shell->home, &status);
+  shell_refresh_status(shell, true);
 
   bd_hotkey_table_load(&shell->hotkeys, config->settings);
   shell->hotkey_table = &shell->hotkeys;
@@ -1740,4 +1841,12 @@ void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms) {
   shell->test_clock = true;
   shell->test_now_ms = time_ms;
   bd_input_state_advance(&shell->test_input, time_ms, local_emit, shell);
+}
+
+bd_session *bd_shell_test_session(bd_shell *shell) {
+  return shell != NULL ? shell->session : NULL;
+}
+
+bool bd_shell_test_launch(bd_shell *shell, const char *app_id) {
+  return shell != NULL ? shell_launch_app(shell, app_id) : false;
 }

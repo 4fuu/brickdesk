@@ -62,8 +62,9 @@ typedef struct bd_home_style {
 
 typedef struct bd_home_status {
   const char *clock;         /* "22:26"; NULL keeps the default */
-  bool wifi;
-  int battery_percent;       /* 0..100 */
+  bool wifi_known;           /* false: wireless state is unknown */
+  bool wifi;                 /* valid only when wifi_known */
+  int battery_percent;       /* 0..100, or -1 when unknown */
   int max_background;        /* quick panel "N / M"; 0 means 3 */
 } bd_home_status;
 
@@ -157,13 +158,19 @@ void bd_home_set_live(bd_home *home, const bd_home_live *live);
 /*
  * Marks an app as running and loads its last frame through the M1-06
  * bd_app_last_frame API.  last_frame_path may be NULL or unreadable; the tile
- * then keeps its cover and still shows the running badge.  memory_mb is the
- * session estimate used by the quick panel.  Re-setting an existing id updates
- * it and moves it to the most-recent end of the quick list.
+ * then keeps its cover and still shows the running badge.  memory_mb is a
+ * sampled process-tree RSS in MiB, or -1 when the sample is unavailable.  A
+ * value of -1 is rendered as "unknown" and is never used for eviction.
+ * Re-setting an existing id updates it and moves it to the most-recent end of
+ * the quick list.
  */
 bool bd_home_set_running(bd_home *home, const char *id,
                          const char *last_frame_path,
                          bool paused, int memory_mb);
+/* Updates the memory reading without changing quick-list order. */
+bool bd_home_set_running_memory(bd_home *home, const char *id, int memory_mb);
+/* Sampled process-tree RSS in MiB, or -1 when unknown / not running. */
+int bd_home_running_memory(const bd_home *home, const char *id);
 void bd_home_clear_running(bd_home *home, const char *id);
 int bd_home_running_count(const bd_home *home);
 
@@ -217,6 +224,9 @@ bool bd_home_open_end_dialog(bd_home *home, const char *id);
  */
 bool bd_home_open_background_full(bd_home *home, const char *pending_id,
                                   const char *victim_id, int max_background);
+/* Keeps the current dialog open and shows a non-fatal action error. */
+void bd_home_set_dialog_error(bd_home *home, const char *message);
+const char *bd_home_dialog_error(const bd_home *home);
 void bd_home_cancel_dialog(bd_home *home);
 bool bd_home_confirm_dialog(bd_home *home);
 bool bd_home_dialog_open(const bd_home *home);

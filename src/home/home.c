@@ -714,10 +714,10 @@ bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style) {
   home->quick_last_x = home->width;
   home->brightness = 70;
   home->volume = 45;
-  home->wifi = true;
   home->bluetooth = false;
-  home->status.wifi = true;
-  home->status.battery_percent = 82;
+  home->status.wifi_known = false;
+  home->status.wifi = false;
+  home->status.battery_percent = -1;
   home->status.max_background = 3;
   copy_text(home->clock, sizeof(home->clock), "22:26");
   home->status.clock = home->clock;
@@ -1232,8 +1232,10 @@ void bd_home_set_status(bd_home *home, const bd_home_status *status) {
   copy_text(home->clock, sizeof(home->clock),
             status->clock != NULL ? status->clock : "22:26");
   home->status.clock = home->clock;
-  home->status.wifi = status->wifi;
-  home->status.battery_percent = clamp_int(status->battery_percent, 0, 100);
+  home->status.wifi_known = status->wifi_known;
+  home->status.wifi = status->wifi_known ? status->wifi : false;
+  home->status.battery_percent =
+      status->battery_percent < 0 ? -1 : clamp_int(status->battery_percent, 0, 100);
   home->status.max_background =
       status->max_background > 0 ? status->max_background : 3;
   if (home->launch == BD_HOME_LAUNCH_OPEN) {
@@ -1299,7 +1301,7 @@ bool bd_home_set_running(bd_home *home, const char *id,
   copy_text(updated.id, sizeof(updated.id), id);
   updated.item_index = item;
   updated.paused = paused;
-  updated.memory_mb = memory_mb > 0 ? memory_mb : 0;
+  updated.memory_mb = memory_mb < 0 ? -1 : memory_mb;
   if (existing < 0) {
     updated.since_ms = home->now_ms;
   }
@@ -1333,6 +1335,36 @@ bool bd_home_set_running(bd_home *home, const char *id,
     damage_quick_panel(home);
   }
   return true;
+}
+
+bool bd_home_set_running_memory(bd_home *home, const char *id, int memory_mb) {
+  if (home == NULL || id == NULL) {
+    return false;
+  }
+  int index = bd_home_running_index(home, id);
+  if (index < 0) {
+    return false;
+  }
+  int value = memory_mb < 0 ? -1 : memory_mb;
+  if (home->running[index].memory_mb == value) {
+    return true;
+  }
+  home->running[index].memory_mb = value;
+  if (home->quick_open || home->quick_anim) {
+    damage_quick_panel(home);
+  }
+  if (home->dialog_open || home->dialog_anim) {
+    bd_home_damage_all(home);
+  }
+  return true;
+}
+
+int bd_home_running_memory(const bd_home *home, const char *id) {
+  if (home == NULL || id == NULL) {
+    return -1;
+  }
+  int index = bd_home_running_index(home, id);
+  return index >= 0 ? home->running[index].memory_mb : -1;
 }
 
 void bd_home_clear_running(bd_home *home, const char *id) {
@@ -1618,6 +1650,7 @@ bool bd_home_open_end_dialog(bd_home *home, const char *id) {
   home->dialog_max_background = 0;
   home->dialog_pending_id[0] = '\0';
   home->dialog_victim_id[0] = '\0';
+  home->dialog_error[0] = '\0';
   home->dialog_from = home->dialog_visible ? bd_home_dialog_progress(home) : 0.0f;
   home->dialog_open = true;
   home->dialog_visible = true;
@@ -1648,6 +1681,7 @@ bool bd_home_open_background_full(bd_home *home, const char *pending_id,
   copy_text(home->dialog_pending_id, sizeof(home->dialog_pending_id),
             pending_id);
   copy_text(home->dialog_victim_id, sizeof(home->dialog_victim_id), victim_id);
+  home->dialog_error[0] = '\0';
   home->dialog_from = home->dialog_visible ? bd_home_dialog_progress(home) : 0.0f;
   home->dialog_open = true;
   home->dialog_visible = true;
@@ -1658,11 +1692,25 @@ bool bd_home_open_background_full(bd_home *home, const char *pending_id,
   return true;
 }
 
+void bd_home_set_dialog_error(bd_home *home, const char *message) {
+  if (home == NULL || !home->dialog_open) {
+    return;
+  }
+  copy_text(home->dialog_error, sizeof(home->dialog_error),
+            message != NULL ? message : "");
+  bd_home_damage_all(home);
+}
+
+const char *bd_home_dialog_error(const bd_home *home) {
+  return home != NULL ? home->dialog_error : "";
+}
+
 void bd_home_cancel_dialog(bd_home *home) {
   if (home == NULL || !home->dialog_open) {
     return;
   }
   home->dialog_result = BD_HOME_DIALOG_RESULT_CANCEL;
+  home->dialog_error[0] = '\0';
   home->dialog_from = bd_home_dialog_progress(home);
   home->dialog_open = false;
   home->dialog_target = false;
@@ -1691,6 +1739,7 @@ bool bd_home_confirm_dialog(bd_home *home) {
     return false;
   }
   home->dialog_result = BD_HOME_DIALOG_RESULT_CONFIRM;
+  home->dialog_error[0] = '\0';
   home->dialog_from = bd_home_dialog_progress(home);
   home->dialog_open = false;
   home->dialog_target = false;
@@ -1756,9 +1805,7 @@ static bool quick_option_toggle(bd_home *home) {
     case 1:
       return quick_adjust(home, 1);
     case 2:
-      home->wifi = !home->wifi;
-      damage_quick_panel(home);
-      return true;
+      return false;
     case 3:
       home->bluetooth = !home->bluetooth;
       damage_quick_panel(home);

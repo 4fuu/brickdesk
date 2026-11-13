@@ -13,6 +13,16 @@
     { "type": "screenshot", "name": "hint_shown" },
     { "type": "key", "key": "select", "action": "up" },
     { "type": "wait", "frames": 15 },
-    { "type": "screenshot", "name": "hint_after_release" }
+    { "type": "screenshot", "name": "hint_after_release" },
+    { "type": "key", "key": "start", "action": "down" },
+    { "type": "key", "key": "start", "action": "up" },
+    { "type": "wait", "frames": 16 },
+    { "type": "screenshot", "name": "quick_hint_hidden" },
+    { "type": "key", "key": "select", "action": "down" },
+    { "type": "wait", "frames": 34 },
+    { "type": "screenshot", "name": "quick_hint_shown" },
+    { "type": "key", "key": "select", "action": "up" },
+    { "type": "wait", "frames": 15 },
+    { "type": "screenshot", "name": "quick_hint_after_release" }
   ]
 }

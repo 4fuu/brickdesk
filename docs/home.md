@@ -71,15 +71,29 @@ frame into it over 420 ms.
 `bd_home_confirm_dialog()` starts the 180 ms close animation and clears the
 running entry when it finishes. The loop sees `BD_HOME_DIALOG_RESULT_CONFIRM`
 and terminates the process through the session. The quick panel lists running
-apps with memory estimates and supports resume and end.
+apps and supports resume and end.
+
+The shell samples each running app's memory from `/proc`: `bd_sys_process_tree_rss_mb()`
+sums `VmRSS` for the root pid and all descendants, so the displayed value is a
+process-tree RSS, not a single-process estimate. `-1` means the tree could not
+be sampled; the panel then shows "内存未知" and the aggregate bar is empty.
+Tests and demos pass explicitly named fixture values; the launch-menu capture
+sets `BRICKDESK_TEST_MEMORY_MB=132` so its screenshot text is deterministic,
+while `tests/shell_quota_test.c` reads the real `/proc` value. A memory reading
+is never an eviction input: `bd_session_suggest_eviction()` chooses the least
+recently backgrounded app.
 
 ## Background quota
 
 When the session already holds `session.max_background` apps, the shell opens
 the "后台已满" choice instead of launching. It names the LRU app and the app
 that would start; cancel keeps both, confirm terminates the LRU process and
-retries the launch once the session drops it. `bd_home_open_background_full()`
-owns the dialog, and `bd_home_take_dialog_result()` reports the choice.
+retries the launch once the session drops it. If termination fails, the dialog
+stays open with an error line, the pending launch is retained and the user can
+retry or cancel; the pending launch is never retried automatically while the
+failure is showing. `bd_home_open_background_full()` owns the dialog,
+`bd_home_set_dialog_error()` reports the failure, and
+`bd_home_take_dialog_result()` reports the choice.
 
 ## Animations
 
@@ -107,7 +121,9 @@ update once before starting an animation.
 - The top bar keeps the "brickdesk" wordmark (16 px), category labels (18 px),
   Wi-Fi and battery status glyphs, the clock (16 px) and the text running count
   (13 px). Only the left four-square project mark was removed; there are no
-  search/gear/avatar buttons.
+  search/gear/avatar buttons. When the platform exposes no battery or wireless
+  interface, the glyph gets a slash and the quick panel says "未知"; the shell
+  never substitutes 82% or an assumed connected state.
 - Type sizes are CSS pixels. The bundled Noto SC subsets report a 1.448 em
   ascent+descent span, so the module loads each face at 1.448× the nominal size.
   13 px is the smallest face used by badges, meta values and keycaps.
@@ -115,6 +131,9 @@ update once before starting an animation.
   gradients. Map this to `ui.blur` in the event loop.
 - The quick panel's "N / M" limit comes from `bd_home_status.max_background`;
   the shell passes `session.max_background` (default 3).
+- The quick panel has no persistent A/X/B footer. The hint bar, including its
+  quick-panel actions, is drawn only while the Select hold action is active and
+  is removed on release.
 - `src/config/schema.c` and `config/brickdesk.ini` default
   `session.max_background` to 3; `ui.blur` defaults to true.
 
@@ -128,8 +147,8 @@ bd_home_style style = {
 };
 bd_home *home = bd_home_create(gfx, &style);
 bd_home_set_items(home, items, count);
-bd_home_set_running(home, id, last_frame_path, paused, mem_mb);
-bd_home_set_status(home, &status);   /* clock, wifi, battery, max background */
+bd_home_set_running(home, id, last_frame_path, paused, mem_mb); /* -1 unknown */
+bd_home_set_status(home, &status);   /* clock, wifi_known/wifi, battery, max */
 
 /* per frame */
 bd_home_update(home, now_ms);
@@ -179,3 +198,15 @@ event, and feeds the dialog result back into the session.
 - Demo covers in `assets/covers/home-*.jpg` are 256x256 crops generated from the
   existing `prototype/bg` reference images (about 70 KiB total).
 - The light top bar is intentionally softer/darker than `v3-home-light.jpg`.
+
+## Plugin tile status
+
+The M2 desktop owned a plugin-rendered tile through `bd_desktop_set_plugin_tile()`.
+M3-B replaced that desktop with `bd_home`, whose wall items currently render
+app covers only; the plugin host still scans and autostarts plugins, but its
+tile is not drawn on the production home. This is a known regression, not a
+plugin-storage change. The restoration path is a custom-draw home item: append
+one item backed by `bd_plugin_tile_draw()`, keep it out of the session launch
+path, and feed it the same `bd_plugin_tile_begin_frame()` damage used by
+`src/app/desktop.c`. It should be restored before the plugin tile is considered
+part of the M3 home surface.

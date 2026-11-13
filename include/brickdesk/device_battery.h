@@ -144,10 +144,13 @@ typedef struct bd_battery_status {
   bd_battery_charge_status status;
 
   /*
-   * True when at least one USB/Mains supply reports online=1.  external_power
-   * is known false only when every external supply has a readable online=0.
-   * If any external supply's online is missing/invalid and none is online,
-   * external_power_known is false rather than guessing "unplugged".
+   * True when at least one USB/Mains supply reports online=1.
+   * external_power is known false only when every external supply has a
+   * readable online=0.  If any external supply's online is missing/invalid and
+   * none is online, external_power_known is false rather than guessing
+   * "unplugged".  The aggregate scans every enumerated node, including nodes
+   * beyond the public supplies[] table; truncation never hides an online
+   * supply.
    */
   bool external_power_known;
   bool external_power;

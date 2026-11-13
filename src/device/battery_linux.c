@@ -684,29 +684,33 @@ static void read_measurements(const char *directory,
   }
 }
 
-static void aggregate_external_power(bd_battery_status *status) {
-  bool any_external = false;
-  bool any_online = false;
-  bool all_known = true;
-  for (unsigned i = 0; i < status->supply_count &&
-                       i < BD_BATTERY_MAX_SUPPLIES;
-       ++i) {
-    const bd_battery_supply *supply = &status->supplies[i];
-    if (supply->type != BD_BATTERY_SUPPLY_USB &&
-        supply->type != BD_BATTERY_SUPPLY_MAINS) {
-      continue;
-    }
-    any_external = true;
-    if (supply->online_known) {
-      if (supply->online) {
-        any_online = true;
-      }
-    } else {
-      all_known = false;
-    }
+typedef struct external_power_scan {
+  bool any_external;
+  bool any_online;
+  bool all_known;
+} external_power_scan;
+
+static void accumulate_external_power(const bd_battery_supply *supply,
+                                      external_power_scan *scan) {
+  if (supply->type != BD_BATTERY_SUPPLY_USB &&
+      supply->type != BD_BATTERY_SUPPLY_MAINS) {
+    return;
   }
-  status->external_power = any_online;
-  status->external_power_known = any_external && (any_online || all_known);
+  scan->any_external = true;
+  if (!supply->online_known) {
+    scan->all_known = false;
+    return;
+  }
+  if (supply->online) {
+    scan->any_online = true;
+  }
+}
+
+static void finish_external_power(bd_battery_status *status,
+                                  const external_power_scan *scan) {
+  status->external_power = scan->any_online;
+  status->external_power_known =
+      scan->any_external && (scan->any_online || scan->all_known);
 }
 
 bd_battery_result bd_battery_read(const bd_battery *battery,
@@ -731,17 +735,34 @@ bd_battery_result bd_battery_read(const bd_battery *battery,
   unsigned copied = status->supply_count < BD_BATTERY_MAX_SUPPLIES
                         ? status->supply_count
                         : BD_BATTERY_MAX_SUPPLIES;
-  for (unsigned i = 0; i < copied; ++i) {
-    if (!read_supply(battery->class_dir, list.items[i], &status->supplies[i],
+  external_power_scan power = {.any_external = false,
+                               .any_online = false,
+                               .all_known = true};
+  for (size_t i = 0; i < list.count; ++i) {
+    bd_battery_supply extra;
+    bd_battery_supply *entry =
+        i < copied ? &status->supplies[i] : &extra;
+    if (!read_supply(battery->class_dir, list.items[i], entry,
                      &status->read_errors)) {
-      bd_battery_set_error(error, BD_BATTERY_ERR_IO,
-                           "power supply name is too long: %s",
-                           list.items[i]);
-      name_list_free(&list);
-      return BD_BATTERY_ERR_IO;
+      if (i < copied) {
+        bd_battery_set_error(error, BD_BATTERY_ERR_IO,
+                             "power supply name is too long: %s",
+                             list.items[i]);
+        name_list_free(&list);
+        return BD_BATTERY_ERR_IO;
+      }
+      /*
+       * A node beyond the public table could not be classified.  Treat it as
+       * potentially external and unknown instead of reporting a false
+       * "unplugged" from the truncated table.
+       */
+      power.any_external = true;
+      power.all_known = false;
+      continue;
     }
+    accumulate_external_power(entry, &power);
   }
-  aggregate_external_power(status);
+  finish_external_power(status, &power);
 
   char selected[BD_BATTERY_NAME_MAX];
   selected[0] = '\0';

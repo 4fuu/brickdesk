@@ -170,10 +170,14 @@ present/online/status，供诊断和“多个供电节点”排查。默认最�
 ### 4.2 外部电源聚合
 
 - 只统计 `type=USB`（含 USB_DCP/CDP/ACA/C/PD/PD_DRP）和 `type=Mains`。
+- **聚合扫描全部枚举节点，包括 `supplies[16]` 之外的节点。** 公开诊断表仍然
+  只保留前 16 项并用 `supplies_truncated` 标记，但截断不能隐藏在线电源，也
+  不能把未知变成 known false。
 - 任一 `online=1` → `external_power_known=true`、`external_power=true`。
 - 所有外部节点的 `online` 都可读且为 0 → known false。
 - 任一外部节点的 `online` 缺失/坏值，且没有其他节点为 1 → known false 是
   不安全的，因此报 unknown。
+- 表外节点无法读取/分类时按“可能外部且 unknown”处理，绝不输出 known false。
 - 不用 `present` 代替 `online`；不用电池 `status` 反推外部电源字段
   （策略层有自己的受限推断，见 5.4）。
 
@@ -559,7 +563,10 @@ ctest --test-dir build-host -R device_battery --output-on-failure
 - 外部电源：单 USB、USB+Mains、任一 online=1、known-off + unknown、
   online 坏值、present 不代替 online、无外部节点。
 - STALE：电池节点删除、type 变为 USB、class 目录删除。
-- 截断：20 个 USB + 1 个电池，selected 在表外仍可读，`supplies_truncated`。
+- 截断：20 个 USB + 1 个电池，selected 在表外仍可读，`supplies_truncated`；
+  表外唯一在线节点、表外 unknown online、全部离线三种公开读 API 回归，
+  并把每种结果喂策略两次：在线→抑制且不建议关机，unknown→SHOW_CRITICAL，
+  全部离线→才允许 PREPARE_SHUTDOWN。
 - 策略：默认/非法配置、阈值边界、迟滞、连续确认、抖动、插电抑制、拔电恢复、
   Charging/Full/Discharging 推断、unknown 事件与退避、关机安全门、
   deadline、时间回退、禁用策略。
@@ -615,7 +622,7 @@ workflow 验证；本 orb 内没有 SDK，只做了独立交叉编译。
 
 ### 8.4 全量宿主测试
 
-同一配置的全量 CTest（2026-11-13）为 35/35 通过。新增的
+同一配置的全量 CTest（2026-11-13，main `f669b08`）为 38/38 通过。新增的
 `device_battery` 和 `device_battery_cli` 均在其中；本模块没有修改
 home/settings/config，全量截图和场景测试仍通过。
 

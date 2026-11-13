@@ -666,6 +666,89 @@ static bd_battery_policy init_policy(bd_battery_policy_config *config) {
   return policy;
 }
 
+static void test_external_power_beyond_public_table(void) {
+  char *root = make_temp_dir();
+  if (!set_supply(root, "axp2202-battery", "type", "Battery\n") ||
+      !set_supply(root, "axp2202-battery", "present", "1\n") ||
+      !set_supply(root, "axp2202-battery", "capacity", "3\n") ||
+      !set_supply(root, "axp2202-battery", "status", "Discharging\n")) {
+    exit(1);
+  }
+  char name[32];
+  for (int i = 0; i < 20; ++i) {
+    snprintf(name, sizeof(name), "usb%02d", i);
+    if (!set_supply(root, name, "type", "USB\n") ||
+        !set_supply(root, name, "online", "0\n")) {
+      exit(1);
+    }
+  }
+
+  bd_battery battery;
+  bd_battery_error error;
+  bd_battery_status status;
+  bd_battery_config config = {.sysfs_root = root};
+  CHECK_RESULT(bd_battery_open(&battery, &config, &error), BD_BATTERY_OK);
+
+  /* The only online supply is the last sorted node, beyond supplies[16]. */
+  if (!set_supply(root, "usb19", "online", "1\n")) {
+    exit(1);
+  }
+  CHECK_RESULT(bd_battery_read(&battery, &status, &error), BD_BATTERY_OK);
+  CHECK(status.supply_count == 21, "supply count %u", status.supply_count);
+  CHECK(status.supplies_truncated, "table must be truncated");
+  CHECK(status.external_power_known && status.external_power,
+        "online node beyond the public table must be aggregated");
+  CHECK(status.capacity_known && status.capacity_percent == 3,
+        "battery capacity");
+
+  bd_battery_policy_output output;
+  bd_battery_policy_config policy_config;
+  bd_battery_policy_config_default(&policy_config);
+  bd_battery_policy policy = init_policy(&policy_config);
+  bd_battery_policy_update(&policy, &status, 1000, &output);
+  bd_battery_policy_update(&policy, &status, 6000, &output);
+  CHECK(output.level == BD_BATTERY_LEVEL_CRITICAL, "critical after 3%%");
+  CHECK(output.suppressed, "online beyond table must suppress");
+  CHECK(!(output.events & BD_BATTERY_EVENT_CRITICAL),
+        "plugged critical must not alert");
+  CHECK(output.recommendation == BD_BATTERY_RECOMMEND_NONE,
+        "plugged critical must not recommend shutdown");
+
+  /* An unknown online beyond the table must make the aggregate unknown. */
+  if (!set_supply(root, "usb19", "online", "bad\n")) {
+    exit(1);
+  }
+  CHECK_RESULT(bd_battery_read(&battery, &status, &error), BD_BATTERY_OK);
+  CHECK(!status.external_power_known,
+        "unknown online beyond the table must not become known false");
+  CHECK(!status.external_power, "unknown external must not be true");
+  CHECK(status.read_errors >= 1, "bad online beyond table must be read");
+
+  policy = init_policy(&policy_config);
+  bd_battery_policy_update(&policy, &status, 1000, &output);
+  bd_battery_policy_update(&policy, &status, 6000, &output);
+  CHECK(output.level == BD_BATTERY_LEVEL_CRITICAL, "critical with unknown ext");
+  CHECK(output.recommendation == BD_BATTERY_RECOMMEND_SHOW_CRITICAL,
+        "unknown external must not prepare shutdown");
+
+  /* All external nodes known offline: only now is shutdown advice allowed. */
+  if (!set_supply(root, "usb19", "online", "0\n")) {
+    exit(1);
+  }
+  CHECK_RESULT(bd_battery_read(&battery, &status, &error), BD_BATTERY_OK);
+  CHECK(status.external_power_known && !status.external_power,
+        "all nodes offline must be known false");
+
+  policy = init_policy(&policy_config);
+  bd_battery_policy_update(&policy, &status, 1000, &output);
+  bd_battery_policy_update(&policy, &status, 6000, &output);
+  CHECK(output.level == BD_BATTERY_LEVEL_CRITICAL, "critical when offline");
+  CHECK(output.recommendation == BD_BATTERY_RECOMMEND_PREPARE_SHUTDOWN,
+        "known offline critical may prepare shutdown");
+
+  remove_tree(root);
+}
+
 static void test_policy_validation(void) {
   bd_battery_policy_config config;
   bd_battery_policy_config_default(&config);
@@ -1073,6 +1156,7 @@ int main(void) {
   test_external_power_aggregation();
   test_stale_and_type_change();
   test_supply_table_truncation();
+  test_external_power_beyond_public_table();
   test_fixture_none();
   test_policy_validation();
   test_policy_levels_and_hysteresis();

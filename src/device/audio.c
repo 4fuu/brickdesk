@@ -345,6 +345,15 @@ static long clamp_long(long value, long minimum, long maximum) {
 
 static long volume_percent_to_raw(const bd_av_audio *audio, int percent) {
   long long span = (long long)audio->volume_max - audio->volume_min;
+  if (span <= 0) {
+    return audio->volume_min;
+  }
+  if (percent <= 0) {
+    return audio->volume_inverted ? audio->volume_max : audio->volume_min;
+  }
+  if (percent >= 100) {
+    return audio->volume_inverted ? audio->volume_min : audio->volume_max;
+  }
   long long offset = ((long long)percent * span + 50) / 100;
   if (audio->volume_inverted) {
     offset = span - offset;
@@ -452,6 +461,13 @@ bd_av_result bd_av_audio_open_with_io(bd_av_audio *audio,
 
   if (mixer_io == NULL) {
     mixer_io = bd_av_mixer_io_default();
+  }
+  bd_av_volume_map map =
+      config == NULL ? BD_AV_VOLUME_MAP_DEFAULT : config->volume_map;
+  if (map != BD_AV_VOLUME_MAP_DEFAULT && map != BD_AV_VOLUME_MAP_INVERTED &&
+      map != BD_AV_VOLUME_MAP_LINEAR) {
+    bd_av_set_error(error, BD_AV_ERR_ARGUMENT, "unknown volume map");
+    return BD_AV_ERR_ARGUMENT;
   }
   audio->internal.mixer_io = mixer_io;
   audio->manual_route = config != NULL && config->manual_route;

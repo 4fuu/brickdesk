@@ -63,6 +63,11 @@ target_link_libraries(bd_device_power_test PRIVATE brickdesk_power brickdesk_war
 target_compile_definitions(bd_device_power_test PRIVATE
   BRICKDESK_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/power")
 
+add_executable(bd_device_battery_test device_battery_test.c)
+target_link_libraries(bd_device_battery_test PRIVATE brickdesk_battery brickdesk_warnings)
+target_compile_definitions(bd_device_battery_test PRIVATE
+  BRICKDESK_BATTERY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery")
+
 add_executable(bd_plugin_fixture plugin_fixture.c)
 target_include_directories(bd_plugin_fixture PRIVATE
   "${PROJECT_SOURCE_DIR}/src/plugin")
@@ -132,6 +137,13 @@ add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
 add_test(NAME device_power COMMAND bd_device_power_test)
+add_test(NAME device_battery COMMAND bd_device_battery_test)
+set_tests_properties(device_battery PROPERTIES TIMEOUT 120)
+add_test(NAME device_battery_cli
+  COMMAND bd-battery --root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery/full")
+set_tests_properties(device_battery_cli PROPERTIES
+  PASS_REGULAR_EXPRESSION "battery.capacity=73"
+  TIMEOUT 60)
 add_test(NAME plugin COMMAND bd_plugin_test)
 set_tests_properties(plugin PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"

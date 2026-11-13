@@ -83,6 +83,7 @@ BIN_BD_INPUT=$(resolve bd-input "$BUILD_DIR/bd-input")
 BIN_CONFIG=$(resolve brickdesk-config "$BUILD_DIR/brickdesk-config")
 BIN_BD_AV=$(resolve bd-av "$BUILD_DIR/bd-av")
 BIN_BD_POWER=$(resolve bd-power "$BUILD_DIR/bd-power")
+BIN_BD_BATTERY=$(resolve bd-battery "$BUILD_DIR/bd-battery")
 BIN_PROBE=$(resolve display_probe "$BUILD_DIR/display_probe" "$BUILD_DIR/bin/display_probe")
 BIN_BENCH=$(resolve bench_render "$BUILD_DIR/bench/bench_render" "$BUILD_DIR/bench_render")
 BIN_DEMO=$(resolve brickdesk-demo "$BUILD_DIR/brickdesk-demo")
@@ -132,6 +133,7 @@ copy_bin "$BIN_BD_INPUT" "$STAGE/payload/bin/bd-input"
 copy_bin "$BIN_CONFIG" "$STAGE/payload/bin/brickdesk-config"
 copy_bin "$BIN_BD_AV" "$STAGE/payload/bin/bd-av"
 copy_bin "$BIN_BD_POWER" "$STAGE/payload/bin/bd-power"
+copy_bin "$BIN_BD_BATTERY" "$STAGE/payload/bin/bd-battery"
 copy_bin "$BIN_PROBE" "$STAGE/payload/bin/display_probe"
 copy_bin "$BIN_BENCH" "$STAGE/payload/bin/bench_render"
 copy_bin "$BIN_DEMO" "$STAGE/payload/bin/brickdesk-demo"
@@ -179,6 +181,9 @@ fi
 if [ -f "$REPO_ROOT/docs/device-power.md" ]; then
     cp "$REPO_ROOT/docs/device-power.md" "$STAGE/docs/device-power.md" || die "cannot copy docs/device-power.md"
 fi
+if [ -f "$REPO_ROOT/docs/device-battery.md" ]; then
+    cp "$REPO_ROOT/docs/device-battery.md" "$STAGE/docs/device-battery.md" || die "cannot copy docs/device-battery.md"
+fi
 
 check_aarch64() {
     # Reject host ELF binaries in a device package. Shell scripts are allowed
@@ -197,8 +202,9 @@ check_aarch64() {
 }
 
 for artifact in "$BIN_BRICKDESK" "$BIN_INPUTD" "$BIN_PERFD" "$BIN_BD_INPUT" \
-    "$BIN_CONFIG" "$BIN_BD_AV" "$BIN_BD_POWER" "$BIN_PROBE" "$BIN_BENCH" \
-    "$BIN_DEMO" "$LIB_MENU" "$LIB_SDL2" "$HELLO_BIN"; do
+    "$BIN_CONFIG" "$BIN_BD_AV" "$BIN_BD_POWER" "$BIN_BD_BATTERY" \
+    "$BIN_PROBE" "$BIN_BENCH" "$BIN_DEMO" "$LIB_MENU" "$LIB_SDL2" \
+    "$HELLO_BIN"; do
     check_aarch64 "$artifact"
 done
 
@@ -210,6 +216,7 @@ for rel in \
     payload/bin/brickdesk-config \
     payload/bin/bd-av \
     payload/bin/bd-power \
+    payload/bin/bd-battery \
     payload/bin/display_probe \
     payload/bin/bench_render \
     payload/bin/brickdesk-demo \
@@ -227,6 +234,7 @@ for rel in \
     payload/apps/brickdesk-demo/brickdesk-demo \
     payload/boot-hook.sh \
     docs/device-power.md \
+    docs/device-battery.md \
     install.sh \
     uninstall.sh; do
     [ -f "$STAGE/$rel" ] || die "package is missing $rel"

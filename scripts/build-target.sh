@@ -110,7 +110,7 @@ if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
     cp -a "$BUILD_DIR/libbrickdesk-menu.so" "$BUILD_DIR/dist/lib/"
 fi
 cp -a "$BUILD_DIR/display_probe" "$BUILD_DIR/dist/bin/"
-for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-power brickdesk-demo; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-power bd-battery brickdesk-demo; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         cp -a "$BUILD_DIR/$binary" "$BUILD_DIR/dist/bin/"
     fi
@@ -135,7 +135,7 @@ CHECK_TARGETS="$BUILD_DIR/display_probe"
 if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
     CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/libbrickdesk-menu.so"
 fi
-for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-power brickdesk-demo; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-power bd-battery brickdesk-demo; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/$binary"
     fi

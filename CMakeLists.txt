@@ -204,6 +204,24 @@ target_link_libraries(brickdesk_power PRIVATE brickdesk_warnings)
 add_executable(bd-power src/device/power_probe_main.c)
 target_link_libraries(bd-power PRIVATE brickdesk_power brickdesk_warnings)
 
+# --- device battery -----------------------------------------------------
+# Read-only power_supply battery/charger view and the UI-independent
+# low-battery policy.  The sysfs root is injectable, so the same code runs on
+# the device and against fixture trees on the host.  It never writes sysfs,
+# PMIC registers or the power state machine; the consumer owns safety actions.
+add_library(brickdesk_battery STATIC
+  src/device/battery.c
+  src/device/battery_linux.c
+)
+target_include_directories(brickdesk_battery
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/device"
+)
+target_link_libraries(brickdesk_battery PRIVATE brickdesk_warnings)
+
+add_executable(bd-battery src/device/battery_probe_main.c)
+target_link_libraries(bd-battery PRIVATE brickdesk_battery brickdesk_warnings)
+
 # --- input --------------------------------------------------------------
 # Keys, hotkey parsing/state machine, evdev and input.ini mapping. Kept free
 # of SDL so brickdesk-inputd and bd-input can run on the device without a

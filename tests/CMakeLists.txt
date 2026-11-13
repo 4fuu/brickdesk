@@ -65,14 +65,25 @@ add_dependencies(bd_plugin_test bd_plugin_fixture bd_hello_plugin)
 add_executable(bd_settings_test settings_test.c)
 target_link_libraries(bd_settings_test PRIVATE brickdesk_settings brickdesk_warnings)
 target_compile_definitions(bd_settings_test PRIVATE
-  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+  BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
+add_dependencies(bd_settings_test bd_plugin_fixture)
 
 add_executable(bd_settings_capture settings_capture.c)
 target_link_libraries(bd_settings_capture PRIVATE brickdesk_settings brickdesk_warnings)
 target_compile_definitions(bd_settings_capture PRIVATE
   BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
-  BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins")
-add_dependencies(bd_settings_capture bd_hello_plugin)
+  BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins"
+  BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
+add_dependencies(bd_settings_capture bd_hello_plugin bd_plugin_fixture)
+
+# Scripted key sequence used to record the review clip; not a CTest.
+add_executable(bd_settings_demo settings_demo.c)
+target_link_libraries(bd_settings_demo PRIVATE brickdesk_settings brickdesk_warnings)
+target_compile_definitions(bd_settings_demo PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+  BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
+add_dependencies(bd_settings_demo bd_plugin_fixture)
 
 if(BRICKDESK_BUILD_HARNESS)
   add_executable(bd_harness

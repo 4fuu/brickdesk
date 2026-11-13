@@ -283,6 +283,64 @@ int main(int argc, char **argv) {
        focus_key(settings, "theme.mode") &&
        bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
        capture(platform, gfx, settings, out_dir, "settings_light", now) && ok;
+  now += 16;
+  (void)bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT); /* dark again */
+  now += 16;
+
+  {
+    char long_dir[2048] = {0};
+    char long_runtime[] = "/tmp/bd-settings-long-XXXXXX";
+    if (sf_make_fixture_plugin(long_dir, sizeof(long_dir), "long") &&
+        mkdtemp(long_runtime) != NULL) {
+      bd_plugin_host_config long_config = host_config;
+      long_config.plugin_dir = long_dir;
+      long_config.runtime_dir = long_runtime;
+      bd_plugin_host *long_host = bd_plugin_host_create(&long_config);
+      bd_plugin *long_plugin = NULL;
+      if (long_host != NULL) {
+        (void)bd_plugin_host_scan(long_host, error, sizeof(error));
+        long_plugin = bd_plugin_host_find(long_host, "com.test.long");
+      }
+      bool long_ready = false;
+      if (long_plugin != NULL) {
+        bd_plugin_activate(long_plugin);
+        uint64_t deadline = sf_now_ms() + 5000;
+        while (sf_now_ms() < deadline) {
+          bd_plugin_host_poll(long_host, 20);
+          if (bd_plugin_ui_settings(long_plugin) != NULL) {
+            long_ready = true;
+            break;
+          }
+        }
+      }
+      if (long_host != NULL && long_ready) {
+        bd_settings_set_plugins(settings, long_host);
+        bool opened = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) &&
+                      focus_key(settings, "!plugin.com.test.long") &&
+                      bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT);
+        for (int i = 0; opened && i < 30; ++i) {
+          bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN);
+        }
+        ok = opened &&
+             capture(platform, gfx, settings, out_dir,
+                     "settings_plugin_long", now) &&
+             ok;
+        bd_settings_set_plugins(settings, NULL);
+      } else {
+        fprintf(stderr, "settings_capture: long plugin not ready\n");
+        ok = false;
+      }
+      if (long_host != NULL) {
+        bd_plugin_host_stop_all(long_host);
+        bd_plugin_host_destroy(long_host);
+      }
+      sf_remove_tree(long_runtime);
+      sf_remove_tree(long_dir);
+    } else {
+      fprintf(stderr, "settings_capture: cannot create long plugin\n");
+      ok = false;
+    }
+  }
 
   bd_settings_destroy(settings);
   if (host != NULL) {

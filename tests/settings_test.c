@@ -350,6 +350,109 @@ static void test_pages(bd_settings *settings, bd_config *config) {
         bd_config_get_int(config, "session.max_background", -1));
 }
 
+static bool wait_for_plugin_long(bd_plugin_host *host, bd_plugin *plugin,
+                                uint64_t timeout_ms) {
+  uint64_t deadline = sf_now_ms() + timeout_ms;
+  while (sf_now_ms() < deadline) {
+    bd_plugin_host_poll(host, 10);
+    if (bd_plugin_ui_settings(plugin) != NULL) {
+      return true;
+    }
+  }
+  return bd_plugin_ui_settings(plugin) != NULL;
+}
+
+static void test_plugin_scroll(bd_platform *platform, bd_gfx *gfx,
+                               bd_settings *settings) {
+  char plugin_dir[2048] = {0};
+  if (!sf_make_fixture_plugin(plugin_dir, sizeof(plugin_dir), "long")) {
+    CHECK(false, "long plugin: create fixture directory");
+    return;
+  }
+  char runtime_template[] = "/tmp/bd-settings-long-runtime-XXXXXX";
+  char *runtime_dir = mkdtemp(runtime_template);
+  if (runtime_dir == NULL) {
+    CHECK(false, "long plugin: create runtime directory");
+    sf_remove_tree(plugin_dir);
+    return;
+  }
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.idle_stop_ms = 0;
+  bd_plugin_host_config host_config;
+  memset(&host_config, 0, sizeof(host_config));
+  host_config.plugin_dir = plugin_dir;
+  host_config.runtime_dir = runtime_dir;
+  host_config.limits = &limits;
+  host_config.display_width = 1024;
+  host_config.display_height = 768;
+  host_config.dark = true;
+  host_config.accent = 0xe07a5f;
+  host_config.locale = "zh-CN";
+  bd_plugin_host *host = bd_plugin_host_create(&host_config);
+  CHECK(host != NULL, "long plugin: host");
+  if (host == NULL) {
+    sf_remove_tree(runtime_dir);
+    sf_remove_tree(plugin_dir);
+    return;
+  }
+  char error[256] = {0};
+  CHECK(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+        "long plugin: scan (%s)", error);
+  bd_plugin *plugin = bd_plugin_host_find(host, "com.test.long");
+  CHECK(plugin != NULL, "long plugin: find");
+  if (plugin == NULL) {
+    bd_plugin_host_destroy(host);
+    sf_remove_tree(runtime_dir);
+    sf_remove_tree(plugin_dir);
+    return;
+  }
+  bd_plugin_activate(plugin);
+  CHECK(wait_for_plugin_long(host, plugin, 5000),
+        "long plugin: settings UI did not arrive");
+  bd_settings_set_plugins(settings, host);
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_PLUGINS),
+        "long plugin: open plugins page");
+  CHECK(focus_row(settings, "!plugin.com.test.long"),
+        "long plugin: focus row");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "long plugin: open settings subpage");
+  CHECK(bd_settings_subpage(settings), "long plugin: subpage open");
+
+  bd_settings_stats stats = bd_settings_get_stats(settings);
+  CHECK(stats.plugin_nodes >= 10, "long plugin: nodes %d", stats.plugin_nodes);
+  int last = stats.plugin_nodes - 1;
+  for (int i = 0; i < stats.plugin_nodes + 4; ++i) {
+    bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN);
+  }
+  stats = bd_settings_get_stats(settings);
+  CHECK(bd_settings_focus(settings) == last, "long plugin: focus %d != %d",
+        bd_settings_focus(settings), last);
+  CHECK(stats.scroll > 0, "long plugin: expected scrolling, got %d",
+        stats.scroll);
+  CHECK(stats.focus_visible, "long plugin: last control is not visible");
+  render(platform, gfx, settings, 6000, true);
+
+  const bd_plugin_ui *ui = bd_plugin_ui_settings(plugin);
+  CHECK(ui != NULL, "long plugin: UI");
+  int generation = bd_plugin_ui_generation(plugin);
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "long plugin: activate last control");
+  uint64_t deadline = sf_now_ms() + 2000;
+  while (sf_now_ms() < deadline &&
+         bd_plugin_ui_generation(plugin) == generation) {
+    bd_plugin_host_poll(host, 10);
+  }
+  CHECK(bd_plugin_ui_generation(plugin) > generation,
+        "long plugin: fixture did not receive ui.activate");
+
+  bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL);
+  bd_settings_set_plugins(settings, NULL);
+  bd_plugin_host_stop_all(host);
+  bd_plugin_host_destroy(host);
+  sf_remove_tree(runtime_dir);
+  sf_remove_tree(plugin_dir);
+}
+
 static void test_reset_and_subpages(bd_platform *platform, bd_gfx *gfx,
                                     bd_settings *settings, bd_config *config) {
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_SYSTEM),
@@ -485,6 +588,7 @@ int main(void) {
   test_focus_damage(platform, gfx, settings);
   test_values(platform, gfx, settings, config, dir, &stub);
   test_pages(settings, config);
+  test_plugin_scroll(platform, gfx, settings);
   test_reset_and_subpages(platform, gfx, settings, config);
 
   bd_settings_destroy(settings);

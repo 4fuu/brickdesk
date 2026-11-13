@@ -112,9 +112,10 @@ The suite includes:
   running tile, return, quick panel, dialog, hint bar and launch frames
 - `settings`: schema-generated rows, value persistence/reload, slider hold
   repeat, two-row focus damage with an exact partial/full match, hotkey
-  conflicts, perf overrides, reset confirm and sub-pages
-- `settings_capture`: 14 screenshots for every category, accent, moved slider,
-  hotkey conflict, plugin settings, confirm dialog and light theme
+  conflicts, perf overrides, long plugin-tree scrolling, reset confirm and
+  sub-pages
+- `settings_capture`: 15 screenshots for every category, accent, moved slider,
+  hotkey conflict, long plugin settings scroll, confirm dialog and light theme
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,

@@ -63,6 +63,9 @@ typedef struct bd_settings_style {
 } bd_settings_style;
 
 typedef struct bd_settings_status {
+  /* Top-bar status.  The page intentionally has no project logo; the back
+   * arrow, title and category are settings chrome, and the right side keeps
+   * the Wi-Fi, battery and clock readouts. */
   const char *clock;       /* "22:26"; NULL or "" hides the clock */
   bool wifi;
   int battery_percent;     /* 0..100; negative hides the battery */
@@ -103,6 +106,9 @@ typedef struct bd_settings_stats {
   int hotkeys;    /* accepted bindings in the loaded hotkeys.ini */
   int conflicts;  /* conflicts reported by the input layer */
   int plugins;    /* plugins discovered by the host */
+  int plugin_nodes; /* focusable nodes in the open plugin settings tree */
+  int scroll;       /* current row or plugin-tree scroll offset */
+  bool focus_visible; /* focused row/node is inside the table viewport */
   bool subpage;   /* a sub-page or dialog is on top of the category page */
   bool hint_visible;
   int focus;

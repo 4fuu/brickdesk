@@ -308,7 +308,23 @@ int bd_settings_row_at_point(const bd_settings *settings, int y) {
   return -1;
 }
 
+static int plugin_tree_height(const bd_settings *settings) {
+  if (settings->plugin_index < 0 ||
+      settings->plugin_index >= settings->plugin_count) {
+    return 0;
+  }
+  const bd_plugin_ui *ui =
+      bd_plugin_ui_settings(settings->plugins[settings->plugin_index]);
+  return bd_plugin_ui_measure(ui, BD_SETTINGS_TABLE_W);
+}
+
 static int max_scroll(const bd_settings *settings) {
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
+    int content = plugin_tree_height(settings);
+    bd_rect table = bd_settings_table_rect(settings);
+    int limit = content + 2 - table.h;
+    return limit > 0 ? limit : 0;
+  }
   int total = 0;
   for (int i = 0; i < settings->row_count; ++i) {
     total += row_height(&settings->rows[i]);
@@ -1176,6 +1192,7 @@ static int collect_plugin_nodes(const bd_plugin_ui *ui, int node, int depth,
 static void rebuild_plugin_nodes(bd_settings *settings) {
   settings->plugin_node_count = 0;
   settings->plugin_node_focus = 0;
+  settings->scroll = 0;
   if (settings->plugin_index < 0 ||
       settings->plugin_index >= settings->plugin_count) {
     return;
@@ -1366,6 +1383,7 @@ void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host) {
        settings->subpage == BD_SETTINGS_SUBPAGE_NONE)) {
     bd_settings_rebuild_rows(settings);
   }
+  clamp_scroll(settings);
   bd_settings_mark_all(settings);
   bd_gfx_damage_all(settings->gfx);
 }
@@ -1376,8 +1394,8 @@ void bd_settings_set_status(bd_settings *settings,
     return;
   }
   if (status != NULL) {
-    settings->status = *status;
-    if (status->clock != settings->clock) {
+  settings->status = *status;
+  if (status->clock != settings->clock) {
       copy_text(settings->clock, sizeof(settings->clock), status->clock);
     }
   } else {
@@ -1508,7 +1526,13 @@ int bd_settings_category_index(const bd_settings *settings) {
 }
 
 int bd_settings_focus(const bd_settings *settings) {
-  return settings != NULL ? settings->focus : 0;
+  if (settings == NULL) {
+    return 0;
+  }
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
+    return settings->plugin_node_focus;
+  }
+  return settings->focus;
 }
 
 int bd_settings_row_count(const bd_settings *settings) {
@@ -1553,9 +1577,33 @@ bd_settings_stats bd_settings_get_stats(const bd_settings *settings) {
   stats.hotkeys = (int)settings->hotkeys.count;
   stats.conflicts = settings->conflict_count;
   stats.plugins = settings->plugin_count;
+  stats.plugin_nodes = settings->plugin_node_count;
+  stats.scroll = settings->scroll;
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
+    if (settings->plugin_index >= 0 &&
+        settings->plugin_index < settings->plugin_count &&
+        settings->plugin_node_count > 0) {
+      const bd_plugin_ui *ui =
+          bd_plugin_ui_settings(settings->plugins[settings->plugin_index]);
+      bd_rect node_rect;
+      bd_rect table = bd_settings_table_rect(settings);
+      int node = settings->plugin_nodes[settings->plugin_node_focus];
+      if (ui != NULL &&
+          bd_plugin_ui_node_rect(ui, node, table.w, &node_rect)) {
+        int top = table.y + node_rect.y - settings->scroll;
+        stats.focus_visible =
+            top >= table.y && top + node_rect.h <= table.y + table.h;
+      }
+    }
+  } else if (settings->focus >= 0 && settings->focus < settings->row_count) {
+    bd_rect table = bd_settings_table_rect(settings);
+    bd_rect row = bd_settings_row_rect(settings, settings->focus);
+    stats.focus_visible =
+        row.y >= table.y && row.y + row.h <= table.y + table.h;
+  }
   stats.subpage = bd_settings_subpage(settings);
   stats.hint_visible = settings->hint_visible;
-  stats.focus = settings->focus;
+  stats.focus = bd_settings_focus(settings);
   stats.category = settings->category;
   return stats;
 }
@@ -1578,8 +1626,27 @@ static bool focus_move(bd_settings *settings, int direction) {
       return false;
     }
     settings->plugin_node_focus = next;
-    bd_settings_mark_all(settings);
-    bd_gfx_damage_rect(settings->gfx, bd_settings_table_rect(settings));
+    bd_rect table = bd_settings_table_rect(settings);
+    if (settings->plugin_index >= 0 &&
+        settings->plugin_index < settings->plugin_count) {
+      const bd_plugin_ui *ui =
+          bd_plugin_ui_settings(settings->plugins[settings->plugin_index]);
+      bd_rect node_rect;
+      int node = settings->plugin_nodes[next];
+      if (ui != NULL &&
+          bd_plugin_ui_node_rect(ui, node, table.w, &node_rect)) {
+        int top = table.y + node_rect.y - settings->scroll;
+        int bottom = top + node_rect.h;
+        if (top < table.y) {
+          settings->scroll -= table.y - top;
+        } else if (bottom > table.y + table.h) {
+          settings->scroll += bottom - (table.y + table.h);
+        }
+        clamp_scroll(settings);
+      }
+    }
+    settings->table_dirty = true;
+    bd_gfx_damage_rect(settings->gfx, table);
     return true;
   }
   if (settings->row_count == 0) {
@@ -1871,13 +1938,7 @@ bd_rect bd_settings_table_rect(const bd_settings *settings) {
   }
   int height = max_height;
   if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
-    int measured = 0;
-    if (settings->plugin_index >= 0 &&
-        settings->plugin_index < settings->plugin_count) {
-      const bd_plugin_ui *ui =
-          bd_plugin_ui_settings(settings->plugins[settings->plugin_index]);
-      measured = bd_plugin_ui_measure(ui, BD_SETTINGS_TABLE_W - 2);
-    }
+    int measured = plugin_tree_height(settings);
     if (measured > 0) {
       height = measured + 2;
       if (height > max_height) {

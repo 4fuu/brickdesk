@@ -16,6 +16,9 @@
 #ifndef BRICKDESK_TEST_CONFIG_DIR
 #define BRICKDESK_TEST_CONFIG_DIR "config"
 #endif
+#ifndef BRICKDESK_TEST_FIXTURE
+#define BRICKDESK_TEST_FIXTURE "bd_plugin_fixture"
+#endif
 
 static inline bool sf_copy_file(const char *source, const char *destination) {
   FILE *input = fopen(source, "rb");
@@ -125,6 +128,79 @@ static inline bool sf_make_config_dir(char *out, size_t out_size,
           file);
     fclose(file);
   }
+  return true;
+}
+
+/*
+ * Creates a throwaway plugin directory whose manifest runs the plugin fixture
+ * in `mode`.  The long mode sends a settings tree taller than one screen so
+ * the settings page must scroll to reach the last control.
+ */
+static inline bool sf_path_join(char *out, size_t out_size, const char *dir,
+                                const char *name) {
+  size_t dir_length = strlen(dir);
+  size_t name_length = strlen(name);
+  if (dir_length + name_length + 1 > out_size) {
+    return false;
+  }
+  memcpy(out, dir, dir_length);
+  memcpy(out + dir_length, name, name_length + 1);
+  return true;
+}
+
+static inline bool sf_make_fixture_plugin(char *out, size_t out_size,
+                                          const char *mode) {
+  char pattern[] = "/tmp/bd-settings-plugin-XXXXXX";
+  char *root = mkdtemp(pattern);
+  if (root == NULL) {
+    return false;
+  }
+  snprintf(out, out_size, "%s", root);
+  char dir[4096];
+  if (!sf_path_join(dir, sizeof(dir), out, "/com.test.long")) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  if (mkdir(dir, 0777) != 0) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  char path[4096];
+  if (!sf_path_join(path, sizeof(path), dir, "/plugin.json")) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  FILE *manifest = fopen(path, "wb");
+  if (manifest == NULL) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  fputs("{\"schema\":1,\"id\":\"com.test.long\",\"name\":\"Long Settings\","
+        "\"version\":\"0.1.0\",\"api\":1,\"runtime\":\"shell\","
+        "\"entry\":[\"run.sh\"],\"capabilities\":[\"tile\",\"settings\"],"
+        "\"tile\":{\"w\":1,\"h\":1,\"refresh_hz\":15},"
+        "\"limits\":{\"memory_mb\":64,\"nofile\":32}}",
+        manifest);
+  fclose(manifest);
+  if (!sf_path_join(path, sizeof(path), dir, "/run.sh")) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  FILE *script = fopen(path, "wb");
+  if (script == NULL) {
+    sf_remove_tree(out);
+    out[0] = '\0';
+    return false;
+  }
+  fprintf(script, "#!/bin/sh\nexec \"%s\" %s \"$@\"\n",
+          BRICKDESK_TEST_FIXTURE, mode);
+  fclose(script);
+  chmod(path, 0755);
   return true;
 }
 

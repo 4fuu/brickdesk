@@ -569,7 +569,7 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
   int node = settings->plugin_node_count > 0
                  ? settings->plugin_nodes[settings->plugin_node_focus]
                  : -1;
-  bd_plugin_ui_draw(ui, gfx, table, &style, node, 0);
+  bd_plugin_ui_draw(ui, gfx, table, &style, node, settings->scroll);
 }
 
 static void draw_empty(const bd_settings *settings, bd_gfx *gfx) {

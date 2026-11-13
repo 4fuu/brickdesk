@@ -105,12 +105,86 @@ static void paint_frame(bd_plugin_frame_header *header, uint32_t seq) {
   __atomic_store_n(&header->seq, seq, __ATOMIC_RELEASE);
 }
 
+typedef struct fixture_state {
+  bd_plugin_client *client;
+  bool activated;
+} fixture_state;
+
+static const char *LONG_TILE_JSON =
+    "{\"type\":\"column\",\"padding\":12,\"gap\":6,\"children\":["
+    "{\"type\":\"row\",\"gap\":8,\"children\":["
+    "{\"type\":\"icon\",\"name\":\"long\"},"
+    "{\"type\":\"text\",\"text\":\"Long fixture\",\"style\":\"title\"}]},"
+    "{\"type\":\"text\",\"text\":\"many settings\",\"style\":\"caption\"}]}";
+
+static bool long_settings_json(char *out, size_t size, bool activated) {
+  int used = snprintf(
+      out, size,
+      "{\"type\":\"column\",\"padding\":16,\"gap\":10,\"children\":["
+      "{\"type\":\"text\",\"text\":\"Long fixture settings\",\"style\":\"title\"},");
+  if (used < 0) {
+    return false;
+  }
+  for (int i = 0; i < 16; ++i) {
+    int written;
+    if (i == 15) {
+      written = snprintf(out + used, size - (size_t)used,
+                         "{\"type\":\"button\",\"id\":\"last_button\","
+                         "\"label\":\"Apply last\",\"action\":\"apply_last\"}");
+    } else if (i % 3 == 0) {
+      written = snprintf(out + used, size - (size_t)used,
+                         "{\"type\":\"toggle\",\"id\":\"ctl_%d\","
+                         "\"label\":\"Toggle %d\",\"value\":true},",
+                         i, i);
+    } else if (i % 3 == 1) {
+      written = snprintf(out + used, size - (size_t)used,
+                         "{\"type\":\"slider\",\"id\":\"ctl_%d\","
+                         "\"label\":\"Slider %d\",\"value\":5,"
+                         "\"min\":0,\"max\":10,\"step\":1},",
+                         i, i);
+    } else {
+      written = snprintf(out + used, size - (size_t)used,
+                         "{\"type\":\"select\",\"id\":\"ctl_%d\","
+                         "\"label\":\"Select %d\",\"value\":\"a\","
+                         "\"options\":[\"a\",\"b\"]},",
+                         i, i);
+    }
+    if (written < 0 || (size_t)written >= size - (size_t)used) {
+      return false;
+    }
+    used += written;
+  }
+  if (activated) {
+    int written = snprintf(
+        out + used, size - (size_t)used,
+        ",{\"type\":\"text\",\"text\":\"Last control activated\"}");
+    if (written < 0 || (size_t)written >= size - (size_t)used) {
+      return false;
+    }
+    used += written;
+  }
+  int written = snprintf(out + used, size - (size_t)used, "]}");
+  return written > 0 && (size_t)written < size - (size_t)used;
+}
+
+static bool set_long_ui(bd_plugin_client *client, bool activated) {
+  char json[16384];
+  if (client == NULL || !long_settings_json(json, sizeof(json), activated)) {
+    return false;
+  }
+  return bd_plugin_client_set_ui(client, LONG_TILE_JSON, json);
+}
+
 static void on_event(void *user, const char *type, const char *params_json) {
-  (void)user;
+  fixture_state *state = (fixture_state *)user;
+  if (strcmp(type, "ui.activate") == 0 && state != NULL &&
+      strstr(params_json, "\"node\":\"last_button\"") != NULL) {
+    state->activated = true;
+    set_long_ui(state->client, true);
+  }
   if (strcmp(type, "settings.changed") != 0) {
     return;
   }
-  (void)params_json;
 }
 
 static int run_client_mode(const char *mode) {
@@ -121,6 +195,9 @@ static int run_client_mode(const char *mode) {
     bd_plugin_client_destroy(client);
     return 1;
   }
+  fixture_state state;
+  memset(&state, 0, sizeof(state));
+  state.client = client;
   if (strcmp(mode, "crash") == 0) {
     _exit(3);
   }
@@ -153,23 +230,27 @@ static int run_client_mode(const char *mode) {
       paint_frame(header, 10);
       bd_plugin_client_tile_frame(client, 10);
     }
-    bd_plugin_client_set_ui(
-        client,
-        "{\"type\":\"column\",\"padding\":12,\"gap\":6,\"children\":["
-        "{\"type\":\"row\",\"gap\":8,\"children\":["
-        "{\"type\":\"icon\",\"name\":\"fixture\"},"
-        "{\"type\":\"text\",\"text\":\"Fixture\",\"style\":\"title\"}]},"
-        "{\"type\":\"text\",\"text\":\"declarative tile\",\"style\":\"caption\"},"
-        "{\"type\":\"progress\",\"value\":50,\"max\":100}]}",
-        "{\"type\":\"column\",\"padding\":16,\"gap\":10,\"children\":["
-        "{\"type\":\"text\",\"text\":\"Fixture settings\",\"style\":\"title\"},"
-        "{\"type\":\"toggle\",\"id\":\"show_meta\",\"label\":\"Show meta\","
-        "\"value\":true},"
-        "{\"type\":\"slider\",\"id\":\"pace\",\"label\":\"Pace\",\"value\":3,"
-        "\"min\":1,\"max\":5,\"step\":1},"
-        "{\"type\":\"select\",\"id\":\"mode\",\"label\":\"Mode\","
-        "\"value\":\"calm\",\"options\":[\"calm\",\"bright\"]}]}");
-    bd_plugin_client_set_event_handler(client, on_event, NULL);
+    if (strcmp(mode, "long") == 0) {
+      (void)set_long_ui(client, false);
+    } else {
+      bd_plugin_client_set_ui(
+          client,
+          "{\"type\":\"column\",\"padding\":12,\"gap\":6,\"children\":["
+          "{\"type\":\"row\",\"gap\":8,\"children\":["
+          "{\"type\":\"icon\",\"name\":\"fixture\"},"
+          "{\"type\":\"text\",\"text\":\"Fixture\",\"style\":\"title\"}]},"
+          "{\"type\":\"text\",\"text\":\"declarative tile\",\"style\":\"caption\"},"
+          "{\"type\":\"progress\",\"value\":50,\"max\":100}]}",
+          "{\"type\":\"column\",\"padding\":16,\"gap\":10,\"children\":["
+          "{\"type\":\"text\",\"text\":\"Fixture settings\",\"style\":\"title\"},"
+          "{\"type\":\"toggle\",\"id\":\"show_meta\",\"label\":\"Show meta\","
+          "\"value\":true},"
+          "{\"type\":\"slider\",\"id\":\"pace\",\"label\":\"Pace\",\"value\":3,"
+          "\"min\":1,\"max\":5,\"step\":1},"
+          "{\"type\":\"select\",\"id\":\"mode\",\"label\":\"Mode\","
+          "\"value\":\"calm\",\"options\":[\"calm\",\"bright\"]}]}");
+    }
+    bd_plugin_client_set_event_handler(client, on_event, &state);
     if (header != NULL) {
       munmap(header, size);
     }
@@ -240,7 +321,7 @@ static int run_spin(void) {
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    fprintf(stderr, "usage: bd_plugin_fixture good|silent|crash|badui|spin|alloc\n");
+    fprintf(stderr, "usage: bd_plugin_fixture good|long|silent|crash|badui|spin|alloc\n");
     return 2;
   }
   const char *mode = argv[1];

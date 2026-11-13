@@ -23,7 +23,10 @@ The page is designed at 1024x768 and follows the v3 settings reference
 (`docs/research/img/v3-settings.jpg`), with the later square-corner direction:
 
 - top bar: back chevron at x=34, serif `设置` at x=64, category name after it,
-  Wi-Fi/battery/clock on the right; no search/settings/avatar icons.
+  and Wi-Fi/battery/clock readouts on the right. The settings page never draws
+  a project logo; the back arrow, title and category icons are settings chrome.
+  There are no search/settings/avatar icons, and the page is full-screen, not a
+  side panel.
 - left category list at x=28, first row at y=92, 43 px pitch. The selected row
   has a 3x22 px accent bar and an accent label; icons are drawn with renderer
   primitives.
@@ -102,9 +105,11 @@ The plugin page uses `bd_plugin_ui_settings()` and `bd_plugin_ui_draw()`. It
 calls `bd_plugin_activate()` and `bd_plugin_set_settings_open(true)` on open,
 focuses toggle/slider/select/button nodes with ↑↓, sends `ui.activate` on A,
 and closes the settings page on B. `bd_plugin_ui_measure()` sizes the sub-page
-frame to the declared tree (capped at the table viewport). Plugin controls keep
-the host renderer's own radii; only the settings frame follows the square
-direction.
+frame to the declared tree (capped at the table viewport), and
+`bd_plugin_ui_node_rect()` drives focus-following scroll: moving to a control
+outside the table scrolls the tree until the whole control is visible. Plugin
+controls keep the host renderer's own radii; only the settings frame follows
+the square direction.
 
 ## Values and persistence
 
@@ -204,11 +209,13 @@ settings object before the plugin host and the config it points at.
   interval), `local.ini` contents and reload, brightness through the stub,
   hotkey conflict counts, perf/app profile cycling, background limits, reset
   confirm/cancel, custom accent sub-page, hint strip damage and B navigation.
-- `settings_capture`: 14 screenshots (`settings_appearance`, `_hint`, `_sound`,
+  A long 16-control plugin tree verifies that focus-following scroll reaches
+  and activates the last control.
+- `settings_capture`: 15 screenshots (`settings_appearance`, `_hint`, `_sound`,
   `_display`, `_brightness`, `_keys`, `_performance`, `_background`,
-  `_plugins`, `_plugin_settings`, `_system`, `_confirm`, `_accent_coral`,
-  `_light`). They are compared with `tools/imagediff.py` in tolerance mode
-  (max delta 2, SSIM 0.9995), like the other screenshot tests.
+  `_plugins`, `_plugin_settings`, `_plugin_long`, `_system`, `_confirm`,
+  `_accent_coral`, `_light`). They are compared with `tools/imagediff.py` in
+  tolerance mode (max delta 2, SSIM 0.9995), like the other screenshot tests.
 
 Run:
 
@@ -235,12 +242,15 @@ scripts/update-baselines.sh settings
   the reference's static swatch strip; the custom colour has no automatic
   contrast guard.
 - hotkey editing is not implemented; the list and conflicts are read-only.
-- the plugin sub-page renders the host's tree and can send `ui.activate`, but
-  does not persist plugin settings (the host has no settings storage yet).
+- the plugin sub-page renders the host's tree, scrolls to the focused node and
+  can send `ui.activate`, but does not persist plugin settings (the host has no
+  settings storage yet).
 - `perf.global_profile` is stored but perfd does not consume it; the settings
   page does not talk to the perfd socket.
 - brightness/volume/mute use the stub; real backlight/mixer backends arrive in
   M4. The module is not wired into `src/main.c`, and nothing was validated on
   GE8300 hardware. Device items: real backlight/mixer behaviour, plugin start
   latency, the 13/14 px text at 3.95 inches, scroll behaviour with 64 hotkeys,
-  and the reset write cost (all static keys) on the SD card.
+  and the reset write cost (all static keys) on the SD card. Plugin settings
+  scrolling is covered on the host with a 16-control tree; deeply nested row
+  layouts are the remaining edge case.

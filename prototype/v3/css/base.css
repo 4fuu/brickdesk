@@ -1,0 +1,76 @@
+/* brickdesk v3 — stage, ambient, wall viewport, edges */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+button { font: inherit; color: inherit; background: none; border: 0; }
+
+html, body {
+  background: #0b0a09;
+  color: #f3ede2;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 18px 24px;
+}
+
+#fit { position: relative; flex: none; }
+
+.stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1024px;
+  height: 768px;
+  overflow: hidden;
+  transform-origin: 0 0;
+  background: var(--bg);
+  color: var(--ink);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  isolation: isolate;
+}
+.stage.instant * { transition: none !important; animation: none !important; }
+
+.screen { position: absolute; inset: 0; }
+.screen[hidden] { display: none; }
+
+/* ---------- ambient: one pre-baked photo, flat veil, no real blur ---------- */
+.ambient, .ambient-veil { position: absolute; inset: 0; pointer-events: none; }
+.ambient { z-index: 0; background: var(--bg-deep); }
+.ambient-layer {
+  position: absolute;
+  inset: -2%;
+  background-position: center;
+  background-size: cover;
+  opacity: 0;
+  transform: scale(1.02);
+  transition: opacity 260ms var(--ease-out);
+}
+.ambient-layer.on { opacity: 1; }
+.ambient-veil { z-index: 1; background: var(--bg); opacity: var(--ambient-veil); }
+.stage[data-bg="solid"] .ambient-layer { opacity: 0 !important; }
+.stage[data-bg="solid"] .ambient-veil { opacity: 1; }
+
+/* ---------- wall viewport ---------- */
+#view { position: absolute; inset: 0; z-index: 2; }
+.wall-view { position: absolute; inset: 0; overflow: hidden; }
+.wall {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 767px;
+  will-change: transform;
+  transition: transform var(--t-wall) var(--ease-out);
+}
+
+/* ---------- edge falloff ---------- */
+.edge { position: absolute; z-index: 5; pointer-events: none; }
+.edge-l { left: 0; top: 0; bottom: 0; width: 116px; background: linear-gradient(90deg, rgba(0, 0, 0, .52), transparent); }
+.edge-r { right: 0; top: 0; bottom: 0; width: 116px; background: linear-gradient(270deg, rgba(0, 0, 0, .52), transparent); }
+.edge-b { left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(0deg, rgba(0, 0, 0, .26), transparent); }

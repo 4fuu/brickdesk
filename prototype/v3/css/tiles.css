@@ -1,0 +1,140 @@
+/* brickdesk v3 — tiles, shade, badge, cover copy, running state */
+
+/* ---------- tile ---------- */
+.tile {
+  position: absolute;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+  cursor: default;
+  contain: paint;
+  transition: opacity var(--t-micro) var(--ease-out), transform 180ms var(--ease-out);
+}
+.tile.off { opacity: .26; }
+.tile.f { z-index: 2; }
+.tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-micro) var(--ease-out);
+}
+.tile.f::after { opacity: 1; }
+.tile.closing { opacity: 0; transform: scale(.9); transition: opacity 180ms ease-in, transform 180ms ease-in; }
+.stage.noanim * { transition: none !important; animation: none !important; }
+
+.art, .art img, .mat, .shade { position: absolute; inset: 0; }
+.art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mat {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--mat) 88%, white 12%), var(--mat));
+}
+.glyph {
+  font-family: var(--mono);
+  font-size: 46px;
+  line-height: 1;
+  color: rgba(255, 250, 242, .68);
+  letter-spacing: -.03em;
+}
+.tile[data-span="1x1"] .glyph { font-size: 30px; }
+
+.shade {
+  background: linear-gradient(180deg, var(--tile-shade-a), var(--tile-shade-b));
+  transition: opacity var(--t-micro) var(--ease-out);
+}
+.tile.f .shade { opacity: 0; }
+
+/* background app: last frame stays on the tile, quietly marked */
+.tile.running .art img { filter: saturate(.92) brightness(.9); }
+.tile.running .copy, .tile.running .live-body { display: none !important; }
+.tile.running .badge { left: auto; right: 12px; background: rgba(10, 9, 12, .62); color: var(--cover-ink); }
+.tile.running .badge .dot { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent); }
+.tile.running .shade { background: linear-gradient(180deg, rgba(9, 8, 11, .26), rgba(9, 8, 11, .54)); }
+.tile.running.f .shade { opacity: .22; }
+
+/* ---------- badge and cover text ---------- */
+.badge {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  height: 20px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 4px;
+  background: rgba(10, 9, 12, .44);
+  color: rgba(255, 249, 241, .82);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.badge .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.tile.row0 .badge { top: 80px; }
+
+.copy {
+  position: absolute;
+  z-index: 4;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+.tcopy {
+  color: var(--cover-ink);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -.01em;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .42);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.tsub {
+  color: var(--cover-ink-2);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.32;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .38);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile[data-span="1x1"] .tcopy { font-size: 18px; }
+.tile[data-span="1x1"] .tsub { display: none; }
+.tile[data-span="1x2"] .tcopy,
+.tile[data-span="2x1"] .tcopy { font-size: 22px; }
+.tile[data-span="2x2"] .tcopy { font-size: 25px; }
+.tile[data-span="3x1"] .tcopy { font-size: 23px; }
+.tile[data-span="3x2"] .tcopy { font-size: 31px; }
+.tile[data-span="2x2"] .tsub,
+.tile[data-span="3x2"] .tsub { font-size: 15px; }
+.tile[data-span="1x2"] .tsub,
+.tile[data-span="3x2"] .tsub {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+

@@ -1,0 +1,74 @@
+/* brickdesk v3 — focused now-playing tile */
+
+/* ---------- now-playing tile ---------- */
+.live-body {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  padding: 16px;
+  display: none;
+  flex-direction: column;
+  color: var(--cover-ink);
+}
+.tile.f.live .live-body { display: flex; }
+.tile.f.live .copy { display: none; }
+
+.live-top { margin-top: 34px; min-width: 0; }
+.live-title {
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -.01em;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, .42);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-artist {
+  margin-top: 3px;
+  color: var(--cover-ink-2);
+  font-size: 14px;
+  font-weight: 500;
+}
+.live-lyrics {
+  margin-top: auto;
+  margin-bottom: 58px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--serif);
+  font-weight: 500;
+  line-height: 1.34;
+  letter-spacing: .01em;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, .48);
+}
+.ly-prev, .ly-next { font-size: 17px; color: rgba(255, 249, 241, .34); }
+.ly-now { font-size: 22px; color: rgba(255, 249, 241, .96); }
+.live-bottom { position: absolute; left: 16px; right: 16px; bottom: 14px; }
+.live-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .22);
+  overflow: hidden;
+}
+.live-bar i { display: block; height: 100%; background: var(--accent); }
+.live-row {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: rgba(255, 249, 241, .56);
+  font-size: 11px;
+  font-weight: 500;
+}
+.live-row .times { display: flex; gap: 10px; }
+.live-play {
+  width: 26px;
+  height: 26px;
+  margin-top: -4px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .32);
+  border-radius: 50%;
+}
+

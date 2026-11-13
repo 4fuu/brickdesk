@@ -1,0 +1,122 @@
+/* brickdesk v3 — launch/restore animation, app frame, end-process dialog */
+
+/* ---------- launch: one textured quad from tile to screen ---------- */
+.launch-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  overflow: hidden;
+  pointer-events: none;
+}
+.launch-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .46);
+}
+.launch-card {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #000;
+  box-shadow: 0 30px 80px -40px rgba(0, 0, 0, .7);
+  will-change: left, top, width, height, border-radius;
+  transition:
+    left 420ms cubic-bezier(.22, 1, .36, 1),
+    top 420ms cubic-bezier(.22, 1, .36, 1),
+    width 420ms cubic-bezier(.22, 1, .36, 1),
+    height 420ms cubic-bezier(.22, 1, .36, 1),
+    border-radius 420ms cubic-bezier(.22, 1, .36, 1);
+}
+.launch-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.launch-card .launch-base { position: absolute; inset: 0; }
+.launch-card .launch-frame {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 180ms var(--ease-out);
+}
+.launch-card.show-frame .launch-frame { opacity: 1; }
+.launch-layer[hidden] { display: none; }
+.launch-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--focus-ring);
+  border-radius: inherit;
+  transition: opacity 180ms var(--ease-out);
+  pointer-events: none;
+}
+.launch-card.expanded .launch-ring { opacity: 0; }
+.launch-layer.freeze .launch-card { transition: none; }
+
+/* ---------- simulated full-screen program ---------- */
+#appview {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: #000;
+  overflow: hidden;
+}
+#appview[hidden] { display: none; }
+#appview img.frame { width: 100%; height: 100%; object-fit: cover; display: block; }
+#appview .app-dim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .12), transparent 26%, transparent 72%, rgba(0, 0, 0, .18));
+  pointer-events: none;
+}
+#appview .app-tip {
+  position: absolute;
+  left: 26px;
+  bottom: 20px;
+  color: rgba(255, 249, 241, .52);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .03em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+
+/* ---------- end-process dialog ---------- */
+.dialog-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, .48);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-out);
+}
+.dialog-layer.on { opacity: 1; pointer-events: auto; }
+.dialog-card {
+  width: 500px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  transform: translate3d(0, 10px, 0);
+  transition: transform 180ms var(--ease-out);
+}
+.dialog-layer.on .dialog-card { transform: none; }
+.dialog-head { display: flex; align-items: center; gap: 13px; }
+.dialog-thumb { width: 52px; height: 52px; border-radius: 7px; object-fit: cover; flex: none; background: var(--surface-3); }
+.dialog-head h3 { font-family: var(--serif); font-size: 27px; font-weight: 500; line-height: 1.2; letter-spacing: .01em; }
+.dialog-body { margin-top: 12px; color: var(--ink-2); font-size: 15px; line-height: 1.55; }
+.dialog-meta { margin-top: 10px; color: var(--ink-3); font-size: 12px; }
+.dialog-actions { margin-top: 22px; display: flex; justify-content: flex-end; gap: 9px; }
+.dialog-btn {
+  min-width: 108px;
+  height: 44px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.dialog-btn.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.dialog-btn.f { outline: 2px solid var(--ink); outline-offset: 2px; }

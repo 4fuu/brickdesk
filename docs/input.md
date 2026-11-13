@@ -156,6 +156,8 @@ Client to daemon:
 {"cmd":"grab"}
 {"cmd":"ungrab"}
 {"cmd":"release_all"}
+{"cmd":"set_scope","scope":"app:org.libretro.retroarch"}
+{"cmd":"reload"}
 {"cmd":"ping"}
 ```
 
@@ -168,6 +170,8 @@ Daemon to client:
 {"type":"switch","switch":"headphone","value":1,"source":"gpio-keys","time_ms":1236}
 {"type":"grab","active":true,"pending":false,"forced":false}
 {"type":"release_all","time_ms":1237}
+{"type":"scope","scope":"app:org.libretro.retroarch"}
+{"type":"reloaded"}
 {"type":"device","action":"added","device":"TrimUI Gamepad","path":"/dev/input/event2","grabbed":false,"time_ms":1238}
 {"type":"device","action":"removed","device":"TrimUI Gamepad","path":"/dev/input/event2","reason":"hangup","time_ms":1239}
 {"type":"warning","message":"hotplug_grab_failed","device":"/dev/input/event5","error":"Device or resource busy","time_ms":1240}
@@ -190,6 +194,14 @@ Daemon to client:
 - `switch` names: `headphone`, `tablet`, `lid`, or a numeric code.
   `SW_HEADPHONE_INSERT` keeps using the existing `switch` line; no separate
   audio backend or message is involved.
+- `set_scope` replaces the daemon's hotkey context.  Every device's input state
+  is released and re-armed with the new scope, then `suppress` bindings are
+  recomputed.  The daemon echoes `scope` so a reconnecting client can confirm
+  the active context.
+- `reload` re-reads `config/` and `local.ini`, reloads `hotkeys.ini` and
+  `input.ini`, re-arms every device and recomputes `suppress`.  Errors are
+  returned as `{"type":"error","cmd":"reload","error":"..."}`; success sends
+  `{"type":"reloaded"}`.
 
 ### 3.3 Device loss and the FIFO test backend
 
@@ -342,15 +354,37 @@ normal action dispatcher. `action_id` selects a declared menu entry (sent as
 (sent as `hotkey` with `pressed`). If the plugin is stopped, the binding starts
 it and shows a startup notice; the event is not replayed after handshake.
 
+### 6.4 设置页重绑定
+
+设置页“按键”分类中的每个 `[hotkey.<id>]` 现在都是可操作行。按 A 打开编辑页：
+
+- “组合键”：按 A 开始录制，按下目标组合键后全部松开即写入
+  `hotkey.<id>.combo`；B 取消。录制会绕过 inputd 的热键匹配，已绑定的组合键
+  不会在录制时触发动作。
+- 冲突校验：与其它绑定完全相同的组合键（按键顺序不同也算）会被拒绝并显示
+  重复的绑定 id，不会写入 `local.ini`。
+- “作用域”：左右切换 `global`、`mode:desktop`、`mode:game` 和已安装应用的
+  `app:<id>`，写入 `hotkey.<id>.scope`。
+- “独占输入”：切换 `hotkey.<id>.suppress`；开启后由 inputd grab 物理设备并
+  经 uinput 转发，只有该绑定使用的键被抑制。
+- 离开设置页时桌面重新加载 `hotkeys.ini`/`local.ini` 并向 inputd 发送
+  `reload`，新绑定立即生效。
+
 ## 7. Known deviations / device checks
 
-- `suppress=true` (per-binding grab + uinput forwarding) is not implemented.
-  Only the explicit menu `grab`/`ungrab` path exists.
-- `scope=app:`/`mode:` is parsed and conflict-checked but inputd activates
-  global scope only; there is no session context yet.
-- `uinput` is not created by inputd. Any uinput-created device that appears in
-  `/dev/input` is read like a normal device; `--replay` and the FIFO backend
-  cover host testing.
+- `suppress=true` creates one uinput mirror per grabbed device.  The mirror
+  forwards `EV_KEY`/`EV_ABS`/`EV_SW`; force feedback, LED and repeat (`value=2`)
+  events are not mirrored yet.  If `/dev/uinput` cannot be opened the daemon
+  leaves the physical device ungrabbed and logs one error instead of stealing
+  input without a replacement node.
+- `scope=app:`/`mode:` is active: the shell sends the current context with
+  inputd's `set_scope` command (`mode:desktop`, `mode:game`, `app:<id>`).
+  `mode:game` covers every `app:<id>` context.  `set_scope` and `reload` are
+  daemon commands; the shell sends `reload` after leaving the hotkey editor so
+  a new binding takes effect without restarting inputd.
+- `uinput`-created devices appear in `/dev/input` like any other device and are
+  read normally by the daemon.  The mirror is named `brickdesk <source name>`;
+  its device ids copy the physical node.
 - Hotplug and fd-loss recovery are implemented in the daemon, but real USB
   removal/reinsert, `udev` timing, suspend/resume fd invalidation and
   `EVIOCGRAB` against a running game still need hardware confirmation.

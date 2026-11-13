@@ -81,6 +81,8 @@ static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
     category = "自定义";
   } else if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
     category = "插件";
+  } else if (settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY) {
+    category = "热键";
   }
   bd_gfx_draw_text(gfx, settings->fonts.value, 64 + title_width + 18, 73,
                    palette->ink2, category);
@@ -249,6 +251,9 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
       title = manifest != NULL ? manifest->name : "插件设置";
     }
     subtitle = "插件设置 · 由插件声明";
+  } else if (settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY) {
+    title = "热键绑定";
+    subtitle = "录制组合键、选择作用域与独占输入";
   }
   bd_gfx_draw_text_ellipsized(gfx, settings->fonts.serif34,
                               BD_SETTINGS_TABLE_X, title_baseline,
@@ -664,6 +669,12 @@ static const char *page_hint(const bd_settings *settings) {
   }
   if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
     return "↑↓ 移动 · A 激活控件 · B 返回插件列表";
+  }
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY) {
+    if (settings->capture_active) {
+      return "按下组合键 · B 取消";
+    }
+    return "↑↓ 移动 · A 录制组合键 · ←→ 改值 · B 返回";
   }
   return BD_SETTINGS_PAGES[settings->category].hint;
 }

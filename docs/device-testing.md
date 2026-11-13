@@ -252,6 +252,15 @@ adb shell 'ls -l /tmp/trimui_inputd/ 2>/dev/null'
 - F1/F2/Home：分别配置为 screenshot/settings/quick/recent 和一个应用 ID，
   确认动作和启动都正确；`/tmp/trimui_inputd/input_dpad_to_joystick` 与
   `turbo_*` 文件随设置出现/消失。
+- 热键编辑：在设置页“按键”里把 `hotkey.menu` 重录为 `Menu`/`Y`，确认
+  `local.ini` 写入 `combo`，退出设置后新组合键立即生效；录一个已绑定的
+  `Select`，确认显示重复错误且 `local.ini` 不变。
+- 作用域：把绑定设为 `mode:desktop`，确认桌面生效、前台应用不触发；设为
+  `mode:game` 或 `app:<id>`，确认只在应用前台触发，回桌面后恢复。
+- 独占输入：把 `hotkey.menu.suppress` 设为开，确认 `/dev/input` 出现
+  `brickdesk <原名>` 虚拟设备，前台游戏收不到 Menu 键、其它键和摇杆照常；
+  删除/重命名 `/dev/uinput` 后重启 inputd，确认物理设备没有被 grab、游戏
+  输入不丢失，日志只有一次 uinput 错误。
 - 耳机插入是否产生 `SW_HEADPHONE_INSERT` (EV_SW 2)，插入后 `amixer -c 0 sget Headphone`
   是否从 0 变 3，扬声器是否静音。
 - 游戏运行时，`trimui_inputd`/`keymon` 是否 grab 物理设备；全局音量/亮度是否双份输入。

@@ -887,6 +887,36 @@ static void test_scope(void) {
   feed(&app_state, &sink, BD_KEY_A, true, 0);
   feed(&app_state, &sink, BD_KEY_A, false, 20);
   CHECK(action_count(&sink) == 1, "app-scoped binding did not fire in app scope");
+
+  bd_hotkey_table modes;
+  CHECK(load_table("[meta]\nschema_version = 1\n"
+                   "[hotkey.game]\ncombo = Y\naction = game.action\n"
+                   "scope = mode:game\n",
+                   &modes),
+        "scope: mode table load");
+  if (modes.count == 1) {
+    bd_input_state game_state;
+    make_state(&game_state, &modes, "app:foo");
+    collector_reset(&sink);
+    feed(&game_state, &sink, BD_KEY_Y, true, 0);
+    feed(&game_state, &sink, BD_KEY_Y, false, 20);
+    CHECK(action_count(&sink) == 1,
+          "mode:game binding did not fire for an app scope");
+
+    make_state(&game_state, &modes, "mode:desktop");
+    collector_reset(&sink);
+    feed(&game_state, &sink, BD_KEY_Y, true, 0);
+    feed(&game_state, &sink, BD_KEY_Y, false, 20);
+    CHECK(action_count(&sink) == 0,
+          "mode:game binding fired on the desktop");
+
+    make_state(&game_state, &modes, "mode:game");
+    collector_reset(&sink);
+    feed(&game_state, &sink, BD_KEY_Y, true, 0);
+    feed(&game_state, &sink, BD_KEY_Y, false, 20);
+    CHECK(action_count(&sink) == 1,
+          "mode:game binding did not fire in mode:game scope");
+  }
 }
 
 int main(void) {

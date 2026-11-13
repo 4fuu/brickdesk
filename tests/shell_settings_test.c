@@ -594,6 +594,63 @@ static void test_perf_apply(test_runtime *runtime, uint64_t *now) {
         "disconnected perfd reports an error");
 }
 
+static int find_settings_row(bd_settings *settings, const char *key) {
+  for (int i = 0; i < bd_settings_row_count(settings); ++i) {
+    const char *candidate = bd_settings_row_key(settings, i);
+    if (candidate != NULL && strcmp(candidate, key) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static bool focus_settings_row(bd_settings *settings, const char *key) {
+  int index = find_settings_row(settings, key);
+  if (index < 0) {
+    return false;
+  }
+  while (bd_settings_focus(settings) < index) {
+    bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN);
+  }
+  while (bd_settings_focus(settings) > index) {
+    bd_settings_input(settings, BD_SETTINGS_ACTION_UP);
+  }
+  return true;
+}
+
+static void test_hotkey_edit(test_runtime *runtime, uint64_t *now) {
+  bd_settings *page = runtime->settings;
+  CHECK(bd_shell_open_settings(runtime->shell, BD_SETTINGS_CATEGORY_KEYS),
+        "open keys for editing");
+  CHECK(focus_settings_row(page, "!hotkey.menu"), "focus menu binding");
+  key_press(runtime->shell, BD_KEY_A, *now);
+  *now += 20;
+  CHECK(strcmp(bd_settings_row_key(page, 0), "!hotkey.combo") == 0,
+        "hotkey editor opened, row 0 %s", bd_settings_row_key(page, 0));
+  key_press(runtime->shell, BD_KEY_A, *now);
+  *now += 20;
+  CHECK(bd_settings_hotkey_capturing(page), "shell starts combo capture");
+  bd_shell_test_key(runtime->shell, BD_KEY_A, false, *now);
+  *now += 10;
+  bd_shell_test_key(runtime->shell, BD_KEY_Y, true, *now);
+  *now += 10;
+  bd_shell_test_key(runtime->shell, BD_KEY_Y, false, *now);
+  *now += 20;
+  CHECK(!bd_settings_hotkey_capturing(page), "capture finishes on release");
+  CHECK(strcmp(bd_config_get_string(runtime->config, "hotkey.menu.combo", ""),
+               "Y") == 0,
+        "shell capture saved Y: %s",
+        bd_config_get_string(runtime->config, "hotkey.menu.combo", ""));
+
+  key_press(runtime->shell, BD_KEY_B, *now);
+  *now += 20;
+  CHECK(!bd_settings_subpage(page), "B leaves the hotkey editor");
+  key_press(runtime->shell, BD_KEY_B, *now);
+  *now += 20;
+  CHECK(!bd_shell_settings_visible(runtime->shell),
+        "B closes settings after editing");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: bd_shell_settings_test PERFD\n");
@@ -613,6 +670,7 @@ int main(int argc, char **argv) {
     test_slider_repeat(&runtime, &now);
     test_theme_sync(&runtime, &now);
     test_perf_apply(&runtime, &now);
+    test_hotkey_edit(&runtime, &now);
     key_press(runtime.shell, BD_KEY_B, now);
     now += 20;
     CHECK(!bd_shell_settings_visible(runtime.shell),

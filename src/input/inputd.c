@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "brickdesk/config.h"
+#include "brickdesk/uinput.h"
 
 #if defined(__linux__)
 #include <linux/input.h>
@@ -48,6 +49,8 @@ typedef struct inputd_device {
   bd_input_state state;
   bool replay;
   bool grabbed;
+  bd_uinput *uinput;
+  bool suppress;
   dev_t node_dev;
   ino_t node_ino;
 } inputd_device;
@@ -69,9 +72,14 @@ typedef struct replay_event {
 
 typedef struct inputd {
   bd_config *config;
+  bd_config_options config_options;
   bd_hotkey_table hotkeys;
   bd_device_map map;
   int double_tap_ms;
+  char scope[BD_HOTKEY_SCOPE_MAX];
+  bool suppress_mask[BD_KEY_COUNT];
+  bool suppress_active;
+  bool uinput_error_logged;
 
   inputd_device devices[BD_INPUTD_MAX_DEVICES];
   size_t device_count;
@@ -370,6 +378,228 @@ static void broadcast_release_all(inputd *daemon, uint64_t time_ms) {
   }
 }
 
+/* ---------------------------------------------------- suppress forwarding */
+
+typedef struct output_context {
+  inputd *daemon;
+  inputd_device *device;
+} output_context;
+
+static void dispatch_output(void *user, const bd_input_output *event);
+
+static void suppress_compute(inputd *daemon) {
+  memset(daemon->suppress_mask, 0, sizeof(daemon->suppress_mask));
+  daemon->suppress_active = false;
+  for (size_t i = 0; i < daemon->hotkeys.count; ++i) {
+    const bd_hotkey *hotkey = &daemon->hotkeys.items[i];
+    if (!hotkey->suppress ||
+        !bd_hotkey_scope_active(hotkey, daemon->scope)) {
+      continue;
+    }
+    daemon->suppress_active = true;
+    for (int step = 0; step < hotkey->step_count; ++step) {
+      for (int key = 0; key < hotkey->steps[step].key_count; ++key) {
+        bd_key value = hotkey->steps[step].keys[key];
+        if (value > BD_KEY_UNKNOWN && value < BD_KEY_COUNT) {
+          daemon->suppress_mask[value] = true;
+        }
+      }
+    }
+  }
+}
+
+static void device_suppress_apply(inputd *daemon, inputd_device *device) {
+  if (device->replay || device->evdev.fd < 0) {
+    return;
+  }
+  if (daemon->suppress_active) {
+    if (device->uinput == NULL) {
+      char error[160] = {0};
+      device->uinput = bd_uinput_create(&device->evdev, error, sizeof(error));
+      if (device->uinput == NULL) {
+        device->suppress = false;
+        if (!daemon->uinput_error_logged) {
+          log_message(daemon, "suppress forwarding disabled: %s", error);
+          daemon->uinput_error_logged = true;
+        }
+        if (!daemon->grab_active && device->grabbed) {
+          bd_evdev_grab(&device->evdev, false);
+          device->grabbed = false;
+        }
+        return;
+      }
+      if (daemon->verbose) {
+        log_message(daemon, "suppress forwarding on %s", device->evdev.path);
+      }
+    }
+    device->suppress = true;
+    if (!device->grabbed) {
+      if (!bd_evdev_grab(&device->evdev, true)) {
+        int grab_errno = errno;
+        bd_uinput_destroy(device->uinput);
+        device->uinput = NULL;
+        device->suppress = false;
+        if (!daemon->uinput_error_logged) {
+          log_message(daemon, "suppress grab %s: %s", device->evdev.path,
+                      strerror(grab_errno));
+          daemon->uinput_error_logged = true;
+        }
+        return;
+      }
+      device->grabbed = true;
+    }
+    return;
+  }
+
+  if (device->uinput != NULL) {
+    bd_uinput_release_all(device->uinput);
+    bd_uinput_destroy(device->uinput);
+    device->uinput = NULL;
+  }
+  device->suppress = false;
+  if (!daemon->grab_active && device->grabbed) {
+    bd_evdev_grab(&device->evdev, false);
+    device->grabbed = false;
+  }
+}
+
+static void suppress_apply_all(inputd *daemon) {
+  suppress_compute(daemon);
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    device_suppress_apply(daemon, &daemon->devices[i]);
+  }
+}
+
+static void daemon_set_scope(inputd *daemon, const char *scope,
+                             uint64_t now_ms) {
+  (void)now_ms;
+  if (scope == NULL || scope[0] == '\0' || strlen(scope) >= sizeof(daemon->scope)) {
+    return;
+  }
+  if (strcmp(daemon->scope, scope) == 0) {
+    return;
+  }
+  snprintf(daemon->scope, sizeof(daemon->scope), "%s", scope);
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    inputd_device *device = &daemon->devices[i];
+    /* Re-arm without broadcasting release_all: another client may still hold
+     * a key and must not see its state dropped by a scope change. */
+    if (device->uinput != NULL) {
+      bd_uinput_release_all(device->uinput);
+    }
+    bd_input_state_set_scope(&device->state, &daemon->hotkeys, daemon->scope,
+                             daemon->double_tap_ms);
+  }
+  suppress_apply_all(daemon);
+  char escaped[BD_HOTKEY_SCOPE_MAX * 2];
+  json_escape(escaped, sizeof(escaped), daemon->scope);
+  char message[256];
+  int written = snprintf(message, sizeof(message),
+                         "{\"type\":\"scope\",\"scope\":\"%s\"}", escaped);
+  if (written > 0 && (size_t)written < sizeof(message)) {
+    broadcast_line(daemon, message);
+  }
+}
+
+static bool daemon_reload(inputd *daemon, uint64_t now_ms, char *error,
+                          size_t error_size) {
+  (void)now_ms;
+  bd_config *config = bd_config_load(&daemon->config_options, error,
+                                     error_size);
+  if (config == NULL) {
+    return false;
+  }
+  bd_hotkey_table hotkeys;
+  if (!bd_hotkey_table_load(&hotkeys, config)) {
+    snprintf(error, error_size, "cannot load hotkeys");
+    bd_config_free(config);
+    return false;
+  }
+  bd_device_map map;
+  if (!bd_device_map_load(&map, config)) {
+    snprintf(error, error_size, "cannot load input.ini");
+    bd_config_free(config);
+    return false;
+  }
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    inputd_device *device = &daemon->devices[i];
+    if (device->uinput != NULL) {
+      bd_uinput_release_all(device->uinput);
+    }
+  }
+  bd_config_free(daemon->config);
+  daemon->config = config;
+  daemon->hotkeys = hotkeys;
+  daemon->map = map;
+  daemon->double_tap_ms =
+      (int)bd_config_get_int(daemon->config, "input.double_tap_ms", 300);
+  if (daemon->double_tap_ms <= 0) {
+    daemon->double_tap_ms = 300;
+  }
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    inputd_device *device = &daemon->devices[i];
+    bd_device_map_match(&daemon->map, &device->evdev, &device->mapping);
+    bd_input_state_set_scope(&device->state, &daemon->hotkeys, daemon->scope,
+                             daemon->double_tap_ms);
+  }
+  suppress_apply_all(daemon);
+  return true;
+}
+
+static bool suppress_drop_key(const inputd *daemon,
+                              const inputd_device *device,
+                              const bd_evdev_event *event) {
+  if (event->kind == BD_EVDEV_EVENT_KEY) {
+    bd_key key = BD_KEY_UNKNOWN;
+    if (bd_device_map_translate_key(&device->mapping, event->code, &key) &&
+        key > BD_KEY_UNKNOWN && key < BD_KEY_COUNT) {
+      return daemon->suppress_mask[key];
+    }
+    return false;
+  }
+  if (event->kind == BD_EVDEV_EVENT_ABS) {
+    bd_device_abs_key keys[BD_HOTKEY_MAX_KEYS];
+    int count = bd_device_map_translate_abs(&device->mapping, event->code,
+                                            event->value, keys,
+                                            sizeof(keys) / sizeof(keys[0]));
+    for (int i = 0; i < count; ++i) {
+      if (keys[i].pressed && keys[i].key > BD_KEY_UNKNOWN &&
+          keys[i].key < BD_KEY_COUNT &&
+          daemon->suppress_mask[keys[i].key]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void forward_raw_event(inputd *daemon, inputd_device *device,
+                              const bd_evdev_event *event) {
+  if (!device->suppress || device->uinput == NULL || daemon->grab_active) {
+    return;
+  }
+  uint16_t type = 0;
+  if (event->kind == BD_EVDEV_EVENT_KEY) {
+    if (event->value == 2) {
+      return;
+    }
+    type = EV_KEY;
+  } else if (event->kind == BD_EVDEV_EVENT_ABS) {
+    type = EV_ABS;
+  } else if (event->kind == BD_EVDEV_EVENT_SWITCH) {
+    type = EV_SW;
+  } else {
+    return;
+  }
+  if (suppress_drop_key(daemon, device, event)) {
+    return;
+  }
+  if (bd_uinput_emit(device->uinput, type, (uint16_t)event->code,
+                     event->value)) {
+    bd_uinput_sync(device->uinput);
+  }
+}
+
 static bool any_keys_pressed(const inputd *daemon) {
   for (size_t i = 0; i < daemon->device_count; ++i) {
     if (bd_input_state_any_pressed(&daemon->devices[i].state)) {
@@ -382,7 +612,7 @@ static bool any_keys_pressed(const inputd *daemon) {
 static void ungrab_devices(inputd *daemon) {
   for (size_t i = 0; i < daemon->device_count; ++i) {
     inputd_device *device = &daemon->devices[i];
-    if (device->evdev.fd >= 0 && device->grabbed) {
+    if (device->evdev.fd >= 0 && device->grabbed && !device->suppress) {
       bd_evdev_grab(&device->evdev, false);
       device->grabbed = false;
     }
@@ -394,6 +624,11 @@ static void finish_ungrab(inputd *daemon, bool forced, uint64_t now_ms) {
     return;
   }
   ungrab_devices(daemon);
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].uinput != NULL) {
+      bd_uinput_release_all(daemon->devices[i].uinput);
+    }
+  }
   daemon->grab_active = false;
   daemon->grab_pending = false;
   daemon->grab_forced = false;
@@ -441,9 +676,10 @@ static bool request_grab(inputd *daemon, inputd_client *client,
     return true;
   }
 
+  bool newly[BD_INPUTD_MAX_DEVICES] = {false};
   for (size_t i = 0; i < daemon->device_count; ++i) {
     inputd_device *device = &daemon->devices[i];
-    if (device->evdev.fd < 0) {
+    if (device->evdev.fd < 0 || device->grabbed) {
       continue;
     }
     if (!bd_evdev_grab(&device->evdev, true)) {
@@ -461,7 +697,8 @@ static bool request_grab(inputd *daemon, inputd_client *client,
       }
       for (size_t rollback = 0; rollback < daemon->device_count; ++rollback) {
         inputd_device *previous = &daemon->devices[rollback];
-        if (previous->evdev.fd >= 0 && previous->grabbed) {
+        if (newly[rollback] && previous->evdev.fd >= 0 &&
+            previous->grabbed) {
           bd_evdev_grab(&previous->evdev, false);
           previous->grabbed = false;
         }
@@ -469,8 +706,14 @@ static bool request_grab(inputd *daemon, inputd_client *client,
       return false;
     }
     device->grabbed = true;
+    newly[i] = true;
   }
 
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].uinput != NULL) {
+      bd_uinput_release_all(daemon->devices[i].uinput);
+    }
+  }
   daemon->grab_active = true;
   daemon->grab_pending = false;
   daemon->grab_forced = false;
@@ -481,11 +724,6 @@ static bool request_grab(inputd *daemon, inputd_client *client,
   }
   return true;
 }
-
-typedef struct output_context {
-  inputd *daemon;
-  inputd_device *device;
-} output_context;
 
 static void dispatch_output(void *user, const bd_input_output *event) {
   output_context *context = (output_context *)user;
@@ -535,6 +773,9 @@ static void resync_device(inputd *daemon, inputd_device *device,
   if (!bd_evdev_key_bits(&device->evdev, bits, sizeof(bits))) {
     return;
   }
+  if (device->uinput != NULL) {
+    bd_uinput_release_all(device->uinput);
+  }
   for (int i = 0; i < device->mapping.entry_count; ++i) {
     const bd_device_map_entry *entry = &device->mapping.entries[i];
     if (entry->type != BD_DEVICE_MAP_KEY || entry->code > BD_EVDEV_KEY_MAX) {
@@ -543,6 +784,13 @@ static void resync_device(inputd *daemon, inputd_device *device,
     bool pressed = (bits[entry->code / 8u] &
                     (unsigned char)(1u << (entry->code % 8u))) != 0;
     apply_key(daemon, device, entry->key, pressed, now_ms);
+    if (device->suppress && device->uinput != NULL &&
+        !daemon->grab_active && entry->key > BD_KEY_UNKNOWN &&
+        entry->key < BD_KEY_COUNT && !daemon->suppress_mask[entry->key]) {
+      bd_uinput_emit(device->uinput, EV_KEY, (uint16_t)entry->code,
+                     pressed ? 1 : 0);
+      bd_uinput_sync(device->uinput);
+    }
   }
   for (int i = 0; i < device->mapping.entry_count; ++i) {
     const bd_device_map_entry *entry = &device->mapping.entries[i];
@@ -551,6 +799,11 @@ static void resync_device(inputd *daemon, inputd_device *device,
     }
     int value = bd_evdev_abs_value(&device->evdev, entry->code);
     apply_abs(daemon, device, entry->code, value, now_ms);
+    if (device->suppress && device->uinput != NULL &&
+        !daemon->grab_active) {
+      bd_uinput_emit(device->uinput, EV_ABS, (uint16_t)entry->code, value);
+      bd_uinput_sync(device->uinput);
+    }
   }
 
   char source[BD_EVDEV_NAME_MAX * 2];
@@ -568,6 +821,7 @@ static void resync_device(inputd *daemon, inputd_device *device,
 
 static void apply_evdev_event(inputd *daemon, inputd_device *device,
                               const bd_evdev_event *event, uint64_t now_ms) {
+  forward_raw_event(daemon, device, event);
   if (event->kind == BD_EVDEV_EVENT_KEY) {
     if (event->value == 2) {
       return;
@@ -922,6 +1176,31 @@ static void handle_client_line(inputd *daemon, inputd_client *client,
     release_all_devices(daemon, now_ms);
     return;
   }
+  if (strcmp(command, "set_scope") == 0) {
+    char scope[BD_HOTKEY_SCOPE_MAX];
+    if (!json_field_string(line, "scope", scope, sizeof(scope))) {
+      client_sendf(client,
+                   "{\"type\":\"error\",\"cmd\":\"set_scope\","
+                   "\"error\":\"missing scope\"}");
+      return;
+    }
+    daemon_set_scope(daemon, scope, now_ms);
+    return;
+  }
+  if (strcmp(command, "reload") == 0) {
+    char error[160] = {0};
+    if (!daemon_reload(daemon, now_ms, error, sizeof(error))) {
+      char escaped[256];
+      json_escape(escaped, sizeof(escaped), error);
+      client_sendf(client,
+                   "{\"type\":\"error\",\"cmd\":\"reload\","
+                   "\"error\":\"%s\"}",
+                   escaped);
+      return;
+    }
+    client_sendf(client, "{\"type\":\"reloaded\"}");
+    return;
+  }
   if (strcmp(command, "ping") == 0) {
     client_sendf(client, "{\"type\":\"pong\",\"time_ms\":%llu}",
                  (unsigned long long)now_ms);
@@ -1227,8 +1506,9 @@ static bool device_add(inputd *daemon, const bd_evdev *evdev, bool replay,
   device->grabbed = grabbed;
   device_identity(&device->evdev, &device->node_dev, &device->node_ino);
   bd_device_map_match(&daemon->map, &device->evdev, &device->mapping);
-  bd_input_state_init(&device->state, &daemon->hotkeys, "global",
+  bd_input_state_init(&device->state, &daemon->hotkeys, daemon->scope,
                       daemon->double_tap_ms);
+  device_suppress_apply(daemon, device);
 
   if (!replay) {
     broadcast_device(daemon, "added", device, NULL, now_ms);
@@ -1253,6 +1533,12 @@ static void device_remove(inputd *daemon, inputd_device *device, uint64_t now_ms
   if (device->evdev.fd < 0) {
     return;
   }
+  if (device->uinput != NULL) {
+    bd_uinput_release_all(device->uinput);
+    bd_uinput_destroy(device->uinput);
+    device->uinput = NULL;
+  }
+  device->suppress = false;
   if (device->grabbed) {
     bd_evdev_grab(&device->evdev, false);
     device->grabbed = false;
@@ -1625,6 +1911,11 @@ static void daemon_cleanup(inputd *daemon) {
   }
   daemon->client_count = 0;
   for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].uinput != NULL) {
+      bd_uinput_release_all(daemon->devices[i].uinput);
+      bd_uinput_destroy(daemon->devices[i].uinput);
+      daemon->devices[i].uinput = NULL;
+    }
     if (daemon->devices[i].evdev.fd >= 0) {
       bd_evdev_close(&daemon->devices[i].evdev);
     }
@@ -1684,6 +1975,7 @@ int main(int argc, char **argv) {
   daemon.allow_grab = true;
   daemon.running = true;
   daemon.double_tap_ms = 300;
+  snprintf(daemon.scope, sizeof(daemon.scope), "global");
 
   const char *config_dir = NULL;
   const char *socket_path = NULL;
@@ -1726,6 +2018,7 @@ int main(int argc, char **argv) {
   bd_config_options options;
   options.config_dir = config_dir;
   options.migrate = false;
+  daemon.config_options = options;
   char error[512] = {0};
   daemon.config = bd_config_load(&options, error, sizeof(error));
   if (daemon.config == NULL) {
@@ -1793,6 +2086,7 @@ int main(int argc, char **argv) {
     }
   }
 
+  suppress_compute(&daemon);
   if (!setup_devices(&daemon, error, sizeof(error))) {
     fprintf(stderr, "brickdesk-inputd: %s\n", error);
     daemon_cleanup(&daemon);

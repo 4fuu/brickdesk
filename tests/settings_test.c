@@ -423,6 +423,85 @@ static void test_values(bd_platform *platform, bd_gfx *gfx,
         stub->brightness_calls);
 }
 
+static void test_hotkey_editor(bd_settings *settings, bd_config *config,
+                               const char *dir) {
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_KEYS),
+        "open keys for editor");
+  CHECK(focus_row(settings, "!hotkey.menu"), "focus menu binding");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "open hotkey editor");
+  CHECK(strcmp(bd_settings_row_key(settings, 0), "!hotkey.combo") == 0,
+        "hotkey editor row 0 %s", bd_settings_row_key(settings, 0));
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "start combo capture");
+  CHECK(bd_settings_hotkey_capturing(settings), "capture should be active");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_A, false),
+        "release the activating key");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_Y, true),
+        "capture Y down");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_Y, false),
+        "capture Y up");
+  CHECK(!bd_settings_hotkey_capturing(settings), "capture should finish");
+  CHECK(strcmp(bd_config_get_string(config, "hotkey.menu.combo", ""), "Y") ==
+            0,
+        "captured combo %s",
+        bd_config_get_string(config, "hotkey.menu.combo", ""));
+
+  char local[1200];
+  snprintf(local, sizeof(local), "%s/local.ini", dir);
+  char text[4096];
+  FILE *file = fopen(local, "r");
+  CHECK(file != NULL, "local.ini should exist");
+  if (file != NULL) {
+    size_t length = fread(text, 1, sizeof(text) - 1, file);
+    text[length] = '\0';
+    fclose(file);
+    CHECK(strstr(text, "combo = Y") != NULL,
+          "local.ini should persist the captured combo");
+  }
+
+  CHECK(focus_row(settings, "!hotkey.combo"), "focus combo for conflict");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "start capture for conflict");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_A, false),
+        "release the activating key for conflict");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_SELECT, true),
+        "capture Select down");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_SELECT, false),
+        "capture Select up");
+  CHECK(strcmp(bd_config_get_string(config, "hotkey.menu.combo", ""), "Y") ==
+            0,
+        "conflicting combo must not be written");
+  CHECK(strstr(bd_settings_last_error(settings), "重复") != NULL,
+        "conflict error %s", bd_settings_last_error(settings));
+
+  int scope = find_row(settings, "hotkey.menu.scope");
+  CHECK(scope >= 0, "scope row");
+  if (scope >= 0) {
+    CHECK(focus_row(settings, "hotkey.menu.scope"), "focus scope");
+    CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+          "cycle scope");
+    CHECK(strcmp(bd_config_get_string(config, "hotkey.menu.scope", ""),
+                 "mode:desktop") == 0,
+          "scope %s", bd_config_get_string(config, "hotkey.menu.scope", ""));
+  }
+
+  CHECK(focus_row(settings, "!hotkey.combo"), "focus combo for cancel");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "start capture for cancel");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_A, false),
+        "release the activating key for cancel");
+  CHECK(bd_settings_capture_key(settings, BD_KEY_B, true),
+        "B cancels capture");
+  CHECK(!bd_settings_hotkey_capturing(settings), "B should end capture");
+  CHECK(strcmp(bd_config_get_string(config, "hotkey.menu.combo", ""), "Y") ==
+            0,
+        "B cancel must keep the combo");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL),
+        "leave hotkey editor");
+  CHECK(!bd_settings_subpage(settings), "editor should close");
+}
+
 static void test_pages(bd_settings *settings, bd_config *config) {
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_KEYS), "open keys");
   bd_settings_stats stats = bd_settings_get_stats(settings);
@@ -933,6 +1012,7 @@ int main(void) {
   /* The fake sysfs tree is gone; restore the explicit test backend. */
   bd_settings_set_system(settings, &system);
   test_pages(settings, config);
+  test_hotkey_editor(settings, config, dir);
   test_plugin_scroll(platform, gfx, settings);
   test_reset_and_subpages(platform, gfx, settings, config);
   test_reset_service_failures(settings, config, &system);

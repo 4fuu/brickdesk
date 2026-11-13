@@ -12,7 +12,7 @@
     { "type": "wait", "frames": 2 },
     { "type": "screenshot", "name": "hint_shown" },
     { "type": "key", "key": "select", "action": "up" },
-    { "type": "wait", "frames": 2 },
+    { "type": "wait", "frames": 15 },
     { "type": "screenshot", "name": "hint_after_release" }
   ]
 }

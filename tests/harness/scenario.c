@@ -65,6 +65,22 @@ static bool token_to_string(const char *json, const jsmntok_t *token, char *out,
   return true;
 }
 
+static bool token_to_bool(const char *json, const jsmntok_t *token, bool *out) {
+  if (token->type != JSMN_PRIMITIVE) {
+    return false;
+  }
+  size_t length = (size_t)(token->end - token->start);
+  if (length == 4 && memcmp(json + token->start, "true", 4) == 0) {
+    *out = true;
+    return true;
+  }
+  if (length == 5 && memcmp(json + token->start, "false", 5) == 0) {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
 /* Returns the token index just past the value at index. */
 static int skip_token(const jsmntok_t *tokens, int index) {
   int end = index + 1;
@@ -160,6 +176,7 @@ static bool parse_step(const char *json, const jsmntok_t *tokens, int object_ind
   int milliseconds = 0;
   char key_name[32] = {0};
   char action[16] = {0};
+  step.settle = true;
 
   int child = object_index + 1;
   for (int pair = 0; pair < tokens[object_index].size; ++pair) {
@@ -204,6 +221,12 @@ static bool parse_step(const char *json, const jsmntok_t *tokens, int object_ind
         return false;
       }
       has_name = true;
+    } else if (token_equals(json, key, "settle")) {
+      if (!token_to_bool(json, value, &step.settle)) {
+        set_error(error, error_size, "step %d: 'settle' must be a boolean",
+                  step_index);
+        return false;
+      }
     }
 
     child = skip_token(tokens, child + 1);

@@ -25,6 +25,9 @@ target_link_libraries(bd_dirty_regions PRIVATE brickdesk_core brickdesk_warnings
 add_executable(bd_wall_scale wall_scale.c)
 target_link_libraries(bd_wall_scale PRIVATE brickdesk_core brickdesk_warnings)
 
+add_executable(bd_sysinfo_test sysinfo_test.c)
+target_link_libraries(bd_sysinfo_test PRIVATE brickdesk_sysinfo brickdesk_warnings)
+
 add_executable(bd_home_scale home_scale.c)
 target_link_libraries(bd_home_scale PRIVATE brickdesk_home brickdesk_core brickdesk_config brickdesk_warnings)
 
@@ -104,7 +107,7 @@ if(BRICKDESK_BUILD_HARNESS)
     "${CMAKE_CURRENT_SOURCE_DIR}/harness"
     "${PROJECT_SOURCE_DIR}/third_party/jsmn"
   )
-  target_link_libraries(bd_harness PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
+  target_link_libraries(bd_harness PRIVATE brickdesk_shell brickdesk_config brickdesk_warnings)
 endif()
 
 if(CMAKE_CROSSCOMPILING)
@@ -113,6 +116,7 @@ if(CMAKE_CROSSCOMPILING)
 endif()
 
 add_test(NAME key_names COMMAND bd_key_names_test)
+add_test(NAME sysinfo COMMAND bd_sysinfo_test)
 add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
@@ -224,6 +228,7 @@ if(BRICKDESK_BUILD_HARNESS)
       "-DREPLAY=${CMAKE_CURRENT_SOURCE_DIR}/scenarios/launch_menu.replay"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/run_scenario.cmake")
   set_tests_properties(scenario.launch_menu PROPERTIES
+    ENVIRONMENT "${BD_HEADLESS_ENV};BRICKDESK_TEST_MEMORY_MB=132"
     TIMEOUT 180
     FAIL_REGULAR_EXPRESSION "FAIL")
 
@@ -320,6 +325,14 @@ target_link_libraries(bd_session_child PRIVATE brickdesk_warnings)
 add_executable(bd_session_test session_test.c)
 target_link_libraries(bd_session_test PRIVATE brickdesk_session brickdesk_warnings)
 
+add_executable(bd_shell_quota_test shell_quota_test.c)
+target_link_libraries(bd_shell_quota_test PRIVATE
+  brickdesk_shell
+  brickdesk_config
+  brickdesk_warnings)
+target_compile_definitions(bd_shell_quota_test PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")
+
 add_executable(bd_menu_state_app menu_state_app.c)
 target_include_directories(bd_menu_state_app PRIVATE "${BRICKDESK_GLES2_INCLUDE_DIR}")
 target_link_libraries(bd_menu_state_app PRIVATE
@@ -335,5 +348,11 @@ target_link_libraries(bd_menu_test PRIVATE brickdesk_session brickdesk_warnings)
 add_test(NAME session
   COMMAND bd_session_test $<TARGET_FILE:brickdesk-demo> $<TARGET_FILE:bd_session_child>)
 set_tests_properties(session PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 180)
+
+add_test(NAME shell_quota
+  COMMAND bd_shell_quota_test $<TARGET_FILE:bd_session_child>)
+set_tests_properties(shell_quota PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   TIMEOUT 180)

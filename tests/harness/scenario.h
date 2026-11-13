@@ -22,6 +22,9 @@ typedef struct bd_step {
   bd_key key;      /* BD_STEP_KEY */
   bool pressed;    /* BD_STEP_KEY */
   char screenshot[64]; /* BD_STEP_SCREENSHOT */
+  /* Screenshot only: settle image decodes first (default true).  Set false
+   * to capture a transition frame without letting it finish. */
+  bool settle;
 } bd_step;
 
 typedef struct bd_scenario {

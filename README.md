@@ -3,16 +3,16 @@
 A small, low-overhead gamepad desktop for the TrimUI Brick Pro (Allwinner A133P,
 PowerVR GE8300, 1024x768), written in C11 with SDL2 and GLES2.
 
-This repository is at the M1 infrastructure stage: host build, SDL2/GLES2
-platform layer, minimal renderer, screenshot/input-replay tests, and host CI.
-The cover wall, text, themes and the device platform layer arrive in later
-milestones. The v3 home page is implemented as a reusable module in
-[src/home](src/home) with the API in
-[include/brickdesk/home.h](include/brickdesk/home.h); see
-[docs/home.md](docs/home.md). The v3 settings page lives in
+The v3 home page is implemented in [src/home](src/home) with the API in
+[include/brickdesk/home.h](include/brickdesk/home.h) and is wired into the
+integrated event loop in [src/app/shell.c](src/app/shell.c): scanned apps become
+wall items, A launches through the session, background apps return as running
+tiles, START opens the edge quick panel, and the background-full choice evicts
+the LRU app. See [docs/home.md](docs/home.md). The v3 settings page lives in
 [src/settings](src/settings) with
 [include/brickdesk/settings.h](include/brickdesk/settings.h); see
-[docs/settings.md](docs/settings.md). Neither is wired into the event loop yet.
+[docs/settings.md](docs/settings.md). The settings module is present but is not
+yet wired into the event loop.
 
 For installing a release on the Brick Pro, see [docs/install.md](docs/install.md).
 The release package includes the desktop, input/perf daemons, tools, patched
@@ -104,12 +104,14 @@ The suite includes:
 - `idle_loop_full`: the complete desktop loop presents zero frames for 3 s
 - `scenario.boot`, `scenario.focus_move`, `scenario.hint_hold`: input replay +
   exact pixel compare; the hint bar stays hidden until the 400 ms Select hold
-- `scenario.launch_menu`: launches `apps/demo` from the wall, opens the menu
-  shim through inputd, backgrounds it and checks the running tile
+- `scenario.launch_menu`: launches `apps/demo` from the home wall, captures the
+  launch card, opens the menu shim through inputd, returns to the focused
+  running tile, ends it from the dialog and checks the cleared tile
 - `home_scale`: 5,000-item first-fit layout/index traversal, focus damage,
   blur fallback, incremental launch and host timing checks
 - `home_capture`: deterministic screenshots of dark/light home, live focus,
-  running tile, return, quick panel, dialog, hint bar and launch frames
+  running tile, return, dark/light quick panels, end and background-full
+  dialogs, hint bar and launch frames
 - `settings`: schema-generated rows, value persistence/reload, slider hold
   repeat, two-row focus damage with an exact partial/full match, hotkey
   conflicts, perf overrides, long plugin-tree scrolling, reset confirm and
@@ -184,7 +186,7 @@ include/brickdesk/     public headers (gfx, platform, input, desktop, shell, app
 src/platform/          SDL2 window + GLES2 context (host_sdl.c also serves
                        target builds until the device layer lands)
 src/gfx/               GLES2 renderer and framebuffer capture
-src/app/               desktop scene, app tiles, event-loop shell
+src/app/               event-loop shell, legacy desktop scene, themes, UI fonts
 src/home/              v3 home page module (wall, focus, chrome, transitions)
 src/settings/          v3 settings page module (schema rows, sub-pages, damage)
 src/input/             logical keys, hotkey state machine, evdev/input.ini,

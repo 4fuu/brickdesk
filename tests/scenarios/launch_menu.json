@@ -4,9 +4,28 @@
   "fixed_dt_ms": 16,
   "steps": [
     { "type": "wait", "frames": 2 },
+    { "type": "screenshot", "name": "launch_boot" },
     { "type": "key", "key": "A", "action": "down" },
     { "type": "key", "key": "A", "action": "up" },
-    { "type": "run", "ms": 5000 },
-    { "type": "screenshot", "name": "launch_return" }
+    { "type": "run", "ms": 60 },
+    { "type": "wait", "frames": 2 },
+    { "type": "screenshot", "name": "home_launch", "settle": false },
+    { "type": "run", "ms": 3200 },
+    { "type": "wait", "frames": 30 },
+    { "type": "run", "ms": 100 },
+    { "type": "wait", "frames": 30 },
+    { "type": "screenshot", "name": "launch_return" },
+    { "type": "key", "key": "X", "action": "down" },
+    { "type": "key", "key": "X", "action": "up" },
+    { "type": "wait", "frames": 12 },
+    { "type": "screenshot", "name": "home_end_dialog" },
+    { "type": "key", "key": "right", "action": "down" },
+    { "type": "key", "key": "right", "action": "up" },
+    { "type": "wait", "frames": 2 },
+    { "type": "key", "key": "A", "action": "down" },
+    { "type": "key", "key": "A", "action": "up" },
+    { "type": "wait", "frames": 12 },
+    { "type": "screenshot", "name": "home_ended" },
+    { "type": "run", "ms": 500 }
   ]
 }

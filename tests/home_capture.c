@@ -291,6 +291,20 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: light quick open failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_light")) {
+    return 1;
+  }
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+
   set_dark(home);
   bd_home_update(home, now);
   if (!bd_home_set_running(home, "demo-03", town_path, true, 210)) {
@@ -334,6 +348,38 @@ int main(int argc, char **argv) {
 
   bd_home_close_quick(home);
   now += 220;
+  bd_home_update(home, now);
+  if (!bd_home_open_background_full(home, "demo-04", "demo-03", 3)) {
+    fprintf(stderr, "home_capture: background full dialog failed\n");
+    return 1;
+  }
+  now += 200;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_background_full")) {
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_CANCEL);
+  if (bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CANCEL) {
+    fprintf(stderr, "home_capture: background full cancel result missing\n");
+    return 1;
+  }
+  now += 200;
+  bd_home_update(home, now);
+  if (!bd_home_open_background_full(home, "demo-04", "demo-03", 3)) {
+    fprintf(stderr, "home_capture: second background full dialog failed\n");
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_RIGHT);
+  if (!bd_home_input(home, BD_HOME_ACTION_ACCEPT) ||
+      bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CONFIRM) {
+    fprintf(stderr, "home_capture: background full confirm result missing\n");
+    return 1;
+  }
+  if (bd_home_running_count(home) != 3 || bd_home_dialog_open(home)) {
+    fprintf(stderr, "home_capture: confirmation changed the running list\n");
+    return 1;
+  }
+  now += 200;
   bd_home_update(home, now);
   if (!bd_home_open_end_dialog(home, "demo-03")) {
     fprintf(stderr, "home_capture: end dialog failed\n");

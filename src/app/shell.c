@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,11 +16,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "brickdesk/theme.h"
+
 #define BD_SHELL_LINE_MAX 4096
 #define BD_SHELL_FD_MAX 64
 #define BD_SHELL_PENDING_MAX 16
 #define BD_SHELL_PATH_MAX 1024
-#define BD_SHELL_ANIMATION_MS 180
 
 typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
@@ -35,15 +37,26 @@ typedef struct shell_pending {
   char method[16];
 } shell_pending;
 
+typedef struct shell_app_runtime {
+  bool running;
+  bool background;
+  int memory_mb;
+  char frame_path[BD_APP_PATH_MAX];
+} shell_app_runtime;
+
 struct bd_shell {
   bd_platform *platform;
   bd_gfx *gfx;
-  bd_desktop *desktop;
   const bd_config *settings;
   bd_plugin_host *plugins;
   bool verbose;
 
   bd_app_list *apps;
+  shell_app_runtime *runtime;
+  size_t runtime_count;
+  bd_home *home;
+  bd_home_style home_style;
+
   bd_session *session;
   int session_next_ms;
 
@@ -65,11 +78,19 @@ struct bd_shell {
   int pending_count;
   bool rescan;
 
-  bd_shell_animation animation;
+  char dialog_app[BD_APP_ID_MAX];    /* end-dialog target */
+  char pending_launch[BD_APP_ID_MAX];/* launch waiting on an eviction */
+  char evict_app[BD_APP_ID_MAX];     /* LRU app to end first */
+  char return_app[BD_APP_ID_MAX];    /* return deferred by a launch */
+
   bool dirty;
   bool visible;
   bool quit;
   uint64_t presents;
+
+  /* Scenario harness clock: home transitions advance only on test_advance. */
+  bool test_clock;
+  uint64_t test_now_ms;
 };
 
 static uint64_t monotonic_ms(void) {
@@ -78,6 +99,12 @@ static uint64_t monotonic_ms(void) {
     return 0;
   }
   return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+/* Home animations use the scenario clock when the harness drives one. */
+static uint64_t shell_now(const bd_shell *shell) {
+  return shell != NULL && shell->test_clock ? shell->test_now_ms
+                                            : monotonic_ms();
 }
 
 static void copy_text(char *dst, size_t size, const char *src) {
@@ -202,6 +229,8 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
                                   bool pressed);
 static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed);
 static bool shell_launch_app(bd_shell *shell, const char *app_id);
+static void shell_refresh_running(bd_shell *shell);
+static void shell_service(bd_shell *shell);
 
 static void local_emit(void *user, const bd_input_output *event) {
   bd_shell *shell = (bd_shell *)user;
@@ -243,7 +272,7 @@ static void inputd_disconnect(bd_shell *shell, const char *reason) {
       fprintf(stderr, "brickdesk: inputd disconnected (%s); using SDL keys\n",
               reason != NULL ? reason : "eof");
     }
-    bd_desktop_set_hint_visible(shell->desktop, false);
+    bd_home_set_hint_visible(shell->home, false);
     shell->dirty = true;
   }
 }
@@ -332,7 +361,7 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
     return;
   }
   if (strcmp(type, "release_all") == 0) {
-    bd_desktop_set_hint_visible(shell->desktop, false);
+    bd_home_set_hint_visible(shell->home, false);
     shell->dirty = true;
   }
 }
@@ -597,70 +626,136 @@ static bool session_running_state(bd_session_state state) {
   }
 }
 
-static void shell_begin_animation(bd_shell *shell, bd_shell_animation_kind kind,
-                                  const char *app_id) {
-  shell->animation.kind = kind;
-  shell->animation.started_ms = monotonic_ms();
-  shell->animation.duration_ms = BD_SHELL_ANIMATION_MS;
-  shell->animation.progress = 0.0f;
-  copy_text(shell->animation.app_id, sizeof(shell->animation.app_id), app_id);
+static int shell_app_memory_mb(const bd_app *app) {
+  if (app == NULL) {
+    return 132;
+  }
+  switch (app->category) {
+    case BD_APP_CATEGORY_GAME:
+    case BD_APP_CATEGORY_EMULATOR:
+      return 210;
+    case BD_APP_CATEGORY_SERVICE:
+      return 86;
+    default:
+      return 132;
+  }
 }
 
-static void shell_update_animation(bd_shell *shell) {
-  if (shell->animation.kind == BD_SHELL_ANIMATION_NONE) {
+/*
+ * Hides the home once the launch card has reached full screen, or starts a
+ * requested return as soon as the launch transition allows it.
+ */
+static void shell_update_home(bd_shell *shell, uint64_t now) {
+  if (shell->home == NULL) {
     return;
   }
-  uint64_t now = monotonic_ms();
-  uint64_t elapsed = now >= shell->animation.started_ms
-                         ? now - shell->animation.started_ms
-                         : 0;
-  if (elapsed >= shell->animation.duration_ms) {
-    shell->animation.progress = 1.0f;
-    shell->animation.kind = BD_SHELL_ANIMATION_NONE;
+  uint64_t wake_at = 0;
+  bool was_active = bd_home_needs_frame_until(shell->home, &wake_at);
+  bd_home_update(shell->home, now);
+  if (was_active || bd_home_needs_frame_until(shell->home, &wake_at)) {
+    /* Also guarantees the final frame after an animation deadline. */
+    shell->dirty = true;
+  }
+
+  if (shell->return_app[0] != '\0') {
+    if (bd_home_launch_target(shell->home) != NULL &&
+        !bd_home_launch_complete(shell->home)) {
+      return;
+    }
+    if (!bd_home_start_return(shell->home, shell->return_app)) {
+      bd_home_damage(shell->home);
+    }
+    shell->return_app[0] = '\0';
+    shell->visible = true;
+    shell->dirty = true;
     return;
   }
-  shell->animation.progress =
-      (float)elapsed / (float)shell->animation.duration_ms;
+
+  if (shell->visible && bd_home_launch_complete(shell->home)) {
+    shell->visible = false;
+    shell->dirty = false;
+    bd_home_set_hint_visible(shell->home, false);
+  }
+}
+
+static void shell_request_return(bd_shell *shell, const char *app_id) {
+  if (shell->home == NULL || app_id == NULL || app_id[0] == '\0') {
+    return;
+  }
+  copy_text(shell->return_app, sizeof(shell->return_app), app_id);
+  shell_update_home(shell, shell_now(shell));
 }
 
 static void shell_refresh_running(bd_shell *shell) {
-  bool visible = true;
-  if (shell->session != NULL) {
-    size_t count = bd_session_running_count(shell->session);
-    for (size_t i = 0; i < count; ++i) {
-      bd_session_app_info info;
-      if (bd_session_running_at(shell->session, i, &info) &&
-          session_active_state(info.state)) {
-        visible = false;
-        break;
-      }
-    }
+  if (shell->home == NULL) {
+    return;
   }
   size_t app_count = shell->apps != NULL ? bd_app_list_count(shell->apps) : 0;
   for (size_t i = 0; i < app_count; ++i) {
     const bd_app *app = bd_app_list_at(shell->apps, i);
-    if (app == NULL) {
+    if (app == NULL || i >= shell->runtime_count) {
       continue;
     }
+    shell_app_runtime *runtime = &shell->runtime[i];
     bd_session_app_info info;
-    bool running = false;
-    const char *frame = NULL;
-    if (shell->session != NULL &&
-        bd_session_find(shell->session, app->id, &info)) {
-      running = session_running_state(info.state);
-      if (info.state == BD_SESSION_BACKGROUND) {
-        frame = bd_session_last_frame_path(shell->session, app->id);
+    bool found = shell->session != NULL &&
+                 bd_session_find(shell->session, app->id, &info);
+    bool background = found && info.state == BD_SESSION_BACKGROUND;
+    if (background) {
+      const char *frame = bd_session_last_frame_path(shell->session, app->id);
+      const char *path = frame != NULL ? frame : "";
+      bool changed = !runtime->running || !runtime->background ||
+                     strcmp(runtime->frame_path, path) != 0;
+      if (changed) {
+        int memory = shell_app_memory_mb(app);
+        if (bd_home_set_running(shell->home, app->id, frame,
+                                info.stopped_by_session, memory)) {
+          runtime->running = true;
+          runtime->memory_mb = memory;
+          copy_text(runtime->frame_path, sizeof(runtime->frame_path), path);
+          shell->dirty = true;
+        }
+      }
+      runtime->background = true;
+      continue;
+    }
+    runtime->background = false;
+    if (found && !session_running_state(info.state)) {
+      if (runtime->running) {
+        bd_home_clear_running(shell->home, app->id);
+        runtime->running = false;
+        runtime->frame_path[0] = '\0';
+        shell->dirty = true;
       }
     }
-    bd_desktop_set_app_running(shell->desktop, app->id, running, frame);
-  }
-  if (visible != shell->visible) {
-    shell->visible = visible;
-    bd_desktop_set_hint_visible(shell->desktop, false);
-    shell->dirty = visible;
   }
   if (shell->session != NULL) {
     bd_session_clear_terminated(shell->session);
+  }
+}
+
+/*
+ * The "background full" dialog ends the LRU process first; retry the launch
+ * once the session has actually dropped that instance.
+ */
+static void shell_try_pending_launch(bd_shell *shell) {
+  if (shell->pending_launch[0] == '\0') {
+    return;
+  }
+  if (shell->evict_app[0] != '\0') {
+    bd_session_app_info info;
+    if (shell->session != NULL &&
+        bd_session_find(shell->session, shell->evict_app, &info) &&
+        session_running_state(info.state)) {
+      return;
+    }
+    shell->evict_app[0] = '\0';
+  }
+  char app_id[BD_APP_ID_MAX];
+  copy_text(app_id, sizeof(app_id), shell->pending_launch);
+  shell->pending_launch[0] = '\0';
+  if (!shell_launch_app(shell, app_id) && shell->verbose) {
+    fprintf(stderr, "brickdesk: retry launch %s failed\n", app_id);
   }
 }
 
@@ -675,16 +770,21 @@ static void shell_process_pending(bd_shell *shell) {
       switch (pending->kind) {
         case SHELL_PENDING_STATE:
           if (pending->state == BD_SESSION_BACKGROUND) {
-            shell_begin_animation(shell, BD_SHELL_ANIMATION_RETURN,
-                                  pending->app_id);
-            shell->dirty = true;
+            shell_refresh_running(shell);
+            shell_request_return(shell, pending->app_id);
           }
           break;
-        case SHELL_PENDING_EXIT:
-          shell_begin_animation(shell, BD_SHELL_ANIMATION_RETURN,
-                                pending->app_id);
+        case SHELL_PENDING_EXIT: {
+          shell_refresh_running(shell);
+          const char *launching = bd_home_launch_target(shell->home);
+          bool launch_owner = launching != NULL &&
+                              strcmp(launching, pending->app_id) == 0;
+          if (!shell->visible || launch_owner) {
+            shell_request_return(shell, pending->app_id);
+          }
           shell->dirty = true;
           break;
+        }
         case SHELL_PENDING_MENU_ACTION:
           if (shell->session == NULL) {
             break;
@@ -720,9 +820,12 @@ static void shell_process_pending(bd_shell *shell) {
     shell->rescan = false;
   }
   shell_refresh_running(shell);
+  shell_try_pending_launch(shell);
 }
 
 static void shell_service(bd_shell *shell) {
+  uint64_t now = shell_now(shell);
+  shell_update_home(shell, now);
   if (!shell->inputd_connected) {
     bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
   }
@@ -743,23 +846,131 @@ static void shell_service(bd_shell *shell) {
     }
   }
   shell_process_pending(shell);
+  shell_update_home(shell, shell_now(shell));
 }
 
 /* ---------------------------------------------------------- dispatch path */
 
-static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed) {
-  if (!shell->visible) {
+static void shell_handle_dialog_result(bd_shell *shell) {
+  bd_home_dialog_result result = bd_home_take_dialog_result(shell->home);
+  if (result == BD_HOME_DIALOG_RESULT_NONE) {
     return;
   }
-  if (pressed && key == BD_KEY_A) {
-    const char *app_id = bd_desktop_focused_app_id(shell->desktop);
-    if (app_id != NULL) {
-      shell_launch_app(shell, app_id);
+  if (result == BD_HOME_DIALOG_RESULT_CANCEL) {
+    shell->pending_launch[0] = '\0';
+    shell->evict_app[0] = '\0';
+    shell->dialog_app[0] = '\0';
+    return;
+  }
+  if (shell->pending_launch[0] != '\0' && shell->evict_app[0] != '\0') {
+    /* Background-full confirm: end the LRU app, then retry in the loop. */
+    if (shell->session != NULL) {
+      bd_session_result terminated =
+          bd_session_terminate(shell->session, shell->evict_app);
+      if (shell->verbose) {
+        fprintf(stderr, "brickdesk: evict %s -> %s\n", shell->evict_app,
+                bd_session_result_name(terminated));
+      }
+      if (terminated != BD_SESSION_OK) {
+        shell->pending_launch[0] = '\0';
+        shell->evict_app[0] = '\0';
+      }
     }
+  } else if (shell->dialog_app[0] != '\0' && shell->session != NULL) {
+    bd_session_result terminated =
+        bd_session_terminate(shell->session, shell->dialog_app);
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: end %s -> %s\n", shell->dialog_app,
+              bd_session_result_name(terminated));
+    }
+  }
+  shell->dialog_app[0] = '\0';
+  shell->dirty = true;
+}
+
+static bool shell_home_input(bd_shell *shell, bd_home_action action) {
+  if (shell->home == NULL) {
+    return false;
+  }
+  if (action == BD_HOME_ACTION_END) {
+    const char *app_id = bd_home_selected_id(shell->home);
+    if (app_id != NULL) {
+      copy_text(shell->dialog_app, sizeof(shell->dialog_app), app_id);
+    }
+  }
+  bool changed = bd_home_input(shell->home, action);
+  if (action == BD_HOME_ACTION_END && !bd_home_dialog_open(shell->home)) {
+    /* X on a non-running tile: do not leave a stale end target behind. */
+    shell->dialog_app[0] = '\0';
+  }
+  shell_handle_dialog_result(shell);
+  if (changed) {
+    shell->dirty = true;
+  }
+  return changed;
+}
+
+static void shell_accept(bd_shell *shell) {
+  if (shell->home == NULL) {
     return;
   }
-  if (bd_desktop_handle_key(shell->desktop, key, pressed)) {
-    shell->dirty = true;
+  if (bd_home_dialog_open(shell->home)) {
+    shell_home_input(shell, BD_HOME_ACTION_ACCEPT);
+    return;
+  }
+  const char *app_id = bd_home_selected_id(shell->home);
+  if (app_id != NULL) {
+    shell_launch_app(shell, app_id);
+    return;
+  }
+  if (bd_home_quick_open(shell->home)) {
+    /* Quick-panel control row: let the home toggle it. */
+    shell_home_input(shell, BD_HOME_ACTION_ACCEPT);
+  }
+}
+
+static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed) {
+  if (!shell->visible || !pressed) {
+    return;
+  }
+  switch (key) {
+    case BD_KEY_A:
+      shell_accept(shell);
+      break;
+    case BD_KEY_B:
+      if (bd_home_dialog_open(shell->home) || bd_home_quick_open(shell->home)) {
+        shell_home_input(shell, BD_HOME_ACTION_CANCEL);
+      }
+      break;
+    case BD_KEY_X:
+      shell_home_input(shell, BD_HOME_ACTION_END);
+      break;
+    case BD_KEY_START:
+      shell_home_input(shell, BD_HOME_ACTION_QUICK);
+      break;
+    case BD_KEY_LEFT:
+      shell_home_input(shell, BD_HOME_ACTION_LEFT);
+      break;
+    case BD_KEY_RIGHT:
+      shell_home_input(shell, BD_HOME_ACTION_RIGHT);
+      break;
+    case BD_KEY_UP:
+      shell_home_input(shell, BD_HOME_ACTION_UP);
+      break;
+    case BD_KEY_DOWN:
+      shell_home_input(shell, BD_HOME_ACTION_DOWN);
+      break;
+    case BD_KEY_L1:
+      shell_home_input(shell, BD_HOME_ACTION_TAB_PREV);
+      break;
+    case BD_KEY_R1:
+      shell_home_input(shell, BD_HOME_ACTION_TAB_NEXT);
+      break;
+    case BD_KEY_HOME:
+      shell_home_input(shell, BD_HOME_ACTION_RECENT);
+      break;
+    default:
+      break;
   }
 }
 
@@ -791,10 +1002,12 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
   if (action == NULL) {
     return;
   }
-  if (bd_desktop_handle_action(shell->desktop, action, pressed)) {
+  if (strcmp(action, "ui.hint") == 0 && shell->visible) {
+    bd_home_set_hint_visible(shell->home, pressed);
     shell->dirty = true;
   }
-  if (strcmp(action, "session.return_home") == 0 && pressed) {
+  if (strcmp(action, "session.return_home") == 0 && pressed &&
+      !shell->visible) {
     if (shell_terminate_foreground(shell)) {
       shell->dirty = true;
     }
@@ -806,8 +1019,52 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
   }
 }
 
+static bool shell_home_begin_launch(bd_shell *shell, const char *app_id) {
+  if (shell->home == NULL) {
+    return false;
+  }
+  uint64_t now = shell_now(shell);
+  bd_home_update(shell->home, now);
+  if (!bd_home_start_launch(shell->home, app_id)) {
+    fprintf(stderr, "brickdesk: cannot start launch animation for %s\n",
+            app_id);
+    return false;
+  }
+  shell->visible = true;
+  shell->dirty = true;
+  return true;
+}
+
+/*
+ * The session only refuses a *background* transition when the quota is full,
+ * but the home must also refuse a new cold launch.  Show the choice and let
+ * shell_handle_dialog_result() end the LRU app before retrying.
+ */
+static bool shell_request_eviction(bd_shell *shell, const char *app_id) {
+  if (shell->session == NULL || shell->home == NULL) {
+    return false;
+  }
+  bd_session_eviction eviction;
+  memset(&eviction, 0, sizeof(eviction));
+  if (!bd_session_suggest_eviction(shell->session, &eviction)) {
+    return false;
+  }
+  copy_text(shell->pending_launch, sizeof(shell->pending_launch), app_id);
+  copy_text(shell->evict_app, sizeof(shell->evict_app), eviction.app_id);
+  bd_home_update(shell->home, shell_now(shell));
+  if (!bd_home_open_background_full(shell->home, app_id, eviction.app_id,
+                                    bd_session_max_background(shell->session))) {
+    shell->pending_launch[0] = '\0';
+    shell->evict_app[0] = '\0';
+    return false;
+  }
+  shell->visible = true;
+  shell->dirty = true;
+  return true;
+}
+
 static bool shell_launch_app(bd_shell *shell, const char *app_id) {
-  if (shell->session == NULL || app_id == NULL) {
+  if (shell->session == NULL || app_id == NULL || app_id[0] == '\0') {
     return false;
   }
   bd_session_app_info info;
@@ -815,9 +1072,11 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
     if (info.state == BD_SESSION_BACKGROUND) {
       bd_session_result result = bd_session_resume(shell->session, app_id);
       if (result == BD_SESSION_OK) {
-        shell_begin_animation(shell, BD_SHELL_ANIMATION_LAUNCH, app_id);
-        shell->dirty = false;
-        return true;
+        return shell_home_begin_launch(shell, app_id);
+      }
+      if (shell->verbose) {
+        fprintf(stderr, "brickdesk: resume %s -> %s\n", app_id,
+                bd_session_result_name(result));
       }
       return false;
     }
@@ -833,6 +1092,16 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
     }
     return false;
   }
+  int max_background = bd_session_max_background(shell->session);
+  if (max_background > 0 &&
+      bd_session_background_count(shell->session) >= max_background) {
+    if (shell_request_eviction(shell, app_id)) {
+      return true;
+    }
+    fprintf(stderr, "brickdesk: launch %s needs a free background slot\n",
+            app_id);
+    return false;
+  }
   bd_app copy;
   memset(&copy, 0, sizeof(copy));
   if (!bd_app_copy(&copy, app)) {
@@ -846,14 +1115,23 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
   bd_session_result result =
       bd_session_launch(shell->session, &copy, error, sizeof(error));
   bd_app_destroy(&copy);
+  if (result == BD_SESSION_NEEDS_CONFIRM) {
+    if (shell_request_eviction(shell, app_id)) {
+      return true;
+    }
+    fprintf(stderr, "brickdesk: launch %s needs a free background slot\n",
+            app_id);
+    return false;
+  }
   if (result != BD_SESSION_OK) {
     fprintf(stderr, "brickdesk: launch %s failed: %s%s%s\n", app_id,
             bd_session_result_name(result), error[0] != '\0' ? ": " : "",
             error);
     return false;
   }
-  shell_begin_animation(shell, BD_SHELL_ANIMATION_LAUNCH, app_id);
-  shell->dirty = false;
+  if (!shell_home_begin_launch(shell, app_id)) {
+    return false;
+  }
   if (shell->verbose) {
     const char *shim = menu_shim_path(shell, NULL);
     fprintf(stderr, "brickdesk: launched %s%s%s\n", app_id,
@@ -865,29 +1143,194 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
 
 /* ------------------------------------------------------------ applications */
 
-static void shell_load_apps(bd_shell *shell, const char *apps_dir) {
-  shell->apps = bd_app_list_create();
-  if (shell->apps == NULL) {
-    return;
+typedef struct shell_demo_item {
+  const char *id;
+  const char *title;
+  const char *subtitle;
+  int span_w;
+  int span_h;
+  int cover;
+  int r;
+  int g;
+  int b;
+  uint32_t flags;
+} shell_demo_item;
+
+static const shell_demo_item SHELL_DEMO_ITEMS[] = {
+    {"demo-town", "小镇四季", "第 3 年夏季 · 已玩 41 小时", 3, 2, 1, 109, 122,
+     99, 0},
+    {"demo-space", "星海拾荒者", "第 7 扇区 · 已玩 6 小时", 2, 2, 2, 76, 92,
+     112, 0},
+    {"demo-terminal", "终端", "本机 Shell", 1, 1, 3, 44, 46, 44, 0},
+    {"demo-settings", "设置", "显示与声音", 1, 1, 4, 111, 115, 123, 0},
+    {"demo-music", "音乐", "夜航 · 林间电台", 2, 2, 5, 123, 90, 140,
+     BD_HOME_ITEM_LIVE},
+    {"demo-reading", "阅读", "《三体》第 14 章", 1, 1, 6, 93, 124, 90, 0},
+    {"demo-files", "文件", "SD 卡已用 41 GB", 1, 1, 7, 76, 92, 112, 0},
+    {"demo-photos", "相册", "截图与照片 86 张", 1, 1, 8, 176, 138, 78, 0},
+    {"demo-transfer", "无线传输", "浏览器传文件", 2, 1, 1, 63, 133, 135, 0},
+    {"demo-system", "系统", "屏幕、网络与按键", 1, 1, 2, 111, 115, 123, 0},
+    {"demo-harbor", "雾港", "第二章「灯塔」", 1, 1, 3, 81, 96, 108,
+     BD_HOME_ITEM_GAME},
+    {"demo-well", "深井", "到达地下 12 层", 1, 1, 4, 75, 94, 102,
+     BD_HOME_ITEM_GAME},
+    {"demo-road", "赤色公路", "最佳圈速 1:42.08", 1, 1, 5, 162, 90, 76,
+     BD_HOME_ITEM_GAME},
+    {"demo-favorites", "收藏夹", "12 个收藏应用", 1, 1, 6, 123, 90, 140,
+     BD_HOME_ITEM_FAVORITE},
+};
+
+static void shell_span_for_index(int index, int *width, int *height) {
+  static const int CYCLE[24][2] = {
+      {3, 2}, {1, 1}, {1, 1}, {2, 2}, {1, 1}, {1, 2}, {1, 1}, {1, 1},
+      {1, 1}, {2, 1}, {1, 1}, {1, 1}, {2, 2}, {1, 1}, {2, 1}, {1, 2},
+      {1, 1}, {2, 2}, {1, 1}, {2, 1}, {1, 1}, {2, 2}, {1, 1}, {1, 1},
+  };
+  int cycle = index % 24;
+  *width = CYCLE[cycle][0];
+  *height = CYCLE[cycle][1];
+}
+
+static bd_app_cover_span shell_cover_span(int width, int height) {
+  if (width >= 3 && height >= 2) {
+    return BD_APP_SPAN_3X2;
   }
-  const char *dir = apps_dir != NULL ? apps_dir : bd_app_default_dir();
-  char error[256] = {0};
-  if (!bd_app_list_scan(shell->apps, dir, NULL, NULL, error,
-                        sizeof(error))) {
-    fprintf(stderr, "brickdesk: apps: %s\n", error);
-    return;
+  if (width >= 2 && height >= 2) {
+    return BD_APP_SPAN_2X2;
   }
-  size_t count = bd_app_list_count(shell->apps);
-  const bd_app **apps =
-      count > 0 ? (const bd_app **)calloc(count, sizeof(*apps)) : NULL;
-  if (count > 0 && apps == NULL) {
-    return;
+  if (width >= 2) {
+    return BD_APP_SPAN_2X1;
+  }
+  if (height >= 2) {
+    return BD_APP_SPAN_1X2;
+  }
+  return BD_APP_SPAN_1X1;
+}
+
+static bd_color shell_app_placeholder(const bd_app *app,
+                                      const bd_app_asset *asset) {
+  bd_color color;
+  if (asset != NULL && asset->color[0] != '\0' &&
+      bd_color_from_hex(asset->color, &color)) {
+    return bd_color_mix(bd_color_rgb(18, 16, 13), color, 0.55f);
+  }
+  const char *hex = app->accent[0] != '\0' ? app->accent : app->fallback_color;
+  if (hex[0] != '\0' && bd_color_from_hex(hex, &color)) {
+    return bd_color_mix(bd_color_rgb(18, 16, 13), color, 0.55f);
+  }
+  return bd_color_rgb(58, 52, 46);
+}
+
+static bool shell_set_demo_items(bd_shell *shell) {
+  int count = (int)(sizeof(SHELL_DEMO_ITEMS) / sizeof(SHELL_DEMO_ITEMS[0]));
+  bd_home_item *items =
+      (bd_home_item *)calloc((size_t)count, sizeof(*items));
+  char(*covers)[512] = (char(*)[512])calloc((size_t)count, 512);
+  if (items == NULL || covers == NULL) {
+    free(items);
+    free(covers);
+    return false;
+  }
+  for (int i = 0; i < count; ++i) {
+    const shell_demo_item *demo = &SHELL_DEMO_ITEMS[i];
+    snprintf(covers[i], 512, "%s/covers/home-%02d.jpg", BRICKDESK_ASSET_DIR,
+             demo->cover);
+    items[i].id = demo->id;
+    items[i].title = demo->title;
+    items[i].subtitle = demo->subtitle;
+    items[i].image_path = covers[i];
+    items[i].placeholder =
+        bd_color_rgb((uint8_t)demo->r, (uint8_t)demo->g, (uint8_t)demo->b);
+    items[i].span_w = demo->span_w;
+    items[i].span_h = demo->span_h;
+    items[i].flags = demo->flags;
+    items[i].badge_number = i + 1;
+  }
+  bool ok = bd_home_set_items(shell->home, items, count);
+  free(items);
+  free(covers);
+  return ok;
+}
+
+static bool shell_set_app_items(bd_shell *shell) {
+  size_t count = shell->apps != NULL ? bd_app_list_count(shell->apps) : 0;
+  if (count == 0) {
+    return shell_set_demo_items(shell);
+  }
+  if (count > 100000) {
+    return false;
+  }
+  bd_home_item *items = (bd_home_item *)calloc(count, sizeof(*items));
+  char(*covers)[BD_APP_PATH_MAX] =
+      (char(*)[BD_APP_PATH_MAX])calloc(count, BD_APP_PATH_MAX);
+  if (items == NULL || covers == NULL) {
+    free(items);
+    free(covers);
+    return false;
   }
   for (size_t i = 0; i < count; ++i) {
-    apps[i] = bd_app_list_at(shell->apps, i);
+    const bd_app *app = bd_app_list_at(shell->apps, i);
+    if (app == NULL) {
+      continue;
+    }
+    int span_w = 1;
+    int span_h = 1;
+    shell_span_for_index((int)i, &span_w, &span_h);
+    bd_app_asset asset;
+    memset(&asset, 0, sizeof(asset));
+    bool have_asset =
+        bd_app_asset_cover(app, shell_cover_span(span_w, span_h), &asset);
+    if (have_asset && asset.path[0] != '\0') {
+      copy_text(covers[i], BD_APP_PATH_MAX, asset.path);
+    }
+    items[i].id = app->id;
+    items[i].title = app->name;
+    items[i].subtitle =
+        app->subtitle[0] != '\0' ? app->subtitle
+                                 : bd_app_category_name(app->category);
+    items[i].image_path = covers[i][0] != '\0' ? covers[i] : NULL;
+    items[i].placeholder = shell_app_placeholder(app, &asset);
+    items[i].span_w = span_w;
+    items[i].span_h = span_h;
+    items[i].flags = (app->category == BD_APP_CATEGORY_GAME ||
+                      app->category == BD_APP_CATEGORY_EMULATOR)
+                         ? BD_HOME_ITEM_GAME
+                         : 0;
+    items[i].badge_number = (int)i + 1;
   }
-  bd_desktop_set_apps(shell->desktop, apps, count);
-  free(apps);
+  bool ok = bd_home_set_items(shell->home, items, (int)count);
+  free(items);
+  free(covers);
+  return ok;
+}
+
+static void shell_load_apps(bd_shell *shell, const char *apps_dir) {
+  free(shell->runtime);
+  shell->runtime = NULL;
+  shell->runtime_count = 0;
+  if (shell->apps != NULL) {
+    bd_app_list_destroy(shell->apps);
+  }
+  shell->apps = bd_app_list_create();
+  const char *dir = apps_dir != NULL ? apps_dir : bd_app_default_dir();
+  if (shell->apps != NULL) {
+    char error[256] = {0};
+    if (!bd_app_list_scan(shell->apps, dir, NULL, NULL, error,
+                          sizeof(error))) {
+      fprintf(stderr, "brickdesk: apps: %s\n", error);
+    }
+  }
+  size_t count = shell->apps != NULL ? bd_app_list_count(shell->apps) : 0;
+  if (count > 0) {
+    shell->runtime =
+        (shell_app_runtime *)calloc(count, sizeof(*shell->runtime));
+    if (shell->runtime != NULL) {
+      shell->runtime_count = count;
+    }
+  }
+  if (!shell_set_app_items(shell)) {
+    fprintf(stderr, "brickdesk: cannot build the home wall\n");
+  }
   if (shell->verbose) {
     fprintf(stderr, "brickdesk: %zu app(s) from %s\n", count, dir);
   }
@@ -896,11 +1339,12 @@ static void shell_load_apps(bd_shell *shell, const char *apps_dir) {
 /* ------------------------------------------------------------------- loop */
 
 bool bd_shell_render(bd_shell *shell) {
-  if (shell == NULL || !shell->visible) {
+  if (shell == NULL || !shell->visible || shell->home == NULL) {
     return false;
   }
+  bd_home_update(shell->home, shell_now(shell));
   bd_gfx_begin_frame(shell->gfx);
-  bd_desktop_draw(shell->desktop, shell->gfx);
+  bd_home_draw(shell->home, shell->gfx);
   bd_gfx_end_frame(shell->gfx);
   bd_gfx_stats stats = bd_gfx_get_stats(shell->gfx);
   if (stats.presented) {
@@ -947,11 +1391,17 @@ static int shell_poll_timeout(bd_shell *shell) {
       best = merge_timeout(best, (int)remaining);
     }
   }
-  if (shell->animation.kind != BD_SHELL_ANIMATION_NONE) {
-    best = merge_timeout(best, 16);
-  }
-  if (bd_desktop_has_pending_images(shell->desktop)) {
-    best = merge_timeout(best, 16);
+  if (shell->visible && shell->home != NULL) {
+    uint64_t wake_at = 0;
+    if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+      uint64_t now = shell_now(shell);
+      uint64_t remaining = wake_at > now ? wake_at - now : 0;
+      /* A transition or decode keeps a 60 Hz frame deadline. */
+      if (remaining > 16 || (shell->test_clock && remaining == 0)) {
+        remaining = 16;
+      }
+      best = merge_timeout(best, (int)remaining);
+    }
   }
   if (shell->dirty && shell->visible) {
     best = 0;
@@ -1017,7 +1467,12 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
   if (shell->quit) {
     return -1;
   }
-  shell_update_animation(shell);
+  if (shell->visible && shell->home != NULL) {
+    uint64_t wake_at = 0;
+    if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+      shell->dirty = true;
+    }
+  }
   if (shell->dirty && shell->visible) {
     bd_shell_render(shell);
   } else if (shell->dirty && !shell->visible) {
@@ -1068,7 +1523,12 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
 
   if (handled) {
     shell_service(shell);
-    shell_update_animation(shell);
+    if (shell->visible && shell->home != NULL) {
+      uint64_t wake_at = 0;
+      if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+        shell->dirty = true;
+      }
+    }
     if (shell->dirty && shell->visible) {
       bd_shell_render(shell);
     } else if (shell->dirty && !shell->visible) {
@@ -1102,7 +1562,7 @@ bool bd_shell_run_for(bd_shell *shell, int duration_ms) {
 
 bd_shell *bd_shell_create(const bd_shell_config *config) {
   if (config == NULL || config->platform == NULL || config->gfx == NULL ||
-      config->desktop == NULL || config->settings == NULL) {
+      config->settings == NULL) {
     return NULL;
   }
   bd_shell *shell = (bd_shell *)calloc(1, sizeof(*shell));
@@ -1111,13 +1571,56 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
   shell->platform = config->platform;
   shell->gfx = config->gfx;
-  shell->desktop = config->desktop;
   shell->settings = config->settings;
   shell->plugins = config->plugins;
   shell->verbose = config->verbose;
   shell->inputd_fd = -1;
   shell->visible = true;
   shell->dirty = true;
+
+  const char *theme_mode =
+      bd_config_get_string(config->settings, "theme.mode", "dark");
+  bool dark = strcmp(theme_mode, "light") != 0;
+  const char *accent_name =
+      bd_config_get_string(config->settings, "theme.accent", "persimmon");
+  const char *accent_hex = bd_config_accent_hex(accent_name, dark);
+  bd_color accent = bd_color_rgb(224, 122, 95);
+  if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &accent)) {
+    fprintf(stderr, "brickdesk: config: invalid theme accent '%s'\n",
+            accent_name);
+    accent = bd_color_rgb(224, 122, 95);
+  }
+  memset(&shell->home_style, 0, sizeof(shell->home_style));
+  shell->home_style.accent_base = accent;
+  shell->home_style.dark = dark;
+  shell->home_style.blur_enabled =
+      bd_config_get_bool(config->settings, "ui.blur", true);
+  shell->home_style.width = bd_gfx_width(config->gfx);
+  shell->home_style.height = bd_gfx_height(config->gfx);
+  shell->home = bd_home_create(config->gfx, &shell->home_style);
+  if (shell->home == NULL) {
+    fprintf(stderr, "brickdesk: cannot create the home page\n");
+    free(shell);
+    return NULL;
+  }
+
+  bd_home_status status;
+  memset(&status, 0, sizeof(status));
+  char clock[16] = "22:26";
+  if (getenv("BRICKDESK_HEADLESS") == NULL) {
+    time_t wall = time(NULL);
+    struct tm local;
+    if (wall != (time_t)-1 && localtime_r(&wall, &local) != NULL) {
+      strftime(clock, sizeof(clock), "%H:%M", &local);
+    }
+  }
+  long max_background =
+      bd_config_get_int(config->settings, "session.max_background", 3);
+  status.clock = clock;
+  status.wifi = true;
+  status.battery_percent = 82;
+  status.max_background = (int)max_background;
+  bd_home_set_status(shell->home, &status);
 
   bd_hotkey_table_load(&shell->hotkeys, config->settings);
   shell->hotkey_table = &shell->hotkeys;
@@ -1141,7 +1644,7 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   session_config.frame_dir = config->session_frame_dir;
   session_config.state_root = config->session_state_root;
   session_config.max_background =
-      (int)bd_config_get_int(config->settings, "session.max_background", 2);
+      (int)bd_config_get_int(config->settings, "session.max_background", 3);
   session_config.on_event = on_session_event;
   session_config.event_user = shell;
   char error[256] = {0};
@@ -1174,9 +1677,11 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_session_destroy(shell->session);
   }
   inputd_disconnect(shell, "shutdown");
+  free(shell->runtime);
   if (shell->apps != NULL) {
     bd_app_list_destroy(shell->apps);
   }
+  bd_home_destroy(shell->home);
   free(shell);
 }
 
@@ -1189,19 +1694,15 @@ bool bd_shell_quit_requested(const bd_shell *shell) {
 }
 
 bool bd_shell_has_pending_images(const bd_shell *shell) {
-  return shell != NULL && bd_desktop_has_pending_images(shell->desktop);
+  return shell != NULL && bd_home_has_pending_images(shell->home);
 }
 
 bool bd_shell_hint_visible(const bd_shell *shell) {
-  return shell != NULL && bd_desktop_hint_visible(shell->desktop);
+  return shell != NULL && bd_home_hint_visible(shell->home);
 }
 
 uint64_t bd_shell_present_count(const bd_shell *shell) {
   return shell != NULL ? shell->presents : 0;
-}
-
-const bd_shell_animation *bd_shell_animation_state(const bd_shell *shell) {
-  return shell != NULL ? &shell->animation : NULL;
 }
 
 const char *bd_shell_input_source(const bd_shell *shell) {
@@ -1219,6 +1720,10 @@ const bd_app *bd_shell_app_at(const bd_shell *shell, size_t index) {
              : NULL;
 }
 
+bd_home *bd_shell_home(bd_shell *shell) {
+  return shell != NULL ? shell->home : NULL;
+}
+
 void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,
                        uint64_t time_ms) {
   if (shell == NULL) {
@@ -1232,5 +1737,7 @@ void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms) {
   if (shell == NULL) {
     return;
   }
+  shell->test_clock = true;
+  shell->test_now_ms = time_ms;
   bd_input_state_advance(&shell->test_input, time_ms, local_emit, shell);
 }

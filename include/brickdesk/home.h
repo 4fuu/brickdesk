@@ -112,6 +112,23 @@ typedef enum bd_home_action {
   BD_HOME_ACTION_RECENT      /* HOME: focus the most recent background app */
 } bd_home_action;
 
+typedef enum bd_home_dialog_kind {
+  BD_HOME_DIALOG_NONE = 0,
+  BD_HOME_DIALOG_END_APP,     /* end the running app on the focused tile */
+  BD_HOME_DIALOG_BACKGROUND_FULL /* end the LRU app and launch another */
+} bd_home_dialog_kind;
+
+/*
+ * A dialog result is reported once, after the user confirms or cancels, so the
+ * event loop can act on the session (end a process or evict the LRU entry).
+ * Take it after bd_home_input() or bd_home_take_dialog_result().
+ */
+typedef enum bd_home_dialog_result {
+  BD_HOME_DIALOG_RESULT_NONE = 0,
+  BD_HOME_DIALOG_RESULT_CANCEL,
+  BD_HOME_DIALOG_RESULT_CONFIRM
+} bd_home_dialog_result;
+
 bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style);
 void bd_home_destroy(bd_home *home);
 
@@ -123,6 +140,12 @@ bool bd_home_item_rect(const bd_home *home, int index, bd_rect *out);
 
 int bd_home_focus(const bd_home *home);
 void bd_home_set_focus(bd_home *home, int index);
+/*
+ * Item id A would act on right now: the selected running row while the quick
+ * panel is open, otherwise the focused wall tile.  Returns NULL for quick
+ * panel control rows and while the dialog or a transition owns input.
+ */
+const char *bd_home_selected_id(const bd_home *home);
 int bd_home_tab(const bd_home *home);
 void bd_home_set_tab(bd_home *home, int tab);
 
@@ -186,8 +209,17 @@ bool bd_home_hint_visible(const bd_home *home);
 
 /* End-process dialog: 180 ms; confirm starts the 180 ms tile close animation. */
 bool bd_home_open_end_dialog(bd_home *home, const char *id);
+/*
+ * "Background full" choice: the session refused a launch because the
+ * max_background slots are taken.  Shows the LRU app and the app that would
+ * start; confirm means "end the LRU app and start", cancel leaves both alone.
+ * The loop remains responsible for terminating the process and retrying.
+ */
+bool bd_home_open_background_full(bd_home *home, const char *pending_id,
+                                  const char *victim_id, int max_background);
 void bd_home_cancel_dialog(bd_home *home);
 bool bd_home_confirm_dialog(bd_home *home);
 bool bd_home_dialog_open(const bd_home *home);
+bd_home_dialog_result bd_home_take_dialog_result(bd_home *home);
 
 #endif /* BRICKDESK_HOME_H */

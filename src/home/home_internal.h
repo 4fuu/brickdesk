@@ -25,7 +25,7 @@
 #define BD_HOME_PREFETCH 1024
 #define BD_HOME_MAX_RUNNING 8
 #define BD_HOME_MAX_QUERY BD_HOME_QUERY_MAX
-#define BD_HOME_ID_MAX 64
+#define BD_HOME_ID_MAX 65
 #define BD_HOME_PATH_MAX 512
 #define BD_HOME_TITLE_MAX 256
 
@@ -55,10 +55,11 @@ typedef struct bd_home_fonts {
   bd_font *title25;
   bd_font *title22;
   bd_font *title18;
-  bd_font *tab16;
+  bd_font *tab18;
+  bd_font *body16;
   bd_font *body15;
   bd_font *body14;
-  bd_font *badge11;
+  bd_font *badge13;
   bd_font *serif25;
   bd_font *serif22;
   bd_font *serif17;
@@ -168,6 +169,11 @@ struct bd_home {
   float dialog_from;
   int dialog_item;
   int dialog_focus;
+  int dialog_kind;
+  int dialog_result;
+  int dialog_max_background;
+  char dialog_pending_id[BD_HOME_ID_MAX];
+  char dialog_victim_id[BD_HOME_ID_MAX];
 
   bd_home_launch_mode launch;
   int launch_item;

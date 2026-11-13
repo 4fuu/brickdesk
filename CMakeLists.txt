@@ -71,7 +71,6 @@ endif()
 # --- core library -------------------------------------------------------
 add_library(brickdesk_core STATIC
   src/app/desktop.c
-  src/app/shell.c
   src/app/theme.c
   src/app/ui.c
   src/app/wall.c
@@ -223,6 +222,18 @@ target_link_libraries(brickdesk_input
   PRIVATE brickdesk_warnings
 )
 
+# --- system information ------------------------------------------------
+# Read-only /proc and /sys sampling used by the event loop.  Kept free of
+# SDL/GL so it can be tested with a fixture root and does not grow the
+# session library.
+add_library(brickdesk_sysinfo STATIC
+  src/system/sysinfo.c
+)
+target_include_directories(brickdesk_sysinfo
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_sysinfo PRIVATE brickdesk_warnings)
+
 # --- session ------------------------------------------------------------
 # App manifests, process lifecycle, app IPC and the last-frame handoff.
 # Deliberately free of SDL/GL/config so brickdesk-session can stay small.
@@ -256,6 +267,28 @@ target_include_directories(brickdesk_home
 )
 target_link_libraries(brickdesk_home
   PUBLIC brickdesk_core brickdesk_session
+  PRIVATE brickdesk_warnings
+)
+
+# --- desktop event loop -------------------------------------------------
+# Owns input, the session, the plugin host and the home page.  It sits above
+# both brickdesk_core (renderer/UI) and brickdesk_home so neither has to know
+# about the other's callers.
+add_library(brickdesk_shell STATIC
+  src/app/shell.c
+)
+target_include_directories(brickdesk_shell
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_shell
+  PUBLIC
+    brickdesk_home
+    brickdesk_core
+    brickdesk_config
+    brickdesk_input
+    brickdesk_plugin
+    brickdesk_session
+    brickdesk_sysinfo
   PRIVATE brickdesk_warnings
 )
 
@@ -345,7 +378,7 @@ endif()
 
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
-target_link_libraries(brickdesk PRIVATE brickdesk_core brickdesk_config brickdesk_warnings)
+target_link_libraries(brickdesk PRIVATE brickdesk_shell brickdesk_warnings)
 
 # Reference app for the session protocol. It writes the last-frame handoff
 # and a state file; see docs/app-protocol.md.

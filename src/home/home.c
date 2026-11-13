@@ -214,6 +214,14 @@ void bd_home_palette_apply(bd_home *home) {
   home->accent = bd_accent_palette_from(home->style.accent_base, home->style.dark);
 }
 
+/*
+ * The bundled Noto SC subsets declare hhea ascent/descent of 1160/-288 units
+ * per 1000 em.  stb_truetype scales by that 1.448 em span, so a "18 px" font
+ * renders 18 / 1.448 = 12.4 px.  The design sizes are CSS pixels, so load the
+ * nominal face at 1.448x and keep the layout constants in CSS pixels.
+ */
+#define BD_HOME_FONT_EM_SCALE 1.448f
+
 static bd_font *load_font(bd_gfx *gfx, const char *name, int pixel_size) {
   char path[1024];
   int written = snprintf(path, sizeof(path), "%s/fonts/%s", BRICKDESK_ASSET_DIR,
@@ -221,7 +229,8 @@ static bd_font *load_font(bd_gfx *gfx, const char *name, int pixel_size) {
   if (written <= 0 || (size_t)written >= sizeof(path)) {
     return NULL;
   }
-  return bd_font_create(gfx, path, pixel_size);
+  int nominal = (int)((float)pixel_size * BD_HOME_FONT_EM_SCALE + 0.5f);
+  return bd_font_create(gfx, path, nominal);
 }
 
 static bd_font *load_optional_full_font(bd_gfx *gfx) {
@@ -241,7 +250,7 @@ static bd_font *load_optional_full_font(bd_gfx *gfx) {
       continue;
     }
     fclose(file);
-    bd_font *font = bd_font_create(gfx, path, 20);
+    bd_font *font = bd_font_create(gfx, path, 29);
     if (font != NULL) {
       return font;
     }
@@ -254,10 +263,11 @@ static void fonts_free(bd_home_fonts *fonts) {
   bd_font_destroy(fonts->title25);
   bd_font_destroy(fonts->title22);
   bd_font_destroy(fonts->title18);
-  bd_font_destroy(fonts->tab16);
+  bd_font_destroy(fonts->tab18);
+  bd_font_destroy(fonts->body16);
   bd_font_destroy(fonts->body15);
   bd_font_destroy(fonts->body14);
-  bd_font_destroy(fonts->badge11);
+  bd_font_destroy(fonts->badge13);
   bd_font_destroy(fonts->serif25);
   bd_font_destroy(fonts->serif22);
   bd_font_destroy(fonts->serif17);
@@ -271,26 +281,29 @@ static bool fonts_load(bd_home_fonts *fonts, bd_gfx *gfx) {
   fonts->title25 = load_font(gfx, "NotoSansSC-700-subset.ttf", 25);
   fonts->title22 = load_font(gfx, "NotoSansSC-700-subset.ttf", 22);
   fonts->title18 = load_font(gfx, "NotoSansSC-700-subset.ttf", 18);
-  fonts->tab16 = load_font(gfx, "NotoSansSC-700-subset.ttf", 16);
+  fonts->tab18 = load_font(gfx, "NotoSansSC-700-subset.ttf", 18);
+  fonts->body16 = load_font(gfx, "NotoSansSC-500-subset.ttf", 16);
   fonts->body15 = load_font(gfx, "NotoSansSC-500-subset.ttf", 15);
   fonts->body14 = load_font(gfx, "NotoSansSC-500-subset.ttf", 14);
-  fonts->badge11 = load_font(gfx, "NotoSansSC-700-subset.ttf", 11);
+  /* 13 px is the smallest UI face: badges, meta values and keycaps. */
+  fonts->badge13 = load_font(gfx, "NotoSansSC-700-subset.ttf", 13);
   fonts->serif25 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 25);
   fonts->serif22 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 22);
   fonts->serif17 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 17);
   fonts->fallback = load_optional_full_font(gfx);
   if (fonts->title31 == NULL || fonts->title25 == NULL ||
       fonts->title22 == NULL || fonts->title18 == NULL ||
-      fonts->tab16 == NULL || fonts->body15 == NULL || fonts->body14 == NULL ||
-      fonts->badge11 == NULL || fonts->serif25 == NULL ||
+      fonts->tab18 == NULL || fonts->body16 == NULL ||
+      fonts->body15 == NULL || fonts->body14 == NULL ||
+      fonts->badge13 == NULL || fonts->serif25 == NULL ||
       fonts->serif22 == NULL || fonts->serif17 == NULL) {
     fonts_free(fonts);
     return false;
   }
   bd_font *all[] = {fonts->title31, fonts->title25, fonts->title22,
-                    fonts->title18, fonts->tab16,    fonts->body15,
-                    fonts->body14,  fonts->badge11,  fonts->serif25,
-                    fonts->serif22, fonts->serif17};
+                    fonts->title18, fonts->tab18,    fonts->body16,
+                    fonts->body15,  fonts->body14,   fonts->badge13,
+                    fonts->serif25, fonts->serif22,   fonts->serif17};
   for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
     bd_font_set_fallback(all[i], fonts->fallback);
   }
@@ -768,6 +781,11 @@ bool bd_home_set_items(bd_home *home, const bd_home_item *items, int count) {
   home->dialog_open = false;
   home->dialog_visible = false;
   home->dialog_anim = false;
+  home->dialog_target = false;
+  home->dialog_kind = BD_HOME_DIALOG_NONE;
+  home->dialog_result = BD_HOME_DIALOG_RESULT_NONE;
+  home->dialog_pending_id[0] = '\0';
+  home->dialog_victim_id[0] = '\0';
 
   if (count == 0) {
     while (home->running_count > 0) {
@@ -924,6 +942,26 @@ bool bd_home_item_rect(const bd_home *home, int index, bd_rect *out) {
 
 int bd_home_focus(const bd_home *home) {
   return home != NULL ? home->focus : -1;
+}
+
+const char *bd_home_selected_id(const bd_home *home) {
+  if (home == NULL || home->closing_active || home->launch != BD_HOME_LAUNCH_NONE ||
+      home->dialog_open || home->dialog_visible) {
+    return NULL;
+  }
+  if (home->quick_open) {
+    if (home->quick_sel < 0 || home->quick_sel >= home->running_count) {
+      return NULL;
+    }
+    return home->running[home->quick_sel].id;
+  }
+  if (home->quick_anim) {
+    return NULL;
+  }
+  if (home->focus < 0 || home->focus >= home->count) {
+    return NULL;
+  }
+  return home->entries[home->focus].id;
 }
 
 int bd_home_tab(const bd_home *home) {
@@ -1388,6 +1426,10 @@ static void close_overlays(bd_home *home) {
     home->dialog_visible = false;
     home->dialog_anim = false;
     home->dialog_target = false;
+    home->dialog_kind = BD_HOME_DIALOG_NONE;
+    home->dialog_result = BD_HOME_DIALOG_RESULT_NONE;
+    home->dialog_pending_id[0] = '\0';
+    home->dialog_victim_id[0] = '\0';
     changed = true;
   }
   if (home->hint_visible || home->hint_anim) {
@@ -1492,7 +1534,8 @@ bd_rect bd_home_quick_panel_rect(const bd_home *home) {
   int closed_x = home->width;
   int open_x = home->width - 402;
   int x = bd_home_lerp_int(closed_x, open_x, progress);
-  return bd_rect_make(x, 8, 394, home->height - 16);
+  /* Flush to the right edge, full height, square outer corners. */
+  return bd_rect_make(x, 0, 402, home->height);
 }
 
 bool bd_home_open_quick(bd_home *home) {
@@ -1570,6 +1613,41 @@ bool bd_home_open_end_dialog(bd_home *home, const char *id) {
   home->hint_target = false;
   home->dialog_item = item;
   home->dialog_focus = 0;
+  home->dialog_kind = BD_HOME_DIALOG_END_APP;
+  home->dialog_result = BD_HOME_DIALOG_RESULT_NONE;
+  home->dialog_max_background = 0;
+  home->dialog_pending_id[0] = '\0';
+  home->dialog_victim_id[0] = '\0';
+  home->dialog_from = home->dialog_visible ? bd_home_dialog_progress(home) : 0.0f;
+  home->dialog_open = true;
+  home->dialog_visible = true;
+  home->dialog_target = true;
+  home->dialog_anim = true;
+  home->dialog_start = home->now_ms;
+  bd_home_damage_all(home);
+  return true;
+}
+
+bool bd_home_open_background_full(bd_home *home, const char *pending_id,
+                                  const char *victim_id, int max_background) {
+  if (home == NULL || pending_id == NULL || victim_id == NULL ||
+      pending_id[0] == '\0' || victim_id[0] == '\0') {
+    return false;
+  }
+  if (find_item(home, pending_id) < 0) {
+    return false;
+  }
+  home->hint_visible = false;
+  home->hint_anim = false;
+  home->hint_target = false;
+  home->dialog_item = find_item(home, victim_id);
+  home->dialog_focus = 0;
+  home->dialog_kind = BD_HOME_DIALOG_BACKGROUND_FULL;
+  home->dialog_result = BD_HOME_DIALOG_RESULT_NONE;
+  home->dialog_max_background = max_background > 0 ? max_background : 3;
+  copy_text(home->dialog_pending_id, sizeof(home->dialog_pending_id),
+            pending_id);
+  copy_text(home->dialog_victim_id, sizeof(home->dialog_victim_id), victim_id);
   home->dialog_from = home->dialog_visible ? bd_home_dialog_progress(home) : 0.0f;
   home->dialog_open = true;
   home->dialog_visible = true;
@@ -1584,6 +1662,7 @@ void bd_home_cancel_dialog(bd_home *home) {
   if (home == NULL || !home->dialog_open) {
     return;
   }
+  home->dialog_result = BD_HOME_DIALOG_RESULT_CANCEL;
   home->dialog_from = bd_home_dialog_progress(home);
   home->dialog_open = false;
   home->dialog_target = false;
@@ -1600,25 +1679,43 @@ bool bd_home_confirm_dialog(bd_home *home) {
     bd_home_cancel_dialog(home);
     return false;
   }
-  if (home->dialog_item < 0 || home->dialog_item >= home->count) {
+  int kind = home->dialog_kind;
+  int item = home->dialog_item;
+  if (kind == BD_HOME_DIALOG_END_APP && (item < 0 || item >= home->count)) {
     bd_home_cancel_dialog(home);
     return false;
   }
-  int item = home->dialog_item;
+  if (kind == BD_HOME_DIALOG_BACKGROUND_FULL &&
+      home->dialog_pending_id[0] == '\0') {
+    bd_home_cancel_dialog(home);
+    return false;
+  }
+  home->dialog_result = BD_HOME_DIALOG_RESULT_CONFIRM;
   home->dialog_from = bd_home_dialog_progress(home);
   home->dialog_open = false;
   home->dialog_target = false;
   home->dialog_anim = true;
   home->dialog_start = home->now_ms;
-  home->closing_active = true;
-  home->closing_item = item;
-  home->closing_start = home->now_ms;
+  if (kind == BD_HOME_DIALOG_END_APP) {
+    home->closing_active = true;
+    home->closing_item = item;
+    home->closing_start = home->now_ms;
+  }
   bd_home_damage_all(home);
-  return true;
+  return kind == BD_HOME_DIALOG_END_APP || kind == BD_HOME_DIALOG_BACKGROUND_FULL;
 }
 
 bool bd_home_dialog_open(const bd_home *home) {
   return home != NULL && home->dialog_open;
+}
+
+bd_home_dialog_result bd_home_take_dialog_result(bd_home *home) {
+  if (home == NULL) {
+    return BD_HOME_DIALOG_RESULT_NONE;
+  }
+  bd_home_dialog_result result = (bd_home_dialog_result)home->dialog_result;
+  home->dialog_result = BD_HOME_DIALOG_RESULT_NONE;
+  return result;
 }
 
 static bool quick_adjust(bd_home *home, int delta) {

@@ -220,14 +220,19 @@ static void draw_copy_block(const bd_home *home, bd_gfx *gfx,
   draw_wrapped(gfx, title_font, rect.x + 14, title_top, max_width, title_lh,
                alpha_color(palette->cover_ink, alpha), entry->title, title_lines);
   if (sub_lines > 0) {
+    bd_color sub_color = palette->cover_ink2;
+    if (entry->running) {
+      /* The last frame is arbitrary; lift the subtitle over the scrim. */
+      sub_color = palette->cover_ink;
+      sub_color.a = 0.84f;
+    }
     draw_wrapped(gfx, sub_font, rect.x + 14, sub_top, max_width, sub_lh,
-                 alpha_color(palette->cover_ink2, alpha), entry->subtitle,
-                 sub_lines);
+                 alpha_color(sub_color, alpha), entry->subtitle, sub_lines);
   }
 }
 
 static int badge_width(const bd_home *home, const char *text, bool dot) {
-  return 14 + (dot ? 10 : 0) + bd_font_measure_text(home->fonts.badge11, text);
+  return 14 + (dot ? 10 : 0) + bd_font_measure_text(home->fonts.badge13, text);
 }
 
 static void draw_badge(const bd_home *home, bd_gfx *gfx, int x, int y,
@@ -246,7 +251,7 @@ static void draw_badge(const bd_home *home, bd_gfx *gfx, int x, int y,
                            alpha_color(home->accent.accent, alpha));
     text_x += 10;
   }
-  bd_gfx_draw_text(gfx, home->fonts.badge11, text_x, y + 15,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, text_x, y + 15,
                    alpha_color(text_color, alpha), text);
 }
 
@@ -278,12 +283,13 @@ static const bd_texture *running_frame_texture(const bd_home *home, int index) {
 }
 
 static void draw_live_body(const bd_home *home, bd_gfx *gfx, bd_rect rect,
-                           float alpha) {
+                           int badge_bottom, float alpha) {
   const bd_home_palette *palette = &home->palette;
   const bd_home_live *live = &home->live;
   int x = rect.x + 16;
   int width = rect.w - 32;
-  int title_top = rect.y + 50;
+  /* Start below the top-left live badge. */
+  int title_top = badge_bottom + 4;
   int title_lh = line_height_for(25, 1.18f);
   text_shadowed(gfx, home->fonts.title25, x,
                 baseline_for(home->fonts.title25, title_top, title_lh), width,
@@ -329,10 +335,10 @@ static void draw_live_body(const bd_home *home, bd_gfx *gfx, bd_rect rect,
   format_time(duration, sizeof(duration), live->duration_seconds);
   int time_baseline = rect.y + rect.h - 22;
   bd_color time_color = with_alpha(palette->cover_ink, 0.56f * alpha);
-  bd_gfx_draw_text(gfx, home->fonts.badge11, x, time_baseline, time_color,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, x, time_baseline, time_color,
                    elapsed);
-  bd_gfx_draw_text(gfx, home->fonts.badge11,
-                   x + bd_font_measure_text(home->fonts.badge11, elapsed) + 10,
+  bd_gfx_draw_text(gfx, home->fonts.badge13,
+                   x + bd_font_measure_text(home->fonts.badge13, elapsed) + 10,
                    time_baseline, time_color, duration);
 
   int button = 26;
@@ -411,27 +417,47 @@ static void draw_tile(bd_home *home, bd_gfx *gfx, int index, bool focused) {
   char number[16];
   format_number(number, sizeof(number), entry->item.badge_number);
   char badge_text[64];
-  bool badge_dot = false;
-  if ((entry->item.flags & BD_HOME_ITEM_LIVE) != 0 && !entry->running) {
-    badge_dot = true;
-    snprintf(badge_text, sizeof(badge_text), "%s · %s",
-             home->live.playing ? "正在播放" : "已暂停", number);
-  } else {
-    snprintf(badge_text, sizeof(badge_text), "%s", number);
-  }
-  draw_badge(home, gfx, rect.x + 12, badge_top, badge_text, badge_dot, 0.44f,
-             with_alpha(palette->cover_ink, 0.82f), alpha);
   if (entry->running) {
+    /*
+     * A running tile shows the app's last frame.  Keep only the top-right
+     * "running" badge; the old top-left number duplicated it.
+     */
     snprintf(badge_text, sizeof(badge_text), "运行中 · %s", number);
     int width = badge_width(home, badge_text, true);
     draw_badge(home, gfx, rect.x + rect.w - 12 - width, badge_top, badge_text,
                true, 0.62f, palette->cover_ink, alpha);
+  } else {
+    bool badge_dot = false;
+    if ((entry->item.flags & BD_HOME_ITEM_LIVE) != 0) {
+      badge_dot = true;
+      snprintf(badge_text, sizeof(badge_text), "%s · %s",
+               home->live.playing ? "正在播放" : "已暂停", number);
+    } else {
+      snprintf(badge_text, sizeof(badge_text), "%s", number);
+    }
+    draw_badge(home, gfx, rect.x + 12, badge_top, badge_text, badge_dot, 0.44f,
+               with_alpha(palette->cover_ink, 0.82f), alpha);
+  }
+
+  if (entry->running) {
+    /*
+     * Last frames are arbitrary application pixels; a cheap bottom-up scrim
+     * keeps the bottom-left title and subtitle readable on bright frames.
+     */
+    int scrim_height = rect.h / 2;
+    bd_color clear = with_alpha(bd_color_rgb(8, 7, 9), 0.0f);
+    bd_color dark = with_alpha(bd_color_rgb(8, 7, 9), 0.70f * alpha);
+    bd_gfx_fill_gradient(
+        gfx,
+        bd_rect_make(rect.x, rect.y + rect.h - scrim_height, rect.w,
+                     scrim_height),
+        0, clear, dark, BD_GRADIENT_VERTICAL);
   }
 
   bool live_body = (entry->item.flags & BD_HOME_ITEM_LIVE) != 0 && show_focus &&
                    !entry->running;
   if (live_body) {
-    draw_live_body(home, gfx, rect, alpha);
+    draw_live_body(home, gfx, rect, badge_top + 20, alpha);
   } else {
     draw_copy_block(home, gfx, entry, rect, alpha);
   }
@@ -534,15 +560,6 @@ static void draw_wall(bd_home *home, bd_gfx *gfx) {
   home->stats.total_items = home->count;
 }
 
-static void draw_brand_mark(const bd_home *home, bd_gfx *gfx, int x, int y) {
-  bd_color color = home->palette.ink2;
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y, 5, 5), 1, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 7, y, 5, 5), 1, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y + 7, 5, 5), 1, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 7, y + 7, 5, 5), 1,
-                         home->accent.accent);
-}
-
 static void draw_wifi_icon(bd_gfx *gfx, bd_color color, int x, int y) {
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 9, 5, 4), 2, color);
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 3, y + 5, 11, 3), 1, color);
@@ -582,28 +599,33 @@ static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
                           palette->chrome_base, fade, BD_GRADIENT_VERTICAL);
   }
 
-  draw_brand_mark(home, gfx, 24, 28);
-  bd_gfx_draw_text(gfx, home->fonts.body14, 45, 41, palette->ink2, "brickdesk");
-
-  int x = 140;
+  /*
+   * The four-square project mark is gone; the wordmark, categories, Wi-Fi,
+   * battery and clock stay.  There are no search/gear/avatar buttons.
+   */
+  int brand_x = 24;
+  int brand_width = bd_font_measure_text(home->fonts.body16, "brickdesk");
+  bd_gfx_draw_text(gfx, home->fonts.body16, brand_x, 41, palette->ink2,
+                   "brickdesk");
+  int x = brand_x + brand_width + 28;
   for (int i = 0; i < BD_HOME_TAB_COUNT; ++i) {
     bd_color color = i == home->tab ? palette->ink : palette->ink3;
-    bd_gfx_draw_text(gfx, home->fonts.tab16, x, 41, color, TAB_NAMES[i]);
+    bd_gfx_draw_text(gfx, home->fonts.tab18, x, 41, color, TAB_NAMES[i]);
     if (i == home->tab) {
       bd_gfx_fill_round_rect(gfx, bd_rect_make(x, 54, 17, 2), 1,
                              home->accent.accent);
     }
-    x += bd_font_measure_text(home->fonts.tab16, TAB_NAMES[i]) + 27;
+    x += bd_font_measure_text(home->fonts.tab18, TAB_NAMES[i]) + 27;
   }
 
   int clock_right = home->width - 24;
-  int clock_width = bd_font_measure_text(home->fonts.body14, home->clock);
+  int clock_width = bd_font_measure_text(home->fonts.body16, home->clock);
   if (clock_width < 44) {
     clock_width = 44;
   }
   int clock_x = clock_right - clock_width;
-  bd_gfx_draw_text(gfx, home->fonts.body14, clock_right - clock_width, 41,
-                   palette->ink2, home->clock);
+  bd_gfx_draw_text(gfx, home->fonts.body16, clock_x, 41, palette->ink2,
+                   home->clock);
   int battery_x = clock_x - 12 - 30;
   draw_battery(home, gfx, battery_x, 31);
   int wifi_x = battery_x - 12 - 17;
@@ -613,16 +635,17 @@ static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
   if (home->running_count > 0) {
     char chip[64];
     snprintf(chip, sizeof(chip), "%d 运行中", home->running_count);
-    int text_width = bd_font_measure_text(home->fonts.badge11, chip);
-    int chip_width = 8 + 5 + 5 + text_width + 8;
+    int text_width = bd_font_measure_text(home->fonts.badge13, chip);
+    int chip_width = text_width + 20;
     int chip_x = wifi_x - 20 - chip_width;
-    bd_rect rect = bd_rect_make(chip_x, 22, chip_width, 24);
-    bd_gfx_fill_round_rect(gfx, rect, 6,
+    if (chip_x < x + 16) {
+      chip_x = x + 16;
+    }
+    bd_rect rect = bd_rect_make(chip_x, 21, chip_width, 26);
+    bd_gfx_fill_round_rect(gfx, rect, 5,
                            with_alpha(home->accent.accent, 0.09f));
-    bd_gfx_stroke_round_rect(gfx, rect, 6, 1, palette->line);
-    bd_gfx_fill_round_rect(gfx, bd_rect_make(chip_x + 8, 31, 5, 5), 2,
-                           home->accent.accent);
-    bd_gfx_draw_text(gfx, home->fonts.badge11, chip_x + 18, 39, palette->ink2,
+    bd_gfx_stroke_round_rect(gfx, rect, 5, 1, palette->line);
+    bd_gfx_draw_text(gfx, home->fonts.badge13, chip_x + 10, 39, palette->ink2,
                      chip);
   }
 }
@@ -633,7 +656,7 @@ typedef struct hint_item {
 } hint_item;
 
 static int keycap_width(const bd_home *home, const char *key) {
-  int width = bd_font_measure_text(home->fonts.badge11, key) + 12;
+  int width = bd_font_measure_text(home->fonts.badge13, key) + 12;
   return width < 22 ? 22 : width;
 }
 
@@ -645,8 +668,8 @@ static int draw_keycap(const bd_home *home, bd_gfx *gfx, int x, int y,
                          with_alpha(home->palette.ink, 0.04f * alpha));
   bd_gfx_stroke_round_rect(gfx, rect, 4, 1,
                            with_alpha(home->palette.ink, 0.22f * alpha));
-  bd_gfx_draw_text(gfx, home->fonts.badge11, x + (width -
-                     bd_font_measure_text(home->fonts.badge11, key)) / 2,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, x + (width -
+                     bd_font_measure_text(home->fonts.badge13, key)) / 2,
                    y + 15, with_alpha(home->palette.ink2, alpha), key);
   return width;
 }
@@ -770,8 +793,8 @@ static void draw_hint_bar(bd_home *home, bd_gfx *gfx) {
   x = draw_hint_group(home, gfx, right, right_count, x + 27, top + 18, progress);
   (void)x;
   const char *note = "松开收起";
-  int note_width = bd_font_measure_text(home->fonts.badge11, note);
-  bd_gfx_draw_text(gfx, home->fonts.badge11, home->width - 24 - note_width,
+  int note_width = bd_font_measure_text(home->fonts.badge13, note);
+  bd_gfx_draw_text(gfx, home->fonts.badge13, home->width - 24 - note_width,
                    top + 34, with_alpha(palette->ink3, progress), note);
 }
 
@@ -864,8 +887,8 @@ static void draw_quick_row_background(bd_home *home, bd_gfx *gfx, bd_rect row,
   if (!focused) {
     return;
   }
-  bd_gfx_fill_round_rect(gfx, row, 8, home->palette.surface2);
-  bd_gfx_stroke_round_rect(gfx, row, 8, 2, home->accent.accent);
+  bd_gfx_fill_round_rect(gfx, row, 5, home->palette.surface2);
+  bd_gfx_stroke_round_rect(gfx, row, 5, 2, home->accent.accent);
 }
 
 static void draw_quick(bd_home *home, bd_gfx *gfx) {
@@ -881,38 +904,40 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   if (panel.x >= home->width) {
     return;
   }
-  bd_gfx_fill_round_rect(gfx, panel, 16, palette->surface);
-  bd_gfx_stroke_round_rect(gfx, panel, 16, 1, palette->line);
+  /* Steam-style edge panel: full height, flush to the side, square outline. */
+  bd_gfx_fill_rect(gfx, panel, palette->surface);
+  bd_gfx_fill_rect(gfx, bd_rect_make(panel.x, panel.y, 1, panel.h),
+                   palette->line_strong);
   bd_gfx_push_clip(gfx, panel);
 
   bd_gfx_draw_text(gfx, home->fonts.serif25, panel.x + 18, panel.y + 42,
                    palette->ink, "快捷设置");
   char battery[32];
   snprintf(battery, sizeof(battery), "电量 %d%%", home->status.battery_percent);
-  bd_gfx_draw_text(gfx, home->fonts.badge11,
+  bd_gfx_draw_text(gfx, home->fonts.badge13,
                    panel.x + panel.w - 18 -
-                       bd_font_measure_text(home->fonts.badge11, battery),
+                       bd_font_measure_text(home->fonts.badge13, battery),
                    panel.y + 42, palette->ink3, battery);
   bd_gfx_fill_rect(gfx, bd_rect_make(panel.x + 16, panel.y + 70, panel.w - 32, 1),
                    palette->line);
 
   bd_rect now = bd_rect_make(panel.x + 16, panel.y + 82, panel.w - 32, 78);
-  bd_gfx_fill_round_rect(gfx, now, 10, palette->surface2);
-  bd_gfx_stroke_round_rect(gfx, now, 10, 1, palette->line);
+  bd_gfx_fill_round_rect(gfx, now, 5, palette->surface2);
+  bd_gfx_stroke_round_rect(gfx, now, 5, 1, palette->line);
   bd_rect cover = bd_rect_make(now.x + 10, now.y + 10, 58, 58);
   const bd_texture *live_cover = live_cover_texture(home);
   if (live_cover != NULL) {
     bd_gfx_draw_texture_cover(gfx, (bd_texture *)live_cover, cover,
-                              bd_color_rgba(255, 255, 255, 255), 7);
+                              bd_color_rgba(255, 255, 255, 255), 5);
   } else {
-    bd_gfx_fill_round_rect(gfx, cover, 7, palette->surface3);
+    bd_gfx_fill_round_rect(gfx, cover, 5, palette->surface3);
   }
   int text_x = now.x + 79;
-  bd_gfx_draw_text(gfx, home->fonts.badge11, text_x, now.y + 20,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, text_x, now.y + 20,
                    home->accent.accent, "正在播放");
   bd_gfx_draw_text(gfx, home->fonts.title18, text_x, now.y + 43, palette->ink,
                    home->live.title);
-  bd_gfx_draw_text(gfx, home->fonts.badge11, text_x, now.y + 61, palette->ink3,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, text_x, now.y + 61, palette->ink3,
                    home->live.artist);
   int now_bar_width = now.w - 79 - 10 - 44;
   bd_gfx_fill_round_rect(gfx, bd_rect_make(text_x, now.y + 69, now_bar_width, 3),
@@ -937,16 +962,16 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   }
 
   int run_head = panel.y + 188;
-  bd_gfx_draw_text(gfx, home->fonts.badge11, panel.x + 18, run_head,
+  bd_gfx_draw_text(gfx, home->fonts.body14, panel.x + 18, run_head,
                    palette->ink3, "正在运行");
   char count[32];
   int max_background =
       home->status.max_background > 0 ? home->status.max_background : 3;
   snprintf(count, sizeof(count), "%d / %d", home->running_count,
            max_background);
-  bd_gfx_draw_text(gfx, home->fonts.badge11,
+  bd_gfx_draw_text(gfx, home->fonts.body14,
                    panel.x + panel.w - 18 -
-                       bd_font_measure_text(home->fonts.badge11, count),
+                       bd_font_measure_text(home->fonts.body14, count),
                    run_head, palette->ink3, count);
   int memory = running_memory(home);
   int mem_bar_y = panel.y + 196;
@@ -986,7 +1011,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
       const char *name = run->item_index >= 0 && run->item_index < home->count
                              ? home->entries[run->item_index].title
                              : run->id;
-      bd_gfx_draw_text_ellipsized(gfx, home->fonts.body15, row.x + 48,
+      bd_gfx_draw_text_ellipsized(gfx, home->fonts.body16, row.x + 48,
                                   row.y + 28, row.w - 180,
                                   home->quick_sel == i ? palette->ink
                                                        : palette->ink2,
@@ -994,9 +1019,9 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
       char meta[64];
       snprintf(meta, sizeof(meta), "%s · %d MB",
                run->paused ? "已暂停" : "运行中", run->memory_mb);
-      bd_gfx_draw_text(gfx, home->fonts.badge11,
+      bd_gfx_draw_text(gfx, home->fonts.badge13,
                        row.x + row.w - 10 -
-                           bd_font_measure_text(home->fonts.badge11, meta),
+                           bd_font_measure_text(home->fonts.badge13, meta),
                        row.y + 28,
                        home->quick_sel == i ? palette->ink2 : palette->ink3,
                        meta);
@@ -1005,7 +1030,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
   int foot_baseline = rows_start + rows_height + 14;
   char memory_text[64];
   snprintf(memory_text, sizeof(memory_text), "后台内存 %d / 1024 MB", memory);
-  bd_gfx_draw_text(gfx, home->fonts.badge11, panel.x + 18, foot_baseline,
+  bd_gfx_draw_text(gfx, home->fonts.badge13, panel.x + 18, foot_baseline,
                    palette->ink3, memory_text);
 
   int list_y = foot_baseline + 10;
@@ -1018,30 +1043,30 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
     draw_quick_icon(gfx, i, row.x + 10, row.y + 14, icon_color,
                     icon_background);
     static const char *const LABELS[5] = {"亮度", "音量", "Wi-Fi", "蓝牙", "主题"};
-    bd_gfx_draw_text(gfx, home->fonts.body15, row.x + 40, row.y + 29,
+    bd_gfx_draw_text(gfx, home->fonts.body16, row.x + 40, row.y + 29,
                      focused ? palette->ink : palette->ink2, LABELS[i]);
     if (i == 0 || i == 1) {
       int value = i == 0 ? home->brightness : home->volume;
       draw_slider(home, gfx, row.x + row.w - 26 - 8 - 92, row.y + 23, value, 1.0f);
       char number[16];
       snprintf(number, sizeof(number), "%d", value);
-      bd_gfx_draw_text(gfx, home->fonts.badge11,
+      bd_gfx_draw_text(gfx, home->fonts.body14,
                        row.x + row.w - 10 -
-                           bd_font_measure_text(home->fonts.badge11, number),
+                           bd_font_measure_text(home->fonts.body14, number),
                        row.y + 29, palette->ink2, number);
     } else if (i == 2 || i == 3) {
       bool on = i == 2 ? home->wifi : home->bluetooth;
       const char *value = on ? "开" : "关";
-      bd_gfx_draw_text(gfx, home->fonts.badge11,
+      bd_gfx_draw_text(gfx, home->fonts.body14,
                        row.x + row.w - 18 - 38 - 12 -
-                           bd_font_measure_text(home->fonts.badge11, value),
+                           bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
       draw_switch(home, gfx, row.x + row.w - 18 - 38, row.y + 13, on, 1.0f);
     } else {
       const char *value = home->style.dark ? "深色" : "浅色";
-      bd_gfx_draw_text(gfx, home->fonts.badge11,
+      bd_gfx_draw_text(gfx, home->fonts.body14,
                        row.x + row.w - 18 -
-                           bd_font_measure_text(home->fonts.badge11, value),
+                           bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
     }
   }
@@ -1097,18 +1122,39 @@ static void draw_dialog_button(bd_home *home, bd_gfx *gfx, bd_rect rect,
   }
 }
 
+static const char *dialog_item_title(const bd_home *home, int index,
+                                     const char *fallback) {
+  if (index >= 0 && index < home->count && home->entries[index].title != NULL) {
+    return home->entries[index].title;
+  }
+  return fallback;
+}
+
+static int dialog_item_by_id(const bd_home *home, const char *id) {
+  if (id == NULL || id[0] == '\0') {
+    return -1;
+  }
+  for (int i = 0; i < home->count; ++i) {
+    if (home->entries[i].id != NULL && strcmp(home->entries[i].id, id) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 static void draw_dialog(bd_home *home, bd_gfx *gfx) {
   float progress = bd_home_dialog_progress(home);
   if (progress <= 0.0f || !home->dialog_visible) {
     return;
   }
   const bd_home_palette *palette = &home->palette;
+  bool background_full = home->dialog_kind == BD_HOME_DIALOG_BACKGROUND_FULL;
   bd_color scrim = palette->scrim;
   scrim.a *= progress;
   bd_gfx_fill_rect(gfx, bd_rect_make(0, 0, home->width, home->height), scrim);
 
   int card_width = 500;
-  int card_height = 230;
+  int card_height = background_full ? 260 : 230;
   int card_x = (home->width - card_width) / 2;
   int card_y = (home->height - card_height) / 2 + round_int((1.0f - progress) * 10.0f);
   bd_rect card = bd_rect_make(card_x, card_y, card_width, card_height);
@@ -1116,8 +1162,7 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
   bd_gfx_stroke_round_rect(gfx, card, 16, 1, alpha_color(palette->line, progress));
 
   int item = home->dialog_item;
-  const char *name = item >= 0 && item < home->count ? home->entries[item].title
-                                                    : "程序";
+  const char *name = dialog_item_title(home, item, "程序");
   bd_rect thumb = bd_rect_make(card.x + 24, card.y + 24, 52, 52);
   const bd_texture *frame =
       item >= 0 && item < home->count ? running_frame_texture(home, item) : NULL;
@@ -1135,15 +1180,15 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
   }
 
   char title[128];
-  snprintf(title, sizeof(title), "结束 %s？", name);
+  if (background_full) {
+    snprintf(title, sizeof(title), "后台已满");
+  } else {
+    snprintf(title, sizeof(title), "结束 %s？", name);
+  }
   bd_gfx_draw_text_ellipsized(gfx, home->fonts.serif25, card.x + 89,
                               card.y + 50, card.w - 113,
                               alpha_color(palette->ink, progress), title);
-  char body[256];
-  snprintf(body, sizeof(body), "未保存的进度会丢失，%s会被移出后台列表。", name);
-  bd_gfx_draw_text_ellipsized(gfx, home->fonts.body15, card.x + 24,
-                              card.y + 100, card.w - 48,
-                              alpha_color(palette->ink2, progress), body);
+
   int memory = 132;
   if (item >= 0 && item < home->count) {
     int running = bd_home_running_index(home, home->entries[item].id);
@@ -1151,19 +1196,50 @@ static void draw_dialog(bd_home *home, bd_gfx *gfx) {
       memory = home->running[running].memory_mb;
     }
   }
-  char meta[128];
-  snprintf(meta, sizeof(meta), "已暂停 · %d MB · 返回桌面后可再次打开", memory);
-  bd_gfx_draw_text_ellipsized(gfx, home->fonts.badge11, card.x + 24,
-                              card.y + 128, card.w - 48,
-                              alpha_color(palette->ink3, progress), meta);
+
+  if (background_full) {
+    int pending = dialog_item_by_id(home, home->dialog_pending_id);
+    const char *pending_name =
+        dialog_item_title(home, pending, home->dialog_pending_id);
+    char body[128];
+    snprintf(body, sizeof(body), "最多同时保留 %d 个后台程序。",
+             home->dialog_max_background);
+    bd_gfx_draw_text_ellipsized(gfx, home->fonts.body15, card.x + 24,
+                                card.y + 100, card.w - 48,
+                                alpha_color(palette->ink2, progress), body);
+    char choice[512];
+    snprintf(choice, sizeof(choice), "结束「%s」并启动「%s」？", name,
+             pending_name);
+    bd_gfx_draw_text_ellipsized(gfx, home->fonts.body15, card.x + 24,
+                                card.y + 126, card.w - 48,
+                                alpha_color(palette->ink, progress), choice);
+    char meta[128];
+    snprintf(meta, sizeof(meta), "最久未使用 · %d MB", memory);
+    bd_gfx_draw_text_ellipsized(gfx, home->fonts.badge13, card.x + 24,
+                                card.y + 156, card.w - 48,
+                                alpha_color(palette->ink3, progress), meta);
+  } else {
+    char body[256];
+    snprintf(body, sizeof(body), "未保存的进度会丢失，%s会被移出后台列表。",
+             name);
+    bd_gfx_draw_text_ellipsized(gfx, home->fonts.body15, card.x + 24,
+                                card.y + 100, card.w - 48,
+                                alpha_color(palette->ink2, progress), body);
+    char meta[128];
+    snprintf(meta, sizeof(meta), "已暂停 · %d MB · 返回桌面后可再次打开", memory);
+    bd_gfx_draw_text_ellipsized(gfx, home->fonts.badge13, card.x + 24,
+                                card.y + 128, card.w - 48,
+                                alpha_color(palette->ink3, progress), meta);
+  }
 
   bd_rect end =
       bd_rect_make(card.x + card.w - 24 - 108, card.y + card.h - 24 - 44, 108, 44);
   bd_rect cancel = bd_rect_make(end.x - 9 - 108, end.y, 108, 44);
   draw_dialog_button(home, gfx, cancel, "取消", false,
                      home->dialog_focus == 0, progress);
-  draw_dialog_button(home, gfx, end, "结束进程", true, home->dialog_focus == 1,
-                     progress);
+  draw_dialog_button(home, gfx, end,
+                     background_full ? "结束并启动" : "结束进程", true,
+                     home->dialog_focus == 1, progress);
 }
 
 static float smoothstep01(float value) {

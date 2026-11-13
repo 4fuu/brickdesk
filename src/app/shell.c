@@ -27,6 +27,7 @@
 #include "brickdesk/device_display.h"
 #include "brickdesk/battery_history.h"
 #include "brickdesk/haptics.h"
+#include "brickdesk/input_controls.h"
 #include "brickdesk/led.h"
 #include "brickdesk/notice.h"
 #include "brickdesk/perf_client.h"
@@ -193,6 +194,13 @@ struct bd_shell {
   bd_input_state input;
   bd_input_state test_input;
   const bd_hotkey_table *hotkey_table;
+  bool key_menu_down;
+  bool key_select_down;
+  char device_root[BD_SHELL_PATH_MAX];
+
+  bool fn_switch_known;
+  int fn_switch_value;
+  uint64_t fn_next_ms;
 
   int inputd_fd;
   bool inputd_connected;
@@ -245,6 +253,9 @@ struct bd_shell {
 };
 
 static void shell_led_refresh_internal(bd_shell *shell);
+static void shell_dispatch_action(bd_shell *shell, const char *action,
+                                  bool pressed);
+static bool shell_launch_app(bd_shell *shell, const char *app_id);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -659,6 +670,11 @@ static void shell_config_changed(void *user, const char *key) {
     shell->led_profile_valid = false;
     shell->led_ambient_dirty = true;
     shell_led_refresh_internal(shell);
+  } else if (strcmp(key, "input.dpad_to_joystick") == 0) {
+    bd_inputd_set_dpad_to_joystick(
+        bd_config_get_bool(shell->settings, key, false));
+  } else if (strcmp(key, "input.turbo") == 0) {
+    bd_inputd_set_turbo(bd_config_get_bool(shell->settings, key, false));
   } else if (strcmp(key, "power.sleep_after") == 0 ||
              strcmp(key, "power.deep_sleep_after") == 0) {
     long sleep_after =
@@ -951,6 +967,202 @@ static void shell_haptic_boot(bd_shell *shell) {
   static const int durations[] = {45, 55, 70};
   bd_haptics_play_pattern(shell->haptics, strengths, durations, 3,
                           shell_now(shell));
+}
+
+static void shell_haptic_double(bd_shell *shell) {
+  if (shell == NULL || shell->haptics == NULL ||
+      !bd_config_get_bool(shell->settings, "input.haptics", true)) {
+    return;
+  }
+  static const int strengths[] = {60, 0, 60};
+  static const int durations[] = {35, 45, 35};
+  bd_haptics_play_pattern(shell->haptics, strengths, durations, 3,
+                          shell_now(shell));
+}
+
+static bool shell_path(bd_shell *shell, const char *relative, char *out,
+                       size_t out_size) {
+  if (relative == NULL || out == NULL || out_size == 0) {
+    return false;
+  }
+  if (shell->device_root[0] == '\0') {
+    int written = snprintf(out, out_size, "%s", relative);
+    return written > 0 && (size_t)written < out_size;
+  }
+  size_t root_length = strlen(shell->device_root);
+  bool root_slash = root_length > 0 &&
+                    shell->device_root[root_length - 1] == '/';
+  const char *suffix = relative;
+  if (relative[0] == '/' && root_slash) {
+    ++suffix;
+  }
+  int written = snprintf(out, out_size, root_slash || relative[0] == '/'
+                                               ? "%s%s"
+                                               : "%s/%s",
+                         shell->device_root, suffix);
+  return written > 0 && (size_t)written < out_size;
+}
+
+static bool shell_config_set(bd_shell *shell, const char *key,
+                             const char *value) {
+  char error[128] = {0};
+  if (!bd_config_set(shell->settings, key, value, error, sizeof(error))) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: config %s=%s: %s\n", key, value,
+              error[0] != '\0' ? error : "rejected");
+    }
+    return false;
+  }
+  bd_config_save(shell->settings, error, sizeof(error));
+  return true;
+}
+
+static void shell_volume_key(bd_shell *shell, bd_key key, bool pressed) {
+  if (shell == NULL || !pressed) {
+    return;
+  }
+  int delta = key == BD_KEY_VOLUME_UP ? 5 : -5;
+  char text[96];
+  if (shell->key_menu_down) {
+    int value =
+        (int)bd_config_get_int(shell->settings, "display.brightness", 70);
+    if (shell->system.get_brightness != NULL) {
+      int read = value;
+      if (shell->system.get_brightness(shell->system.user, &read)) {
+        value = read;
+      }
+    }
+    value += delta;
+    if (value < 0) {
+      value = 0;
+    }
+    if (value > 100) {
+      value = 100;
+    }
+    if (shell->system.set_brightness != NULL &&
+        !shell->system.set_brightness(shell->system.user, value)) {
+      bd_shell_notice(shell, BD_NOTICE_WARNING, "背光接口拒绝了亮度调整", 0);
+      return;
+    }
+    snprintf(text, sizeof(text), "亮度 %d", value);
+    char number[16];
+    snprintf(number, sizeof(number), "%d", value);
+    shell_config_set(shell, "display.brightness", number);
+    bd_shell_notice(shell, BD_NOTICE_INFO, text, 1000);
+    return;
+  }
+  if (shell->key_select_down) {
+    int value = (int)bd_config_get_int(
+        shell->settings, "display.color_temperature", 0);
+    value += delta > 0 ? 10 : -10;
+    if (value < -200) {
+      value = -200;
+    }
+    if (value > 200) {
+      value = 200;
+    }
+    snprintf(text, sizeof(text), "色温 %d", value);
+    char number[16];
+    snprintf(number, sizeof(number), "%d", value);
+    shell_config_set(shell, "display.color_temperature", number);
+    bd_shell_notice(shell, BD_NOTICE_INFO, text, 1000);
+    return;
+  }
+
+  int value = (int)bd_config_get_int(shell->settings, "audio.volume", 70);
+  if (shell->system.get_volume != NULL) {
+    int read = value;
+    if (shell->system.get_volume(shell->system.user, &read)) {
+      value = read;
+    }
+  }
+  value += delta;
+  if (value < 0) {
+    value = 0;
+  }
+  if (value > 100) {
+    value = 100;
+  }
+  if (shell->system.set_volume != NULL &&
+      !shell->system.set_volume(shell->system.user, value)) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING, "音频接口拒绝了音量调整", 0);
+    return;
+  }
+  char number[16];
+  snprintf(number, sizeof(number), "%d", value);
+  shell_config_set(shell, "audio.volume", number);
+  snprintf(text, sizeof(text), "音量 %d", value);
+  bd_shell_notice(shell, BD_NOTICE_INFO, text, 1000);
+}
+
+static void shell_fn_poll(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || now < shell->fn_next_ms) {
+    return;
+  }
+  shell->fn_next_ms = now + 200;
+  char path[BD_SHELL_PATH_MAX];
+  if (!shell_path(shell, "/sys/class/gpio/gpio243/value", path,
+                  sizeof(path))) {
+    return;
+  }
+  FILE *file = fopen(path, "r");
+  if (file == NULL) {
+    return;
+  }
+  int value = -1;
+  int scanned = fscanf(file, "%d", &value);
+  fclose(file);
+  if (scanned != 1 || (value != 0 && value != 1)) {
+    return;
+  }
+  if (!shell->fn_switch_known) {
+    shell->fn_switch_known = true;
+    shell->fn_switch_value = value;
+    return;
+  }
+  if (value == shell->fn_switch_value) {
+    return;
+  }
+  shell->fn_switch_value = value;
+  bool on = value != 0;
+  const char *action =
+      bd_config_get_string(shell->settings, "input.fn_switch_action", "mute");
+  if (strcmp(action, "mute") == 0) {
+    bool muted = on;
+    if (shell->system.set_muted != NULL) {
+      shell->system.set_muted(shell->system.user, muted);
+    }
+    shell_config_set(shell, "audio.mute", muted ? "true" : "false");
+    bd_shell_notice(shell, BD_NOTICE_INFO, muted ? "静音开" : "静音关", 0);
+  } else if (strcmp(action, "led_off") == 0) {
+    shell_config_set(shell, "led.enabled", on ? "false" : "true");
+    shell->led_profile_valid = false;
+    shell_led_refresh_internal(shell);
+    bd_shell_notice(shell, BD_NOTICE_INFO, on ? "灯光关" : "灯光开", 0);
+  } else if (strcmp(action, "performance") == 0 ||
+             strcmp(action, "powersave") == 0) {
+    const char *profile = on ? "powersave" : "performance";
+    char error[128] = {0};
+    if (shell_perf_apply(shell, profile, error, sizeof(error))) {
+      shell_config_set(shell, "perf.global_profile", profile);
+      bd_shell_notice(shell, BD_NOTICE_INFO,
+                      strcmp(profile, "powersave") == 0 ? "省电模式"
+                                                        : "性能模式",
+                      0);
+    } else {
+      bd_shell_notice(shell, BD_NOTICE_WARNING,
+                      error[0] != '\0' ? error : "性能服务不可用", 0);
+    }
+  } else if (strcmp(action, "turbo") == 0) {
+    bool ok = bd_inputd_set_turbo(on);
+    bd_shell_notice(shell, ok ? BD_NOTICE_INFO : BD_NOTICE_WARNING,
+                    on ? "Turbo 开" : "Turbo 关", 0);
+  } else if (strcmp(action, "dpad_joystick") == 0) {
+    bool ok = bd_inputd_set_dpad_to_joystick(on);
+    bd_shell_notice(shell, ok ? BD_NOTICE_INFO : BD_NOTICE_WARNING,
+                    on ? "十字键模拟摇杆" : "十字键恢复", 0);
+  }
+  shell_haptic_double(shell);
 }
 
 /* --------------------------------------------------------------- JSON bits */
@@ -2188,6 +2400,7 @@ static void shell_service(bd_shell *shell) {
     shell_battery_sample(shell, now);
     shell_led_ambient_sample(shell, now);
     shell_display_dp_poll(shell, now);
+    shell_fn_poll(shell, now);
     if (shell->notice != NULL && shell->visible &&
         bd_notice_update(shell->notice, now)) {
       shell->dirty = true;
@@ -2447,6 +2660,8 @@ static void shell_power_clear_local_input(bd_shell *shell) {
   bd_input_state_release_all(&shell->test_input, now, local_emit, shell);
   shell->power_swallow = false;
   shell->power_key_down = false;
+  shell->key_menu_down = false;
+  shell->key_select_down = false;
   if (shell->home != NULL) {
     bd_home_set_hint_visible(shell->home, false);
   }
@@ -3188,10 +3403,43 @@ static void shell_power_key_event(bd_shell *shell, bool pressed,
   }
 }
 
+static void shell_input_action(bd_shell *shell, const char *slot) {
+  if (shell == NULL || slot == NULL) {
+    return;
+  }
+  char key[64];
+  snprintf(key, sizeof(key), "input.%s_app", slot);
+  const char *app = bd_config_get_string(shell->settings, key, "");
+  if (app != NULL && app[0] != '\0') {
+    shell_launch_app(shell, app);
+    return;
+  }
+  snprintf(key, sizeof(key), "input.%s_action", slot);
+  const char *action = bd_config_get_string(shell->settings, key, "none");
+  if (strcmp(action, "screenshot") == 0) {
+    shell_dispatch_action(shell, "builtin.screenshot", true);
+  } else if (strcmp(action, "settings") == 0) {
+    bd_shell_open_settings(shell, BD_SETTINGS_CATEGORY_APPEARANCE);
+  } else if (strcmp(action, "quick") == 0) {
+    shell_home_input(shell, BD_HOME_ACTION_QUICK);
+  } else if (strcmp(action, "recent") == 0) {
+    shell_home_input(shell, BD_HOME_ACTION_RECENT);
+  } else if (strcmp(action, "return_home") == 0) {
+    shell_dispatch_action(shell, "session.return_home", true);
+  } else if (strcmp(action, "menu") == 0) {
+    shell_dispatch_action(shell, "menu.open", true);
+  }
+}
+
 static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
                                uint64_t time_ms) {
   if (pressed) {
     shell_mark_activity(shell);
+  }
+  if (key == BD_KEY_MENU) {
+    shell->key_menu_down = pressed;
+  } else if (key == BD_KEY_SELECT) {
+    shell->key_select_down = pressed;
   }
   if (key == BD_KEY_POWER) {
     /* POWER must work while an app owns the display and while asleep. */
@@ -3200,6 +3448,11 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
   }
   if (shell->power_swallow || shell->power_input_suspended ||
       shell_power_asleep(shell)) {
+    return;
+  }
+  if (key == BD_KEY_VOLUME_UP || key == BD_KEY_VOLUME_DOWN) {
+    /* Global volume/brightness/colour keys work while an app is foreground. */
+    shell_volume_key(shell, key, pressed);
     return;
   }
   if (!shell->visible) {
@@ -3277,8 +3530,10 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
     case BD_KEY_Y:
       shell_toggle_favorite(shell);
       break;
-    case BD_KEY_HOME:
-      if (shell->app_history != NULL) {
+    case BD_KEY_HOME: {
+      const char *action = bd_config_get_string(
+          shell->settings, "input.home_action", "recent");
+      if (strcmp(action, "recent") == 0 && shell->app_history != NULL) {
         const char *recent = bd_app_history_most_recent(shell->app_history);
         int index =
             recent != NULL ? bd_home_find_item(shell->home, recent) : -1;
@@ -3288,7 +3543,14 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
           break;
         }
       }
-      shell_home_input(shell, BD_HOME_ACTION_RECENT);
+      shell_input_action(shell, "home");
+      break;
+    }
+    case BD_KEY_F1:
+      shell_input_action(shell, "f1");
+      break;
+    case BD_KEY_F2:
+      shell_input_action(shell, "f2");
       break;
     default:
       break;
@@ -4343,6 +4605,10 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     copy_text(shell->battery_root, sizeof(shell->battery_root),
               config->battery_root);
   }
+  if (config->av_sysfs_root != NULL) {
+    copy_text(shell->device_root, sizeof(shell->device_root),
+              config->av_sysfs_root);
+  }
   copy_text(shell->perf_socket, sizeof(shell->perf_socket),
             bd_perf_client_default_socket());
 
@@ -4418,6 +4684,10 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     }
     shell_led_refresh_internal(shell);
     shell_haptic_boot(shell);
+    bd_inputd_set_dpad_to_joystick(
+        bd_config_get_bool(config->settings, "input.dpad_to_joystick", false));
+    bd_inputd_set_turbo(
+        bd_config_get_bool(config->settings, "input.turbo", false));
   }
   shell->power_input_suspended = false;
   shell->power_request = SHELL_POWER_REQUEST_NONE;

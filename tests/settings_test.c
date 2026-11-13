@@ -428,8 +428,7 @@ static void test_pages(bd_settings *settings, bd_config *config) {
   bd_settings_stats stats = bd_settings_get_stats(settings);
   CHECK(stats.hotkeys == 5, "hotkeys %d", stats.hotkeys);
   CHECK(stats.conflicts >= 1, "conflicts %d", stats.conflicts);
-  CHECK(strcmp(bd_settings_row_key(settings, 0), "!conflict.0") == 0,
-        "first keys row %s", bd_settings_row_key(settings, 0));
+  CHECK(find_row(settings, "!conflict.0") >= 0, "keys conflict row");
   int menu = find_row(settings, "!hotkey.menu");
   CHECK(menu >= 0, "hotkey.menu row");
   CHECK(find_row(settings, "!hotkey.screenshot") >= 0,

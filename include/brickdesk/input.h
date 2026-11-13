@@ -39,6 +39,8 @@ typedef enum bd_key {
   BD_KEY_DOWN,
   BD_KEY_LEFT,
   BD_KEY_RIGHT,
+  BD_KEY_F1,
+  BD_KEY_F2,
   BD_KEY_POWER,
   BD_KEY_VOLUME_UP,
   BD_KEY_VOLUME_DOWN,

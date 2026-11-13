@@ -244,7 +244,14 @@ adb shell 'ls -l /tmp/trimui_inputd/ 2>/dev/null'
 - A/B/X/Y/L/R/Select/Start/Menu/Home/F1/F2/L4/R4、电源、音量±、十字键、双摇杆、
   L3/R3 都产生正确的 `type/code/value`。
 - Menu 是 316 还是 315；Home 是 102 还是 15；记录实际值。
-- FN 拨动开关：`gpio243` 的 0/1 极性，以及是否同时产生 `SW_TABLET_MODE` (EV_SW 1)。
+- FN 拨动开关：`gpio243` 的 0/1 极性，以及是否同时产生 `SW_TABLET_MODE` (EV_SW 1)；
+  在设置页分别把 `input.fn_switch_action` 设为 mute/led_off/performance/
+  powersave/turbo/dpad_joystick，确认每次拨动只执行一次、有双脉冲触觉。
+- 音量键：不按修饰键调音量、按住 Menu 调亮度、按住 Select 调色温；确认
+  前台应用运行时仍然生效，回桌面后 OSD 显示正确值。
+- F1/F2/Home：分别配置为 screenshot/settings/quick/recent 和一个应用 ID，
+  确认动作和启动都正确；`/tmp/trimui_inputd/input_dpad_to_joystick` 与
+  `turbo_*` 文件随设置出现/消失。
 - 耳机插入是否产生 `SW_HEADPHONE_INSERT` (EV_SW 2)，插入后 `amixer -c 0 sget Headphone`
   是否从 0 变 3，扬声器是否静音。
 - 游戏运行时，`trimui_inputd`/`keymon` 是否 grab 物理设备；全局音量/亮度是否双份输入。

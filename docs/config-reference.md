@@ -163,6 +163,12 @@ stub，M4 接入设备后端。
 | `haptics` | bool | `true` | — | 菜单/系统触觉总开关 |
 | `haptic_strength` | int | `60` | 0..100 | 菜单触觉强度（马达百分比） |
 | `haptic_duration_ms` | int | `35` | 5..500 | 单次菜单触觉时长 |
+| `fn_switch_action` | enum | `mute` | `none`/`mute`/`led_off`/`performance`/`powersave`/`turbo`/`dpad_joystick` | FN 拨动开关动作 |
+| `f1_action` / `f2_action` | enum | `none` | `none`/`screenshot`/`settings`/`quick`/`recent`/`return_home`/`menu` | F1/F2 动作 |
+| `f1_app` / `f2_app` | string | `""` | 应用 ID | 非空时优先启动该应用 |
+| `home_action` | enum | `recent` | 同 F1 动作表 | Home 键动作 |
+| `dpad_to_joystick` | bool | `false` | — | 写 `input_dpad_to_joystick` |
+| `turbo` | bool | `false` | — | 写 `turbo_*` 控制文件 |
 
 ### 4.6 `[led]`
 

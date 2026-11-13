@@ -325,6 +325,7 @@ add_library(brickdesk_shell STATIC
   src/app/perf_client.c
   src/app/led.c
   src/app/haptics.c
+  src/app/input_controls.c
 )
 target_include_directories(brickdesk_shell
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

@@ -144,6 +144,10 @@ static const char *const DISPLAY_KEYS[] = {
 static const char *const DISPLAY_SECTIONS[] = {"display", NULL};
 static const char *const DISPLAY_SKIP[] = {"display.width", "display.height",
                                            "display.refresh_hz", NULL};
+static const char *const INPUT_KEYS[] = {
+    "input.fn_switch_action", "input.home_action", "input.f1_action",
+    "input.f1_app", "input.f2_action", "input.f2_app",
+    "input.dpad_to_joystick", "input.turbo", NULL};
 static const char *const LIGHTS_KEYS[] = {
     "led.enabled",
     "led.m.brightness", "led.m.color", "led.m.effect",
@@ -217,6 +221,14 @@ static const bd_settings_label LABELS[] = {
     {"led.indicator_brightness", "指示亮度", "低电量、充电与睡眠指示", NULL, 1},
     {"led.ambient", "氛围灯", "按前台应用推送的颜色驱动灯光", NULL, 1},
     {"led.ambient_brightness", "氛围灯亮度", "氛围灯的最大亮度", NULL, 1},
+    {"input.fn_switch_action", "FN 开关", "拨动 FN 开关时执行的动作", NULL, 0},
+    {"input.home_action", "Home 键", "Home 键动作", NULL, 0},
+    {"input.f1_action", "F1 动作", "F1 键动作；优先使用 F1 应用", NULL, 0},
+    {"input.f1_app", "F1 应用", "启动指定应用 ID；留空使用动作", NULL, 0},
+    {"input.f2_action", "F2 动作", "F2 键动作；优先使用 F2 应用", NULL, 0},
+    {"input.f2_app", "F2 应用", "启动指定应用 ID；留空使用动作", NULL, 0},
+    {"input.dpad_to_joystick", "十字键模拟摇杆", "写 trimui_inputd 控制文件", NULL, 1},
+    {"input.turbo", "Turbo", "为 A/B/X/Y/L/R 写 turbo 控制文件", NULL, 1},
     {"session.max_background", "后台应用上限", "同时保留在后台的应用数量",
      " 个", 1},
     {"session.memory_budget_mb", "内存预算", "后台应用的内存软上限", " MB", 16},
@@ -529,6 +541,9 @@ static const char *hotkey_trigger_label(const bd_hotkey *hotkey, char *buffer,
 }
 
 static bool build_hotkey_page(bd_settings *settings) {
+  for (size_t i = 0; INPUT_KEYS[i] != NULL; ++i) {
+    add_config_row(settings, INPUT_KEYS[i]);
+  }
   if (!settings->hotkeys_loaded) {
     add_info_row(settings, "!hotkeys", "按键不可用",
                  "hotkeys.ini 加载失败，请检查文件", "");

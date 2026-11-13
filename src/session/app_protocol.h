@@ -70,6 +70,8 @@ void bd_app_protocol_destroy(bd_app_protocol *protocol);
 
 const char *bd_app_protocol_socket_path(const bd_app_protocol *protocol);
 bool bd_app_protocol_connected(const bd_app_protocol *protocol);
+/* Appends the listen and client fds; returns how many were written. */
+int bd_app_protocol_fds(const bd_app_protocol *protocol, int *out, int max);
 
 /*
  * Queues a host -> app request.  Returns the JSON-RPC id, or -1 when the app

@@ -532,6 +532,15 @@ bool bd_session_find(const bd_session *session, const char *app_id,
 /* Manifest of a tracked instance (also valid for exited instances). */
 const bd_app *bd_session_manifest(const bd_session *session,
                                   const char *app_id);
+/*
+ * Appends the session's pollable descriptors (menu socket, menu clients and
+ * app protocol sockets) to `out`. Returns how many were written. The desktop
+ * loop polls these so a menu action or app message wakes it immediately.
+ */
+int bd_session_fds(const bd_session *session, int *out, int max);
+/* Last-frame file for a tracked instance, or NULL when it has none. */
+const char *bd_session_last_frame_path(const bd_session *session,
+                                       const char *app_id);
 /* Removes exited/crashed instances from the list; returns how many. */
 size_t bd_session_clear_terminated(bd_session *session);
 

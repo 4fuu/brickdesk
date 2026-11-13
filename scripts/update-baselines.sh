@@ -2,7 +2,8 @@
 # Regenerates host screenshot baselines from the current build.
 #
 # Usage: scripts/update-baselines.sh [target ...]
-# Targets: boot focus_move primitives text tiles blur plugin_hello plugin_settings menu
+# Targets: boot focus_move hint_hold launch_menu primitives text tiles blur
+#          plugin_hello plugin_settings menu
 # Default: all of them.
 # Baseline updates must be reviewed and committed separately from feature work.
 set -euo pipefail
@@ -12,15 +13,17 @@ BUILD_DIR=${BUILD_DIR:-"$ROOT/build-host"}
 BASELINE_DIR=${BASELINE_DIR:-"$ROOT/tests/baselines/host"}
 
 if [ "$#" -eq 0 ]; then
-  set -- boot focus_move primitives text tiles blur plugin_hello plugin_settings menu
+  set -- boot focus_move hint_hold launch_menu primitives text tiles blur plugin_hello plugin_settings menu
 fi
 
 scenarios=()
 captures=()
 menu=0
+launch_menu=0
 for target in "$@"; do
   case "$target" in
-    boot|focus_move) scenarios+=("$target") ;;
+    boot|focus_move|hint_hold) scenarios+=("$target") ;;
+    launch_menu) launch_menu=1 ;;
     primitives|text|tiles|blur|plugin_hello|plugin_settings) captures+=("$target") ;;
     menu) menu=1 ;;
     *)
@@ -64,6 +67,25 @@ for scenario in "${scenarios[@]}"; do
     exit 1
   fi
 done
+
+if [ "$launch_menu" -eq 1 ]; then
+  out_dir="$SCRATCH/launch_menu"
+  mkdir -p "$out_dir"
+  SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
+    "$BUILD_DIR/tests/bd_harness" --scenario "$ROOT/tests/scenarios/launch_menu.json" \
+    --out-dir "$out_dir" --config-dir "$ROOT/config" \
+    --demo "$BUILD_DIR/brickdesk-demo" \
+    --shim "$BUILD_DIR/libbrickdesk-menu.so" \
+    --inputd "$BUILD_DIR/brickdesk-inputd" \
+    --replay "$ROOT/tests/scenarios/launch_menu.replay"
+  image="$out_dir/launch_return.png"
+  if [ ! -f "$image" ]; then
+    printf 'update-baselines: launch_menu produced no screenshot\n' >&2
+    exit 1
+  fi
+  cp "$image" "$BASELINE_DIR/launch_return.png"
+  printf 'baseline: %s\n' "$BASELINE_DIR/launch_return.png"
+fi
 
 if [ "${#captures[@]}" -gt 0 ]; then
   out_dir="$SCRATCH/captures"

@@ -615,6 +615,20 @@ const char *bd_app_protocol_socket_path(const bd_app_protocol *protocol) {
   return protocol != NULL ? protocol->path : NULL;
 }
 
+int bd_app_protocol_fds(const bd_app_protocol *protocol, int *out, int max) {
+  if (protocol == NULL || out == NULL || max <= 0) {
+    return 0;
+  }
+  int count = 0;
+  if (protocol->listen_fd >= 0 && count < max) {
+    out[count++] = protocol->listen_fd;
+  }
+  if (protocol->client_fd >= 0 && count < max) {
+    out[count++] = protocol->client_fd;
+  }
+  return count;
+}
+
 static bool create_listen_socket(bd_app_protocol *protocol,
                                  const char *path, char *error,
                                  size_t error_size) {

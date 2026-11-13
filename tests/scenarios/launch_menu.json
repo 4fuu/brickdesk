@@ -1,0 +1,12 @@
+{
+  "name": "launch_menu",
+  "size": [1024, 768],
+  "fixed_dt_ms": 16,
+  "steps": [
+    { "type": "wait", "frames": 2 },
+    { "type": "key", "key": "A", "action": "down" },
+    { "type": "key", "key": "A", "action": "up" },
+    { "type": "run", "ms": 5000 },
+    { "type": "screenshot", "name": "launch_return" }
+  ]
+}

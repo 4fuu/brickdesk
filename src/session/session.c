@@ -1124,6 +1124,45 @@ const char *bd_session_menu_socket(const bd_session *session) {
   return session->menu_path;
 }
 
+int bd_session_fds(const bd_session *session, int *out, int max) {
+  if (session == NULL || out == NULL || max <= 0) {
+    return 0;
+  }
+  int count = 0;
+  if (session->menu_fd >= 0 && count < max) {
+    out[count++] = session->menu_fd;
+  }
+  for (size_t i = 0; i < BD_SESSION_MENU_CLIENTS && count < max; ++i) {
+    if (session->menu_clients[i].fd >= 0) {
+      out[count++] = session->menu_clients[i].fd;
+    }
+  }
+  for (size_t i = 0; i < session->count && count < max; ++i) {
+    const session_instance *instance = session->items[i];
+    if (instance->reaped || instance->protocol == NULL) {
+      continue;
+    }
+    int remaining = max - count;
+    int added = bd_app_protocol_fds(instance->protocol, out + count, remaining);
+    if (added > 0) {
+      count += added;
+    }
+  }
+  return count;
+}
+
+const char *bd_session_last_frame_path(const bd_session *session,
+                                       const char *app_id) {
+  if (session == NULL || app_id == NULL) {
+    return NULL;
+  }
+  session_instance *instance = find_instance((bd_session *)session, app_id);
+  if (instance == NULL || instance->frame_path[0] == '\0') {
+    return NULL;
+  }
+  return instance->frame_path;
+}
+
 int bd_session_poll(bd_session *session) {
   if (session == NULL) {
     return -1;

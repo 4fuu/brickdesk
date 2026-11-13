@@ -257,6 +257,18 @@ static bool parse_step(const char *json, const jsmntok_t *tokens, int object_ind
       return false;
     }
     step.type = BD_STEP_KEY;
+  } else if (strcmp(type, "run") == 0) {
+    if (!has_ms) {
+      set_error(error, error_size, "step %d: run needs 'ms'", step_index);
+      return false;
+    }
+    if (milliseconds <= 0 || milliseconds > 600000) {
+      set_error(error, error_size,
+                "step %d: run 'ms' must be between 1 and 600000", step_index);
+      return false;
+    }
+    step.type = BD_STEP_RUN;
+    step.ms = milliseconds;
   } else if (strcmp(type, "screenshot") == 0) {
     if (!has_name) {
       set_error(error, error_size, "step %d: screenshot needs 'name'", step_index);

@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +9,9 @@
 #include "brickdesk/config.h"
 #include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
-#include "brickdesk/input.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/plugin.h"
+#include "brickdesk/shell.h"
 #include "brickdesk/theme.h"
 #include "brickdesk/version.h"
 
@@ -28,151 +30,52 @@ static double process_cpu_ms(void) {
   return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
-static void render_frame(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
-                         bool verbose) {
-  bd_gfx_begin_frame(gfx);
-  bd_desktop_draw(desktop, gfx);
-  bd_gfx_end_frame(gfx);
-  bd_gfx_stats stats = bd_gfx_get_stats(gfx);
-  if (stats.presented) {
-    bd_platform_present(platform);
-  }
-  if (verbose) {
-    printf("frame: damage=%lldpx rects=%d draws=%d verts=%d glyphs=%d missing=%d "
-           "blur=%d full=%d presented=%d\n",
-           (long long)stats.damage_pixels, stats.damage_rects, stats.draw_calls,
-           stats.vertices, stats.glyphs_rasterized, stats.missing_glyphs,
-           stats.blur_passes, stats.full_redraw ? 1 : 0, stats.presented ? 1 : 0);
-  }
-}
-
-typedef struct main_input {
-  bd_desktop *desktop;
-  const bd_hotkey_table *hotkeys;
-  bool *dirty;
-  bool verbose;
-} main_input;
-
-static void main_emit(void *user, const bd_input_output *event) {
-  main_input *input = (main_input *)user;
-  if (event->kind == BD_INPUT_OUTPUT_KEY) {
-    if (bd_desktop_handle_key(input->desktop, event->key, event->pressed)) {
-      *input->dirty = true;
-    }
-    return;
-  }
-  if (input->verbose && event->binding >= 0 &&
-      (size_t)event->binding < input->hotkeys->count) {
-    const bd_hotkey *hotkey = &input->hotkeys->items[event->binding];
-    printf("hotkey: %s trigger=%s phase=%s\n", hotkey->action,
-           bd_hotkey_trigger_name((int)event->trigger),
-           event->pressed ? "down" : "up");
-  }
-}
-
-static int run_loop(bd_platform *platform, bd_gfx *gfx, bd_desktop *desktop,
-                    bd_input_state *input_state,
-                    const bd_hotkey_table *hotkeys, bd_plugin_host *plugins,
-                    int idle_check_ms, bool verbose) {
+static int run_loop(bd_shell *shell, int idle_check_ms, bool verbose) {
+  (void)verbose;
   const bool idle_check = idle_check_ms > 0;
-  bool dirty = true;
-  bool initial_presented = false;
-  int idle_presents = 0;
   double cpu_start = 0.0;
-  uint32_t deadline = 0;
-  main_input input;
-  input.desktop = desktop;
-  input.hotkeys = hotkeys;
-  input.dirty = &dirty;
-  input.verbose = verbose;
+  uint64_t presents_start = 0;
+
+  /* Draw the initial desktop before measuring an idle interval. */
+  if (bd_shell_iterate(shell, 0) < 0) {
+    return 0;
+  }
+  if (idle_check) {
+    cpu_start = process_cpu_ms();
+    presents_start = bd_shell_present_count(shell);
+  }
+
+  uint64_t deadline = 0;
+  if (idle_check) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    deadline = (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u +
+               (uint64_t)idle_check_ms;
+  }
 
   for (;;) {
-    if (plugins != NULL) {
-      if (bd_plugin_host_poll(plugins, 0) < 0) {
-        fprintf(stderr, "brickdesk: plugin poll failed\n");
-      }
-      if (bd_plugin_host_take_dirty(plugins)) {
-        dirty = true;
-      }
-    }
-    if (dirty) {
-      render_frame(platform, gfx, desktop, verbose);
-      dirty = false;
-      if (initial_presented) {
-        if (idle_check) {
-          ++idle_presents;
-        }
-      } else {
-        initial_presented = true;
-        if (idle_check) {
-          cpu_start = process_cpu_ms();
-          deadline = bd_platform_ticks_ms() + (uint32_t)idle_check_ms;
-        }
-      }
-    }
-
-    int timeout_ms = -1;
+    int timeout = -1;
     if (idle_check) {
-      int32_t remaining = (int32_t)(deadline - bd_platform_ticks_ms());
-      if (remaining <= 0) {
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      uint64_t current =
+          (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+      if (current >= deadline) {
         break;
       }
-      timeout_ms = (int)remaining;
-    } else if (bd_desktop_has_pending_images(desktop)) {
-      /* Decode results are uploaded in begin_frame; poll while work exists. */
-      timeout_ms = 16;
+      uint64_t remaining = deadline - current;
+      timeout = remaining > 60000 ? 60000 : (int)remaining;
     }
-    if (plugins != NULL) {
-      int plugin_timeout = bd_plugin_host_next_timeout(plugins);
-      if (plugin_timeout >= 0 && (timeout_ms < 0 || plugin_timeout < timeout_ms)) {
-        timeout_ms = plugin_timeout;
-      }
+    if (bd_shell_iterate(shell, timeout) < 0) {
+      break;
     }
-    uint64_t hotkey_deadline = 0;
-    if (bd_input_state_next_deadline(input_state, &hotkey_deadline)) {
-      uint64_t now = bd_platform_ticks_ms();
-      uint64_t remaining = hotkey_deadline > now ? hotkey_deadline - now : 0;
-      int hotkey_timeout = remaining > 60000 ? 60000 : (int)remaining;
-      if (timeout_ms < 0 || hotkey_timeout < timeout_ms) {
-        timeout_ms = hotkey_timeout;
-      }
-    }
-
-    bd_event event;
-    int result = bd_platform_wait_event(platform, &event, timeout_ms);
-    if (result < 0) {
-      fprintf(stderr, "platform: event wait failed\n");
-      return 1;
-    }
-    if (result == 0) {
-      if (!idle_check && bd_desktop_has_pending_images(desktop)) {
-        dirty = true;
-      }
-      bd_input_state_advance(input_state, bd_platform_ticks_ms(), main_emit,
-                             &input);
-      continue;
-    }
-
-    switch (event.type) {
-      case BD_EVENT_QUIT:
-        return 0;
-      case BD_EVENT_REDRAW:
-        dirty = true;
-        break;
-      case BD_EVENT_KEY:
-        bd_input_state_feed(input_state, event.key, event.pressed,
-                            bd_platform_ticks_ms(), main_emit, &input);
-        break;
-      case BD_EVENT_NONE:
-      default:
-        break;
-    }
-    bd_input_state_advance(input_state, bd_platform_ticks_ms(), main_emit,
-                           &input);
   }
 
-  printf("idle: duration_ms=%d presents=%d cpu_ms=%.3f\n", idle_check_ms,
-         idle_presents, process_cpu_ms() - cpu_start);
+  if (idle_check) {
+    uint64_t presented = bd_shell_present_count(shell) - presents_start;
+    printf("idle: duration_ms=%d presents=%llu cpu_ms=%.3f\n", idle_check_ms,
+           (unsigned long long)presented, process_cpu_ms() - cpu_start);
+  }
   return 0;
 }
 
@@ -292,21 +195,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  bd_hotkey_table hotkeys;
-  bd_hotkey_table_load(&hotkeys, settings);
-  if (verbose &&
-      (hotkeys.diagnostic_count > 0 || hotkeys.conflict_count > 0)) {
-    fprintf(stderr, "brickdesk: %zu hotkey diagnostic(s), %zu conflict(s)\n",
-            hotkeys.diagnostic_count, hotkeys.conflict_count);
-  }
-  bd_input_state input_state;
-  bd_input_state_init(&input_state, &hotkeys, "global",
-                      (int)bd_config_get_int(settings, "input.double_tap_ms",
-                                             300));
-
   bd_plugin_host *plugin_host = NULL;
-  bool plugins_enabled =
-      bd_config_get_bool(settings, "plugins.enabled", true) && idle_check_ms == 0;
+  bool plugins_enabled = bd_config_get_bool(settings, "plugins.enabled", true);
   if (plugins_enabled) {
     const char *configured_dir = bd_config_get_string(settings, "plugins.dir", "");
     bd_plugin_limits limits = bd_plugin_default_limits();
@@ -354,9 +244,10 @@ int main(int argc, char **argv) {
             break;
           }
         }
-        if (tile_plugin != NULL) {
+        if (tile_plugin != NULL && idle_check_ms == 0) {
+          /* An idle check measures the loop with no tile activity. */
           bd_desktop_set_plugin_tile(desktop, tile_plugin);
-        } else if (verbose) {
+        } else if (verbose && tile_plugin == NULL) {
           fprintf(stderr, "brickdesk: no tile plugin found in %s\n",
                   configured_dir != NULL && configured_dir[0] != '\0'
                       ? configured_dir
@@ -373,9 +264,29 @@ int main(int argc, char **argv) {
     }
   }
 
-  int result = run_loop(platform, gfx, desktop, &input_state, &hotkeys,
-                        plugin_host, idle_check_ms, verbose);
+  bd_shell_config shell_config;
+  memset(&shell_config, 0, sizeof(shell_config));
+  shell_config.platform = platform;
+  shell_config.gfx = gfx;
+  shell_config.desktop = desktop;
+  shell_config.settings = settings;
+  shell_config.plugins = plugin_host;
+  shell_config.verbose = verbose;
+  bd_shell *shell = bd_shell_create(&shell_config);
+  if (shell == NULL) {
+    fprintf(stderr, "brickdesk: cannot create desktop loop\n");
+    bd_desktop_destroy(desktop);
+    bd_plugin_host_destroy(plugin_host);
+    bd_gfx_destroy(gfx);
+    bd_platform_destroy(platform);
+    bd_config_free(settings);
+    return 1;
+  }
+  printf("input: source=%s\n", bd_shell_input_source(shell));
 
+  int result = run_loop(shell, idle_check_ms, verbose);
+
+  bd_shell_destroy(shell);
   bd_desktop_destroy(desktop);
   bd_plugin_host_destroy(plugin_host);
   bd_gfx_destroy(gfx);

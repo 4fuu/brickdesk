@@ -2,7 +2,9 @@
 #define BRICKDESK_DESKTOP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
+#include "brickdesk/app.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/input.h"
 #include "brickdesk/plugin.h"
@@ -28,6 +30,34 @@ bd_desktop *bd_desktop_create(bd_gfx *gfx, const bd_desktop_theme *theme);
 void bd_desktop_destroy(bd_desktop *desktop);
 
 void bd_desktop_draw(bd_desktop *desktop, bd_gfx *gfx);
+
+/*
+ * Replaces the wall's app tiles with `apps`. The first apps occupy the demo
+ * wall's existing slots so a short list stays mixed with the placeholder
+ * tiles; an empty list restores the pure demo wall. The desktop copies what it
+ * needs, so `apps` may be released after the call.
+ */
+bool bd_desktop_set_apps(bd_desktop *desktop, const bd_app *const *apps,
+                         size_t count);
+/* App id of the focused tile, or NULL when the focused tile is a demo tile. */
+const char *bd_desktop_focused_app_id(const bd_desktop *desktop);
+/*
+ * Updates the running marker and, when available, loads the session's
+ * last-frame file into the tile. `last_frame_path` may be NULL.
+ */
+void bd_desktop_set_app_running(bd_desktop *desktop, const char *app_id,
+                                bool running, const char *last_frame_path);
+
+/* Hint bar is hidden until the ui.hint action arrives, and hidden on release. */
+void bd_desktop_set_hint_visible(bd_desktop *desktop, bool visible);
+bool bd_desktop_hint_visible(const bd_desktop *desktop);
+
+/*
+ * Shared action path for inputd and the in-process hotkey state machine.
+ * Returns true when the visible desktop changed.
+ */
+bool bd_desktop_handle_action(bd_desktop *desktop, const char *action,
+                              bool pressed);
 
 /* Returns true when the visible state changed and a redraw is needed. */
 bool bd_desktop_handle_key(bd_desktop *desktop, bd_key key, bool pressed);

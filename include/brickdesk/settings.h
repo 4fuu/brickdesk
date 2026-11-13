@@ -56,7 +56,6 @@ typedef enum bd_settings_action {
 } bd_settings_action;
 
 typedef struct bd_settings_style {
-  bool dark;
   bd_color accent_base; /* bd_config_accent_hex() output */
   int width;            /* 0 uses the renderer width */
   int height;           /* 0 uses the renderer height */
@@ -127,8 +126,6 @@ void bd_settings_set_status(bd_settings *settings,
                             const bd_settings_status *status);
 void bd_settings_set_storage(bd_settings *settings,
                              const bd_settings_storage *storage);
-void bd_settings_set_theme(bd_settings *settings, bool dark,
-                           bd_color accent_base);
 
 /* Opens a category page, or closes it.  open() damages the whole page. */
 bool bd_settings_open(bd_settings *settings, int category);
@@ -172,7 +169,7 @@ bool bd_settings_hint_visible(const bd_settings *settings);
 int bd_settings_category_index(const bd_settings *settings);
 int bd_settings_focus(const bd_settings *settings);
 int bd_settings_row_count(const bd_settings *settings);
-/* Stable identity of a row, e.g. "theme.mode" or "!hotkey.menu". */
+/* Stable identity of a row, e.g. "theme.accent" or "!hotkey.menu". */
 const char *bd_settings_row_key(const bd_settings *settings, int index);
 bool bd_settings_subpage(const bd_settings *settings);
 bool bd_settings_confirm_open(const bd_settings *settings);

@@ -75,24 +75,6 @@ static void settle(bd_platform *platform, bd_gfx *gfx, bd_home *home,
   }
 }
 
-static void set_dark(bd_home *home) {
-  bd_color accent;
-  const char *hex = bd_config_accent_hex("persimmon", true);
-  if (hex == NULL || !bd_color_from_hex(hex, &accent)) {
-    accent = bd_color_rgb(224, 122, 95);
-  }
-  bd_home_set_theme(home, true, accent);
-}
-
-static void set_light(bd_home *home) {
-  bd_color accent;
-  const char *hex = bd_config_accent_hex("persimmon", false);
-  if (hex == NULL || !bd_color_from_hex(hex, &accent)) {
-    accent = bd_color_rgb(174, 67, 43);
-  }
-  bd_home_set_theme(home, false, accent);
-}
-
 static void fill_rect(uint8_t *pixels, int x0, int y0, int w, int h, int r,
                       int g, int b) {
   for (int y = y0; y < y0 + h; ++y) {
@@ -235,7 +217,6 @@ int main(int argc, char **argv) {
   bd_home_style style;
   memset(&style, 0, sizeof(style));
   style.accent_base = accent;
-  style.dark = true;
   style.blur_enabled = true;
   style.width = CAPTURE_WIDTH;
   style.height = CAPTURE_HEIGHT;
@@ -296,29 +277,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  set_light(home);
-  bd_home_set_focus(home, 5);
-  now += 300;
-  settle(platform, gfx, home, now);
-  if (!write_png(gfx, out_dir, "home_light")) {
-    return 1;
-  }
-
-  bd_home_update(home, now);
-  if (!bd_home_open_quick(home)) {
-    fprintf(stderr, "home_capture: light quick open failed\n");
-    return 1;
-  }
-  now += 220;
-  settle(platform, gfx, home, now);
-  if (!write_png(gfx, out_dir, "home_quick_light")) {
-    return 1;
-  }
-  bd_home_close_quick(home);
-  now += 220;
-  bd_home_update(home, now);
-
-  set_dark(home);
   bd_home_update(home, now);
   if (!bd_home_set_running(home, "demo-03", town_path, true,
                            FIXTURE_MEMORY_TOWN_MB)) {

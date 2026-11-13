@@ -162,7 +162,6 @@ int main(int argc, char **argv) {
 
   bd_settings_style style;
   memset(&style, 0, sizeof(style));
-  style.dark = true;
   bd_color accent;
   if (!bd_color_from_hex(bd_config_accent_hex("persimmon", true), &accent)) {
     accent = bd_color_rgb(224, 122, 95);
@@ -279,12 +278,7 @@ int main(int argc, char **argv) {
        ok;
   now += 16;
   ok = focus_key(settings, "theme.accent") &&
-       bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT) &&
-       focus_key(settings, "theme.mode") &&
-       bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
-       capture(platform, gfx, settings, out_dir, "settings_light", now) && ok;
-  now += 16;
-  (void)bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT); /* dark again */
+       bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT) && ok;
   now += 16;
 
   {

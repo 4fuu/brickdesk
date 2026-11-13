@@ -54,7 +54,6 @@ typedef struct bd_home_item {
 
 typedef struct bd_home_style {
   bd_color accent_base;      /* required; bd_config_accent_hex() output */
-  bool dark;
   bool blur_enabled;         /* false: plain gradients for the floating bars */
   int width;                 /* 0 uses the renderer width */
   int height;                /* 0 uses the renderer height */
@@ -165,7 +164,6 @@ const char *bd_home_selected_id(const bd_home *home);
 int bd_home_tab(const bd_home *home);
 void bd_home_set_tab(bd_home *home, int tab);
 
-void bd_home_set_theme(bd_home *home, bool dark, bd_color accent_base);
 void bd_home_set_blur_enabled(bd_home *home, bool enabled);
 void bd_home_set_status(bd_home *home, const bd_home_status *status);
 void bd_home_set_live(bd_home *home, const bd_home_live *live);

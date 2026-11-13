@@ -30,41 +30,20 @@ static void palette_dark(bd_settings_palette *palette) {
   palette->scrim = bd_color_rgba(8, 7, 5, 150);
 }
 
-static void palette_light(bd_settings_palette *palette) {
-  palette->bg = bd_color_rgb(247, 241, 230);
-  palette->surface = bd_color_rgb(239, 230, 215);
-  palette->surface2 = bd_color_rgb(229, 219, 202);
-  palette->surface3 = bd_color_rgb(214, 203, 185);
-  palette->ink = bd_color_rgb(30, 26, 21);
-  palette->ink2 = bd_color_rgb(92, 85, 74);
-  palette->ink3 = bd_color_rgb(117, 108, 96);
-  palette->line = bd_color_rgba(30, 26, 21, 30);
-  palette->line_strong = bd_color_rgba(30, 26, 21, 55);
-  palette->hint = bd_color_rgba(247, 241, 230, 246);
-  palette->scrim = bd_color_rgba(26, 21, 16, 120);
-}
-
 void bd_settings_palette_apply(bd_settings *settings) {
-  if (settings->style.dark) {
-    palette_dark(&settings->palette);
-  } else {
-    palette_light(&settings->palette);
-  }
+  palette_dark(&settings->palette);
 }
 
 void bd_settings_apply_theme(bd_settings *settings) {
-  const char *mode = bd_config_get_string(settings->config, "theme.mode", "dark");
-  bool dark = strcmp(mode, "light") != 0;
   const char *accent = bd_config_get_string(settings->config, "theme.accent",
                                             "persimmon");
-  const char *hex = bd_config_accent_hex(accent, dark);
+  const char *hex = bd_config_accent_hex(accent, true);
   bd_color base;
   if (hex == NULL || !bd_color_from_hex(hex, &base)) {
-    base = dark ? bd_color_rgb(224, 122, 95) : bd_color_rgb(174, 67, 43);
+    base = bd_color_rgb(224, 122, 95);
   }
-  settings->style.dark = dark;
   settings->style.accent_base = base;
-  settings->accent = bd_accent_palette_from(base, dark);
+  settings->accent = bd_accent_palette_from(base, true);
   bd_settings_palette_apply(settings);
 }
 
@@ -147,12 +126,11 @@ static bool fonts_load(bd_settings_fonts *fonts, bd_gfx *gfx) {
 /* --------------------------------------------------------------- labels */
 
 static const char *const APPEARANCE_KEYS[] = {
-    "theme.mode", "theme.accent", "theme.ambient", "ui.animations", "ui.blur",
-    NULL};
+    "theme.accent", "theme.ambient", "ui.animations", "ui.blur", NULL};
 static const char *const APPEARANCE_SECTIONS[] = {"theme", "ui", NULL};
 static const char *const APPEARANCE_SKIP[] = {
-    "ui.language", "ui.time_format", "ui.clock_seconds", "ui.cover_cache_mb",
-    NULL};
+    "theme.mode", "ui.language", "ui.time_format", "ui.clock_seconds",
+    "ui.cover_cache_mb", NULL};
 static const char *const SOUND_KEYS[] = {"audio.volume", "audio.mute", NULL};
 static const char *const SOUND_SECTIONS[] = {"audio", NULL};
 static const char *const DISPLAY_KEYS[] = {"display.brightness", NULL};
@@ -185,7 +163,6 @@ const bd_settings_page_def BD_SETTINGS_PAGES[BD_SETTINGS_CATEGORY_COUNT] = {
 };
 
 static const bd_settings_label LABELS[] = {
-    {"theme.mode", "主题", "深色适合夜间，浅色适合白天", NULL, 0},
     {"theme.accent", "强调色", "焦点、进度与开关共用一个颜色", NULL, 0},
     {"theme.ambient", "背景", "预烘焙封面底图，或纯色", NULL, 0},
     {"ui.animations", "界面动画", "焦点移动、墙平移与面板滑入", NULL, 0},
@@ -242,17 +219,7 @@ static const char *accent_label(const char *accent) {
 }
 
 static const char *enum_label(const char *key, const char *value) {
-  if (strcmp(key, "theme.mode") == 0) {
-    if (strcmp(value, "dark") == 0) {
-      return "深色";
-    }
-    if (strcmp(value, "light") == 0) {
-      return "浅色";
-    }
-    if (strcmp(value, "auto") == 0) {
-      return "自动";
-    }
-  } else if (strcmp(key, "theme.ambient") == 0) {
+  if (strcmp(key, "theme.ambient") == 0) {
     if (strcmp(value, "baked") == 0) {
       return "预烘焙";
     }
@@ -952,8 +919,7 @@ static bool config_set(bd_settings *settings, const char *key,
 }
 
 static bool row_is_theme(const bd_settings_row *row) {
-  return strcmp(row->key, "theme.mode") == 0 ||
-         strcmp(row->key, "theme.accent") == 0 ||
+  return strcmp(row->key, "theme.accent") == 0 ||
          strcmp(row->key, "theme.ambient") == 0;
 }
 
@@ -1151,7 +1117,7 @@ static void close_plugin_settings(bd_settings *settings) {
 static void load_custom_rgb(bd_settings *settings) {
   const char *accent = bd_config_get_string(settings->config, "theme.accent",
                                             "persimmon");
-  const char *hex = bd_config_accent_hex(accent, settings->style.dark);
+  const char *hex = bd_config_accent_hex(accent, true);
   bd_color color;
   if (hex == NULL || !bd_color_from_hex(hex, &color)) {
     color = settings->style.accent_base;
@@ -1319,7 +1285,6 @@ bd_settings *bd_settings_create(bd_gfx *gfx, bd_config *config,
   }
   settings->gfx = gfx;
   settings->config = config;
-  settings->style.dark = style != NULL ? style->dark : true;
   settings->style.accent_base =
       style != NULL ? style->accent_base : bd_color_rgb(224, 122, 95);
   settings->style.width =
@@ -1424,19 +1389,6 @@ void bd_settings_set_storage(bd_settings *settings,
     bd_settings_rebuild_rows(settings);
     settings->focus = focus < settings->row_count ? focus : 0;
   }
-  bd_settings_mark_all(settings);
-  bd_gfx_damage_all(settings->gfx);
-}
-
-void bd_settings_set_theme(bd_settings *settings, bool dark,
-                           bd_color accent_base) {
-  if (settings == NULL) {
-    return;
-  }
-  settings->style.dark = dark;
-  settings->style.accent_base = accent_base;
-  settings->accent = bd_accent_palette_from(accent_base, dark);
-  bd_settings_palette_apply(settings);
   bd_settings_mark_all(settings);
   bd_gfx_damage_all(settings->gfx);
 }

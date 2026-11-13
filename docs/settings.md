@@ -77,7 +77,7 @@ needs a rebuild just to show a new number.
 
 | category | rows |
 |---|---|
-| 外观 | `theme.mode`, `theme.accent` (+ custom RGB sub-page), `theme.ambient`, `ui.animations`, `ui.blur` |
+| 外观 | `theme.accent` (+ custom RGB sub-page), `theme.ambient`, `ui.animations`, `ui.blur` |
 | 声音 | `audio.volume`, `audio.mute` |
 | 显示 | `display.brightness` |
 | 按键 | one conflict summary plus every `[hotkey.<id>]` combo, action, trigger and warning marker |
@@ -124,11 +124,10 @@ works on a host without a device backend.
 The system stub (`bd_settings_system_stub_init`) records the last value and
 call counts. M4 replaces it with the backlight and mixer implementations.
 
-Accent changes rebuild the palette from `bd_config_accent_hex()` and repaint
-the whole page, so the focus ring, swatches, toggles, sliders, icons and hint
-bullet recolour immediately. Theme mode changes also rebuild the palette and
-the light/dark page. The custom-colour sub-page edits R/G/B and writes
-`#rrggbb` on every step.
+Accent changes rebuild the dark palette from `bd_config_accent_hex()` and
+repaint the whole page, so the focus ring, swatches, toggles, sliders, icons and
+hint bullet recolour immediately. The custom-colour sub-page edits R/G/B and
+writes `#rrggbb` on every step.
 
 The reset row opens a confirm dialog (default focus on 取消). Confirming writes
 the schema defaults for static keys and saves, then re-applies brightness,
@@ -213,11 +212,11 @@ settings object before the plugin host and the config it points at.
   confirm/cancel, custom accent sub-page, hint strip damage and B navigation.
   A long 16-control plugin tree verifies that focus-following scroll reaches
   and activates the last control.
-- `settings_capture`: 15 screenshots (`settings_appearance`, `_hint`, `_sound`,
-  `_display`, `_brightness`, `_keys`, `_performance`, `_background`,
+- `settings_capture`: 14 dark screenshots (`settings_appearance`, `_hint`,
+  `_sound`, `_display`, `_brightness`, `_keys`, `_performance`, `_background`,
   `_plugins`, `_plugin_settings`, `_plugin_long`, `_system`, `_confirm`,
-  `_accent_coral`, `_light`). They are compared with `tools/imagediff.py` in
-  tolerance mode (max delta 2, SSIM 0.9995), like the other screenshot tests.
+  `_accent_coral`). They are compared with `tools/imagediff.py` in tolerance
+  mode (max delta 2, SSIM 0.9995), like the other screenshot tests.
 
 Run:
 

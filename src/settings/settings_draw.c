@@ -11,7 +11,7 @@ static bd_color row_background(const bd_settings *settings, bool focused) {
   if (!focused) {
     return settings->palette.surface;
   }
-  float amount = settings->style.dark ? 0.075f : 0.06f;
+  float amount = 0.075f;
   bd_color mixed = bd_color_mix(settings->palette.surface,
                                 settings->accent.accent, amount);
   mixed.a = 1.0f;
@@ -272,7 +272,7 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
                              palette->line_strong);
     const char *accent =
         bd_config_get_string(settings->config, "theme.accent", "persimmon");
-    const char *hex = bd_config_accent_hex(accent, settings->style.dark);
+    const char *hex = bd_config_accent_hex(accent, true);
     if (hex != NULL) {
       draw_text_right(gfx, settings->fonts.body, x + size, 166,
                       palette->ink2, hex);
@@ -390,7 +390,7 @@ static void draw_accent_row(const bd_settings *settings, bd_gfx *gfx,
   bd_color row_bg = row_background(settings, focused);
   if (custom) {
     bd_color color;
-    const char *hex = bd_config_accent_hex(current, settings->style.dark);
+    const char *hex = bd_config_accent_hex(current, true);
     if (hex == NULL || !bd_color_from_hex(hex, &color)) {
       color = settings->accent.accent;
     }
@@ -401,7 +401,7 @@ static void draw_accent_row(const bd_settings *settings, bd_gfx *gfx,
   for (int i = 0; i < row->enum_count; ++i) {
     bd_color color;
     const char *hex =
-        bd_config_accent_hex(row->enum_values[i], settings->style.dark);
+        bd_config_accent_hex(row->enum_values[i], true);
     if (hex == NULL || !bd_color_from_hex(hex, &color)) {
       color = settings->palette.surface3;
     }
@@ -565,7 +565,7 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
   memset(&style, 0, sizeof(style));
   style.fonts = &settings->plugin_fonts;
   style.accent = settings->accent;
-  style.dark = settings->style.dark;
+  style.dark = true;
   int node = settings->plugin_node_count > 0
                  ? settings->plugin_nodes[settings->plugin_node_focus]
                  : -1;

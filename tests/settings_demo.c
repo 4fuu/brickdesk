@@ -150,7 +150,6 @@ int main(int argc, char **argv) {
 
   bd_settings_style style;
   memset(&style, 0, sizeof(style));
-  style.dark = true;
   bd_color accent;
   if (!bd_color_from_hex(bd_config_accent_hex("persimmon", true), &accent)) {
     accent = bd_color_rgb(224, 122, 95);

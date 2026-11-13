@@ -861,8 +861,7 @@ static const bd_texture *live_cover_texture(const bd_home *home) {
 }
 
 static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
-                            bd_color color, bd_color background,
-                            bool wifi_unknown) {
+                            bd_color color, bool wifi_unknown) {
   switch (icon) {
     case 0: /* brightness */
       bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 6, 8, 8), 4, color);
@@ -885,11 +884,6 @@ static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 6, y + 13, 6, 2), color);
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 12, y + 7, 2, 2), color);
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 12, y + 11, 2, 2), color);
-      break;
-    case 4: /* theme */
-      bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 3, y + 3, 15, 15), 8, color);
-      bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 8, y + 1, 13, 13), 7,
-                             background);
       break;
     default:
       break;
@@ -1103,15 +1097,14 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                    palette->ink3, memory_text);
 
   int list_y = foot_baseline + 10;
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < 4; ++i) {
     bd_rect row = bd_rect_make(panel.x + 16, list_y + i * 48, panel.w - 32, 48);
     bool focused = home->quick_sel == home->running_count + i;
     draw_quick_row_background(home, gfx, row, focused);
     bd_color icon_color = focused ? home->accent.accent : palette->ink3;
-    bd_color icon_background = focused ? palette->surface2 : palette->surface;
     draw_quick_icon(gfx, i, row.x + 10, row.y + 14, icon_color,
-                    icon_background, !home->status.wifi_known);
-    static const char *const LABELS[5] = {"亮度", "音量", "Wi-Fi", "蓝牙", "主题"};
+                    !home->status.wifi_known);
+    static const char *const LABELS[4] = {"亮度", "音量", "Wi-Fi", "蓝牙"};
     bd_gfx_draw_text(gfx, home->fonts.body16, row.x + 40, row.y + 29,
                      focused ? palette->ink : palette->ink2, LABELS[i]);
     if (i == 0 || i == 1) {
@@ -1139,12 +1132,6 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                            bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
       draw_switch(home, gfx, row.x + row.w - 18 - 38, row.y + 13, on, 1.0f);
-    } else {
-      const char *value = home->style.dark ? "深色" : "浅色";
-      bd_gfx_draw_text(gfx, home->fonts.body14,
-                       row.x + row.w - 18 -
-                           bd_font_measure_text(home->fonts.body14, value),
-                       row.y + 29, palette->ink2, value);
     }
   }
 

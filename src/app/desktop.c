@@ -55,7 +55,6 @@ struct bd_desktop {
   bd_texture *ambient;
   float ambient_veil;
   bool ambient_baked;
-  bool dark;
   bd_wall_item demo_items[BD_DESKTOP_MAX_ITEMS];
   char demo_image_paths[BD_DESKTOP_MAX_ITEMS][512];
   int demo_count;
@@ -109,26 +108,15 @@ static bool apply_theme(bd_desktop *desktop, const bd_desktop_theme *theme) {
   if (desktop == NULL || theme == NULL) {
     return false;
   }
-  desktop->dark = theme->dark;
   desktop->ambient_baked = theme->ambient_baked;
-  if (theme->dark) {
-    desktop->bg = bd_color_rgb(18, 16, 13);
-    desktop->bg_deep = bd_color_rgb(11, 10, 8);
-    desktop->ink = bd_color_rgb(243, 237, 226);
-    desktop->ink2 = bd_color_rgb(185, 175, 160);
-    desktop->ink3 = bd_color_rgb(145, 136, 121);
-    desktop->line = bd_color_rgba(243, 237, 226, 31);
-    desktop->ambient_veil = 0.86f;
-  } else {
-    desktop->bg = bd_color_rgb(242, 237, 227);
-    desktop->bg_deep = bd_color_rgb(231, 224, 211);
-    desktop->ink = bd_color_rgb(30, 26, 21);
-    desktop->ink2 = bd_color_rgb(92, 85, 74);
-    desktop->ink3 = bd_color_rgb(111, 103, 91);
-    desktop->line = bd_color_rgba(30, 26, 21, 31);
-    desktop->ambient_veil = 0.90f;
-  }
-  desktop->accent = bd_accent_palette_from(theme->accent, theme->dark);
+  desktop->bg = bd_color_rgb(18, 16, 13);
+  desktop->bg_deep = bd_color_rgb(11, 10, 8);
+  desktop->ink = bd_color_rgb(243, 237, 226);
+  desktop->ink2 = bd_color_rgb(185, 175, 160);
+  desktop->ink3 = bd_color_rgb(145, 136, 121);
+  desktop->line = bd_color_rgba(243, 237, 226, 31);
+  desktop->ambient_veil = 0.86f;
+  desktop->accent = bd_accent_palette_from(theme->accent, true);
 
   if (desktop->ambient != NULL) {
     bd_gfx_texture_destroy(desktop->gfx, desktop->ambient);
@@ -486,7 +474,7 @@ static void draw_plugin_tile(bd_desktop *desktop, bd_gfx *gfx,
   memset(&style, 0, sizeof(style));
   style.fonts = &desktop->fonts;
   style.accent = desktop->accent;
-  style.dark = desktop->dark;
+  style.dark = true;
   bd_plugin_tile_draw(desktop->plugin, gfx, screen, &style);
 }
 
@@ -787,7 +775,6 @@ void bd_desktop_set_accent(bd_desktop *desktop, bd_color accent) {
     return;
   }
   bd_desktop_theme theme;
-  theme.dark = desktop->dark;
   theme.ambient_baked = desktop->ambient_baked;
   theme.accent = accent;
   bd_desktop_set_theme(desktop, &theme);
@@ -810,19 +797,17 @@ bool bd_desktop_draw_plugin_settings(bd_desktop *desktop, bd_gfx *gfx,
   }
   int width = bd_gfx_width(gfx);
   int height = bd_gfx_height(gfx);
-  bd_color scrim = desktop->dark ? bd_color_rgba(8, 7, 5, 150)
-                                 : bd_color_rgba(255, 250, 240, 165);
+  bd_color scrim = bd_color_rgba(8, 7, 5, 150);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, 0, width, height), scrim);
   bd_rect panel = bd_rect_make((width - 560) / 2, (height - 380) / 2, 560, 380);
-  bd_color surface = desktop->dark ? bd_color_rgb(26, 23, 19)
-                                   : bd_color_rgb(247, 243, 234);
+  bd_color surface = bd_color_rgb(26, 23, 19);
   bd_gfx_fill_round_rect(gfx, panel, 16, surface);
   bd_gfx_stroke_round_rect(gfx, panel, 16, 1, desktop->line);
   bd_plugin_render_style style;
   memset(&style, 0, sizeof(style));
   style.fonts = &desktop->fonts;
   style.accent = desktop->accent;
-  style.dark = desktop->dark;
+  style.dark = true;
   int focused = -1;
   for (int i = 0; i < settings->node_count; ++i) {
     if (settings->nodes[i].type == BD_PLUGIN_UI_TOGGLE ||

@@ -411,7 +411,7 @@ static void test_range_and_enum(void) {
                          "input.long_press_ms", "between 100 and 3000"),
           "range: expected range error at local.ini:5");
     CHECK(has_diagnostic(config, BD_CONFIG_ERROR, "local.ini", 8, "theme.mode",
-                         "dark, light, auto"),
+                         "dark"),
           "range: expected enum error at local.ini:8");
     CHECK(has_diagnostic(config, BD_CONFIG_ERROR, "local.ini", 9,
                          "theme.ambient", "baked, solid"),
@@ -446,8 +446,8 @@ static void test_range_and_enum(void) {
           bd_config_diagnostic_count(config));
     CHECK(bd_config_get_int(config, "input.long_press_ms", -1) == 100,
           "boundaries: min must be accepted");
-    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "light") == 0,
-          "boundaries: enum is case-insensitive and canonicalized");
+    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "dark") == 0,
+          "boundaries: legacy light maps to dark");
     CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""),
                  "#a1b2c3") == 0,
           "boundaries: custom accent is lowercased");
@@ -476,8 +476,8 @@ static void test_theme_options(void) {
   if (config != NULL) {
     CHECK(bd_config_diagnostic_count(config) == 0,
           "theme: unexpected diagnostics");
-    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "auto") == 0,
-          "theme: mode auto");
+    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "dark") == 0,
+          "theme: legacy auto maps to dark");
     CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "teal") == 0,
           "theme: accent teal");
     CHECK(strcmp(bd_config_get_string(config, "theme.ambient", ""), "solid") ==
@@ -663,12 +663,18 @@ static void test_set_save(void) {
   int changes = 0;
   bd_config_set_change_callback(config, change_callback, &changes);
   CHECK(bd_config_set(config, "theme.mode", "light", error, sizeof(error)),
-        "set: valid value: %s", error);
+        "set: legacy light alias: %s", error);
+  CHECK(changes == 0, "set: aliasing dark must not fire the callback");
+  CHECK(bd_config_set(config, "theme.mode", "auto", error, sizeof(error)),
+        "set: legacy auto alias: %s", error);
+  CHECK(changes == 0, "set: auto alias must not fire the callback");
+  CHECK(bd_config_set(config, "theme.accent", "teal", error, sizeof(error)),
+        "set: accent change: %s", error);
   CHECK(changes == 1, "set: callback should fire once (got %d)", changes);
-  CHECK(bd_config_set(config, "theme.mode", "light", error, sizeof(error)),
+  CHECK(bd_config_set(config, "theme.accent", "teal", error, sizeof(error)),
         "set: same value: %s", error);
   CHECK(changes == 1, "set: same value should not fire the callback");
-  CHECK(bd_config_set(config, "theme.mode", "dark", error, sizeof(error)),
+  CHECK(bd_config_set(config, "theme.accent", "coral", error, sizeof(error)),
         "set: second change: %s", error);
   CHECK(changes == 2, "set: callback should fire twice (got %d)", changes);
   CHECK(!bd_config_set(config, "theme.mode", "blue", error, sizeof(error)),
@@ -686,6 +692,7 @@ static void test_set_save(void) {
         "set: local.ini schema version");
   CHECK(text_contains(content, "[theme]"), "set: local.ini theme section");
   CHECK(text_contains(content, "mode = dark"), "set: local.ini mode");
+  CHECK(text_contains(content, "accent = coral"), "set: local.ini accent");
   CHECK(!text_contains(content, "[input]"),
         "set: local.ini must not contain untouched sections");
   CHECK(!text_contains(content, "long_press_ms"),
@@ -708,6 +715,8 @@ static void test_set_save(void) {
   if (config != NULL) {
     CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "dark") == 0,
           "set: reloaded mode");
+    CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "coral") == 0,
+          "set: reloaded accent");
     CHECK(bd_config_get_int(config, "display.brightness", -1) == 80,
           "set: reloaded brightness");
     CHECK(bd_config_source_layer(config, "display.brightness") ==
@@ -775,7 +784,7 @@ static void test_atomic_failure(void) {
   bd_config *config = bd_config_load(&options, error, sizeof(error));
   CHECK(config != NULL, "atomic: load: %s", error);
   if (config != NULL) {
-    CHECK(bd_config_set(config, "theme.mode", "light", error, sizeof(error)),
+    CHECK(bd_config_set(config, "theme.accent", "teal", error, sizeof(error)),
           "atomic: set: %s", error);
     CHECK(setenv("BRICKDESK_CONFIG_FAIL_WRITE", "5", 1) == 0,
           "atomic: set failpoint");
@@ -793,7 +802,7 @@ static void test_atomic_failure(void) {
     CHECK(bd_config_save(config, error, sizeof(error)),
           "atomic: save after the failpoint: %s", error);
     after = read_file(dir, "local.ini");
-    CHECK(text_contains(after, "mode = light"),
+    CHECK(text_contains(after, "accent = teal"),
           "atomic: successful save did not update local.ini");
     free(after);
     bd_config_free(config);
@@ -819,8 +828,8 @@ static void test_migration(void) {
   if (config != NULL) {
     CHECK(count_diagnostics(config, BD_CONFIG_ERROR) == 0,
           "migrate: unexpected errors");
-    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "light") == 0,
-          "migrate: value must survive migration");
+    CHECK(strcmp(bd_config_get_string(config, "theme.mode", ""), "dark") == 0,
+          "migrate: legacy light must load as dark");
     CHECK(bd_config_get_int(config, "display.brightness", -1) == 55,
           "migrate: brightness must survive migration");
     bd_config_free(config);

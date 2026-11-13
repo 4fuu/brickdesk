@@ -109,9 +109,9 @@ The suite includes:
   running tile, ends it from the dialog and checks the cleared tile
 - `home_scale`: 5,000-item first-fit layout/index traversal, focus damage,
   blur fallback, incremental launch and host timing checks
-- `home_capture`: deterministic screenshots of dark/light home, live focus,
-  running tile, return, dark/light quick panels, end and background-full
-  dialogs, hint bar and launch frames
+- `home_capture`: deterministic dark-only screenshots of the home, live focus,
+  running tile, return, quick panel, end and background-full dialogs, hint bar
+  and launch frames
 - `home_plugin_capture`: runs the real hello plugin through the production home
   custom-draw tile path, verifies off-screen suppression, on-demand startup,
   release after leaving the viewport and no session launch, and captures the
@@ -120,8 +120,8 @@ The suite includes:
   repeat, two-row focus damage with an exact partial/full match, hotkey
   conflicts, perf overrides, long plugin-tree scrolling, reset confirm and
   sub-pages
-- `settings_capture`: 15 screenshots for every category, accent, moved slider,
-  hotkey conflict, long plugin settings scroll, confirm dialog and light theme
+- `settings_capture`: 14 dark screenshots for every category, accent, moved
+  slider, hotkey conflict, long plugin settings scroll and confirm dialog
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,

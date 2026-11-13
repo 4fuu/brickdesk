@@ -833,7 +833,6 @@ static void test_desktop_frames_with_busy_plugin(void) {
     check(gfx != NULL, "desktop: gfx");
     if (gfx != NULL) {
       bd_desktop_theme theme;
-      theme.dark = true;
       theme.ambient_baked = true;
       theme.accent = bd_color_rgb(224, 108, 74);
       bd_desktop *desktop = bd_desktop_create(gfx, &theme);

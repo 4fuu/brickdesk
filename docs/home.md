@@ -115,9 +115,9 @@ update once before starting an animation.
 - The caller passes one accent base (from `bd_config_accent_hex()`), and the
   module derives the palette with `bd_accent_palette_from()`. The focus ring is
   a fixed warm white, not an accent, so it reads on any cover.
-- The wall stays dark in both themes. The light theme changes the chrome,
-  quick panel and dialog. Its top bar is deliberately a warm translucent paper
-  with a softer fade than the near-white v3 reference.
+- The desktop is dark-only. `theme.mode` has one effective value, `dark`; old
+  `light`/`auto` values in `local.ini` are normalized to `dark` on load. The
+  quick panel has no theme switch.
 - The top bar keeps the "brickdesk" wordmark (16 px), category labels (18 px),
   Wi-Fi and battery status glyphs, the clock (16 px) and the text running count
   (13 px). Only the left four-square project mark was removed; there are no
@@ -141,8 +141,7 @@ update once before starting an animation.
 
 ```c
 bd_home_style style = {
-    .accent_base = accent,          /* bd_config_accent_hex(..., dark) */
-    .dark = dark,
+    .accent_base = accent,          /* bd_config_accent_hex(..., true) */
     .blur_enabled = bd_config_get_bool(settings, "ui.blur", true),
 };
 bd_home *home = bd_home_create(gfx, &style);
@@ -197,7 +196,6 @@ event, and feeds the dialog result back into the session.
   it. There is no per-frame realtime blur or full-screen FBO.
 - Demo covers in `assets/covers/home-*.jpg` are 256x256 crops generated from the
   existing `prototype/bg` reference images (about 70 KiB total).
-- The light top bar is intentionally softer/darker than `v3-home-light.jpg`.
 
 ## Plugin tile
 

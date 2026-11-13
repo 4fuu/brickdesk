@@ -1647,6 +1647,58 @@ static void shell_mark_activity(bd_shell *shell);
 static bool shell_power_asleep(const bd_shell *shell);
 static void shell_power_cancel_gesture(bd_shell *shell);
 
+static bool shell_plugin_menu_declared(const bd_plugin *plugin,
+                                       const char *action_id) {
+  const bd_plugin_manifest *manifest = bd_plugin_manifest_of(plugin);
+  if (manifest == NULL || action_id == NULL) {
+    return false;
+  }
+  for (int i = 0; i < manifest->menu_count; ++i) {
+    if (strcmp(manifest->menu[i].id, action_id) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void shell_plugin_hotkey(bd_shell *shell, const bd_hotkey *hotkey,
+                                bool pressed) {
+  if (shell == NULL || hotkey == NULL || hotkey->plugin[0] == '\0') {
+    return;
+  }
+  bd_plugin *plugin = bd_plugin_host_find(shell->plugins, hotkey->plugin);
+  if (plugin == NULL) {
+    if (pressed) {
+      char text[160];
+      snprintf(text, sizeof(text), "未找到插件 %s", hotkey->plugin);
+      bd_shell_notice(shell, BD_NOTICE_WARNING, text, 3000);
+    }
+    return;
+  }
+  const char *action = hotkey->action_id[0] != '\0' ? hotkey->action_id
+                                                     : hotkey->action;
+  if (action == NULL || action[0] == '\0') {
+    return;
+  }
+  if (bd_plugin_state_of(plugin) != BD_PLUGIN_RUNNING) {
+    bd_plugin_activate(plugin);
+    if (pressed) {
+      char text[160];
+      snprintf(text, sizeof(text), "插件 %s 正在启动", hotkey->plugin);
+      bd_shell_notice(shell, BD_NOTICE_INFO, text, 2000);
+    }
+    return;
+  }
+  if (pressed && shell_plugin_menu_declared(plugin, action)) {
+    bd_plugin_menu_activate(plugin, action);
+    return;
+  }
+  if (shell_plugin_menu_declared(plugin, action)) {
+    return;
+  }
+  bd_plugin_hotkey_event(plugin, action, pressed);
+}
+
 static void local_emit(void *user, const bd_input_output *event) {
   bd_shell *shell = (bd_shell *)user;
   if (event->kind == BD_INPUT_OUTPUT_KEY) {
@@ -1656,9 +1708,12 @@ static void local_emit(void *user, const bd_input_output *event) {
   if (event->kind == BD_INPUT_OUTPUT_ACTION && shell->hotkey_table != NULL &&
       event->binding >= 0 &&
       (size_t)event->binding < shell->hotkey_table->count) {
-    shell_dispatch_action(shell,
-                          shell->hotkey_table->items[event->binding].action,
-                          event->pressed);
+    const bd_hotkey *hotkey = &shell->hotkey_table->items[event->binding];
+    if (hotkey->plugin[0] != '\0') {
+      shell_plugin_hotkey(shell, hotkey, event->pressed);
+      return;
+    }
+    shell_dispatch_action(shell, hotkey->action, event->pressed);
   }
 }
 

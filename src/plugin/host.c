@@ -21,6 +21,21 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/syscall.h>
+#ifndef AUDIT_ARCH_AARCH64
+#define AUDIT_ARCH_AARCH64 0xC00000B7
+#endif
+#ifndef AUDIT_ARCH_X86_64
+#define AUDIT_ARCH_X86_64 0xC000003E
+#endif
+#ifndef SECCOMP_RET_KILL_PROCESS
+#define SECCOMP_RET_KILL_PROCESS SECCOMP_RET_KILL
+#endif
+#endif
 
 #include "host_internal.h"
 #include "ipc.h"
@@ -82,8 +97,126 @@ bd_plugin_limits bd_plugin_default_limits(void) {
   limits.restart_max_ms = 8000;
   limits.restart_window_ms = 60000;
   limits.restart_limit = 3;
+  limits.rss_check_ms = 5000;
   return limits;
 }
+
+#if defined(__linux__)
+/*
+ * Plugin processes keep normal file/socket access but lose the syscalls that
+ * can change the system outside their package/data directories.  This is the
+ * process-side half of the manifest permission model; manifest permissions
+ * remain declarative and are exported to the plugin for user-visible consent.
+ */
+static bool install_plugin_seccomp(void) {
+  struct sock_filter code[96];
+  size_t count = 0;
+  int denied[] = {
+#ifdef SYS_mount
+      SYS_mount,
+#endif
+#ifdef SYS_umount2
+      SYS_umount2,
+#endif
+#ifdef SYS_swapon
+      SYS_swapon,
+#endif
+#ifdef SYS_swapoff
+      SYS_swapoff,
+#endif
+#ifdef SYS_reboot
+      SYS_reboot,
+#endif
+#ifdef SYS_kexec_load
+      SYS_kexec_load,
+#endif
+#ifdef SYS_kexec_file_load
+      SYS_kexec_file_load,
+#endif
+#ifdef SYS_init_module
+      SYS_init_module,
+#endif
+#ifdef SYS_finit_module
+      SYS_finit_module,
+#endif
+#ifdef SYS_delete_module
+      SYS_delete_module,
+#endif
+#ifdef SYS_ptrace
+      SYS_ptrace,
+#endif
+#ifdef SYS_bpf
+      SYS_bpf,
+#endif
+#ifdef SYS_setns
+      SYS_setns,
+#endif
+#ifdef SYS_unshare
+      SYS_unshare,
+#endif
+#ifdef SYS_open_by_handle_at
+      SYS_open_by_handle_at,
+#endif
+#ifdef SYS_name_to_handle_at
+      SYS_name_to_handle_at,
+#endif
+#ifdef SYS_perf_event_open
+      SYS_perf_event_open,
+#endif
+#ifdef SYS_userfaultfd
+      SYS_userfaultfd,
+#endif
+#ifdef SYS_iopl
+      SYS_iopl,
+#endif
+#ifdef SYS_ioperm
+      SYS_ioperm,
+#endif
+#ifdef SYS_acct
+      SYS_acct,
+#endif
+#ifdef SYS_pivot_root
+      SYS_pivot_root,
+#endif
+#ifdef SYS_chroot
+      SYS_chroot,
+#endif
+  };
+  code[count++] =
+      (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                                   (uint32_t)offsetof(struct seccomp_data,
+                                                      arch));
+  code[count++] = (struct sock_filter)BPF_JUMP(
+      BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 2, 0);
+  code[count++] = (struct sock_filter)BPF_JUMP(
+      BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0);
+  code[count++] = (struct sock_filter)BPF_STMT(
+      BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+  code[count++] =
+      (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                                   (uint32_t)offsetof(struct seccomp_data, nr));
+  for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); ++i) {
+    code[count++] = (struct sock_filter)BPF_JUMP(
+        BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)denied[i], 0, 1);
+    code[count++] = (struct sock_filter)BPF_STMT(
+        BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA));
+  }
+  code[count++] =
+      (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+  struct sock_fprog program;
+  program.len = (unsigned short)count;
+  program.filter = code;
+  if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+    return false;
+  }
+  if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) != 0) {
+    return false;
+  }
+  return true;
+}
+#else
+static bool install_plugin_seccomp(void) { return true; }
+#endif
 
 void bd_plugin_log(const bd_plugin *plugin, const char *format, ...) {
   if (plugin == NULL || plugin->host == NULL || !plugin->host->verbose) {
@@ -393,6 +526,7 @@ static bool wants_run(const bd_plugin *plugin) {
 
 static void process_exit(bd_plugin *plugin, int status, uint64_t now);
 static bool plugin_start(bd_plugin *plugin, uint64_t now);
+static int plugin_rss_kb(const bd_plugin *plugin);
 
 static void schedule_after_failure(bd_plugin *plugin, uint64_t now) {
   bd_plugin_host *host = host_of(plugin);
@@ -629,12 +763,33 @@ static bool plugin_start(bd_plugin *plugin, uint64_t now) {
     setenv("BRICKDESK_PLUGIN_DIR", plugin->manifest.dir, 1);
     setenv("BRICKDESK_PLUGIN_DATA", data_dir, 1);
     setenv("BRICKDESK_PLUGIN_CACHE", cache_dir, 1);
+    char permission_text[BD_PLUGIN_MAX_PERMISSIONS * 49];
+    size_t permission_used = 0;
+    permission_text[0] = '\0';
+    for (int i = 0; i < plugin->manifest.permission_count; ++i) {
+      int written = snprintf(permission_text + permission_used,
+                             sizeof(permission_text) - permission_used,
+                             "%s%s", i == 0 ? "" : ",",
+                             plugin->manifest.permissions[i]);
+      if (written <= 0 ||
+          (size_t)written >= sizeof(permission_text) - permission_used) {
+        break;
+      }
+      permission_used += (size_t)written;
+    }
+    setenv("BRICKDESK_PLUGIN_PERMISSIONS", permission_text, 1);
     long maximum_fd = sysconf(_SC_OPEN_MAX);
     if (maximum_fd < 0 || maximum_fd > 1024) {
       maximum_fd = 1024;
     }
     for (int fd = 3; fd < (int)maximum_fd; ++fd) {
       close(fd);
+    }
+    prctl(PR_SET_DUMPABLE, 0);
+    if (!install_plugin_seccomp()) {
+      fprintf(stderr, "brickdesk-plugin: seccomp filter failed: %s\n",
+              strerror(errno));
+      _exit(126);
     }
     execv(argv[0], argv);
     fprintf(stderr, "brickdesk-plugin: exec %s failed: %s\n", argv[0],
@@ -730,6 +885,54 @@ static bool header_valid(const bd_plugin *plugin) {
   return true;
 }
 
+static bool plugin_image_path_safe(const char *path) {
+  if (path == NULL || path[0] == '\0' || path[0] == '/') {
+    return false;
+  }
+  const char *cursor = path;
+  while (*cursor != '\0') {
+    const char *slash = strchr(cursor, '/');
+    size_t length = slash != NULL ? (size_t)(slash - cursor) : strlen(cursor);
+    if (length == 0 ||
+        (length == 1 && cursor[0] == '.') ||
+        (length == 2 && cursor[0] == '.' && cursor[1] == '.')) {
+      return false;
+    }
+    if (slash == NULL) {
+      break;
+    }
+    cursor = slash + 1;
+  }
+  return true;
+}
+
+static bool resolve_ui_images(bd_plugin *plugin, bd_plugin_ui *ui, char *error,
+                              size_t error_size) {
+  if (plugin == NULL || ui == NULL) {
+    return false;
+  }
+  for (int i = 0; i < ui->node_count; ++i) {
+    bd_plugin_ui_node *node = &ui->nodes[i];
+    if (node->type != BD_PLUGIN_UI_IMAGE) {
+      continue;
+    }
+    if (!plugin_image_path_safe(node->image)) {
+      snprintf(error, error_size,
+               "image src must be a relative path without '..' components");
+      return false;
+    }
+    char resolved[BD_PLUGIN_MAX_PATH];
+    int written = snprintf(resolved, sizeof(resolved), "%s/%s",
+                           plugin->manifest.dir, node->image);
+    if (written <= 0 || (size_t)written >= sizeof(resolved)) {
+      snprintf(error, error_size, "image path is too long");
+      return false;
+    }
+    snprintf(node->image, sizeof(node->image), "%s", resolved);
+  }
+  return true;
+}
+
 static bool parse_ui_token(const bd_plugin_json *json,
                            const jsmntok_t *token, bd_plugin_ui *out,
                            char *error, size_t error_size) {
@@ -779,7 +982,8 @@ static void handle_ui_set(bd_plugin *plugin, const bd_plugin_json *json,
   }
   char error[192] = {0};
   if (tile != NULL &&
-      !parse_ui_token(json, tile, tile_ui, error, sizeof(error))) {
+      (!parse_ui_token(json, tile, tile_ui, error, sizeof(error)) ||
+       !resolve_ui_images(plugin, tile_ui, error, sizeof(error)))) {
     ++plugin->protocol_errors;
     bd_plugin_log(plugin, "tile UI rejected: %s", error);
     if (id > 0) {
@@ -790,7 +994,8 @@ static void handle_ui_set(bd_plugin *plugin, const bd_plugin_json *json,
     return;
   }
   if (settings != NULL &&
-      !parse_ui_token(json, settings, settings_ui, error, sizeof(error))) {
+      (!parse_ui_token(json, settings, settings_ui, error, sizeof(error)) ||
+       !resolve_ui_images(plugin, settings_ui, error, sizeof(error)))) {
     ++plugin->protocol_errors;
     bd_plugin_log(plugin, "settings UI rejected: %s", error);
     if (id > 0) {
@@ -1622,6 +1827,55 @@ static void plugin_read(bd_plugin *plugin, uint64_t now) {
   }
 }
 
+static void check_rss_budget(bd_plugin_host *host, uint64_t now) {
+  int interval = host->limits.rss_check_ms > 0 ? host->limits.rss_check_ms : 5000;
+  if (host->rss_check_ms != 0 && now - host->rss_check_ms < (uint64_t)interval) {
+    return;
+  }
+  host->rss_check_ms = now;
+  if (host->max_total_rss_mb <= 0) {
+    return;
+  }
+  int total_kb = 0;
+  for (int i = 0; i < host->count; ++i) {
+    bd_plugin *plugin = &host->plugins[i];
+    if (plugin->state == BD_PLUGIN_RUNNING ||
+        plugin->state == BD_PLUGIN_STARTING ||
+        plugin->state == BD_PLUGIN_HANDSHAKING) {
+      total_kb += plugin_rss_kb(plugin);
+    }
+  }
+  if (total_kb <= host->max_total_rss_mb * 1024) {
+    host->rss_budget_warned = false;
+    return;
+  }
+  bd_plugin *victim = NULL;
+  for (int i = 0; i < host->count; ++i) {
+    bd_plugin *plugin = &host->plugins[i];
+    if (plugin->state != BD_PLUGIN_RUNNING || plugin->visible ||
+        plugin->settings_open) {
+      continue;
+    }
+    if (victim == NULL || plugin->last_rx_ms < victim->last_rx_ms) {
+      victim = plugin;
+    }
+  }
+  if (victim != NULL) {
+    bd_plugin_diagnostic(host,
+                         "RSS budget %d MB exceeded (%d KB); stopping %s",
+                         host->max_total_rss_mb, total_kb, victim->manifest.id);
+    if (bd_plugin_stop(victim)) {
+      host->rss_budget_warned = false;
+    }
+  } else if (!host->rss_budget_warned) {
+    bd_plugin_diagnostic(host,
+                         "RSS budget %d MB exceeded (%d KB), but every plugin "
+                         "is visible or in settings",
+                         host->max_total_rss_mb, total_kb);
+    host->rss_budget_warned = true;
+  }
+}
+
 static void run_timers(bd_plugin_host *host, uint64_t now) {
   for (int i = 0; i < host->count; ++i) {
     bd_plugin *plugin = &host->plugins[i];
@@ -1882,6 +2136,7 @@ int bd_plugin_host_poll(bd_plugin_host *host, int timeout_ms) {
   }
   reap_children(host, now);
   run_timers(host, now);
+  check_rss_budget(host, now);
   for (int i = 0; i < host->count; ++i) {
     if (host->plugins[i].output_length > 0 && host->plugins[i].fd >= 0) {
       if (!flush_output(&host->plugins[i])) {
@@ -1986,6 +2241,12 @@ bd_plugin_host *bd_plugin_host_create(const bd_plugin_host_config *config) {
   host->limits =
       config != NULL && config->limits != NULL ? *config->limits
                                                : bd_plugin_default_limits();
+  host->max_total_rss_mb =
+      config != NULL && config->max_total_rss_mb > 0
+          ? config->max_total_rss_mb
+          : 128;
+  host->rss_check_ms = monotonic_ms();
+  host->rss_budget_warned = false;
   host->display_width = config != NULL && config->display_width > 0
                             ? config->display_width
                             : 1024;
@@ -2071,6 +2332,134 @@ void bd_plugin_host_stop_all(bd_plugin_host *host) {
     free_plugin(&host->plugins[i]);
   }
   host->shutting_down = false;
+}
+
+bool bd_plugin_stop(bd_plugin *plugin) {
+  if (plugin == NULL) {
+    return false;
+  }
+  uint64_t now = monotonic_ms();
+  if (plugin->state == BD_PLUGIN_BACKOFF) {
+    plugin->restart_at_ms = 0;
+    set_state(plugin, BD_PLUGIN_STOPPED);
+    return true;
+  }
+  if (plugin->state != BD_PLUGIN_RUNNING &&
+      plugin->state != BD_PLUGIN_HANDSHAKING &&
+      plugin->state != BD_PLUGIN_STARTING) {
+    return false;
+  }
+  if (plugin->fd >= 0) {
+    queue_format(plugin, "{\"jsonrpc\":\"2.0\",\"method\":\"host.shutdown\"}");
+  }
+  set_state(plugin, BD_PLUGIN_STOPPING);
+  plugin->stop_graceful = plugin->fd >= 0;
+  plugin->stop_deadline_ms =
+      now + (uint64_t)(plugin->host->limits.shutdown_timeout_ms > 0
+                           ? plugin->host->limits.shutdown_timeout_ms
+                           : 1);
+  return true;
+}
+
+int bd_plugin_host_total_rss_kb(const bd_plugin_host *host) {
+  if (host == NULL) {
+    return 0;
+  }
+  int total = 0;
+  for (int i = 0; i < host->count; ++i) {
+    total += plugin_rss_kb(&host->plugins[i]);
+  }
+  return total;
+}
+
+bool bd_plugin_has_permission(const bd_plugin *plugin, const char *permission) {
+  if (plugin == NULL || permission == NULL || permission[0] == '\0') {
+    return false;
+  }
+  for (int i = 0; i < plugin->manifest.permission_count; ++i) {
+    if (strcmp(plugin->manifest.permissions[i], permission) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+size_t bd_plugin_host_menu_count(const bd_plugin_host *host) {
+  if (host == NULL) {
+    return 0;
+  }
+  size_t count = 0;
+  for (int i = 0; i < host->count; ++i) {
+    count += (size_t)host->plugins[i].manifest.menu_count;
+  }
+  return count;
+}
+
+bool bd_plugin_host_menu_at(const bd_plugin_host *host, size_t index,
+                            bd_plugin **plugin,
+                            const bd_plugin_menu_item **item) {
+  if (host == NULL) {
+    return false;
+  }
+  for (int i = 0; i < host->count; ++i) {
+    bd_plugin *candidate = &host->plugins[i];
+    if (index < (size_t)candidate->manifest.menu_count) {
+      if (plugin != NULL) {
+        *plugin = candidate;
+      }
+      if (item != NULL) {
+        *item = &candidate->manifest.menu[index];
+      }
+      return true;
+    }
+    index -= (size_t)candidate->manifest.menu_count;
+  }
+  return false;
+}
+
+bool bd_plugin_menu_activate(bd_plugin *plugin, const char *menu_id) {
+  if (plugin == NULL || menu_id == NULL || menu_id[0] == '\0' ||
+      (plugin->manifest.capabilities & BD_PLUGIN_CAP_MENU) == 0 ||
+      plugin->state != BD_PLUGIN_RUNNING || plugin->fd < 0) {
+    return false;
+  }
+  bool declared = false;
+  for (int i = 0; i < plugin->manifest.menu_count; ++i) {
+    if (strcmp(plugin->manifest.menu[i].id, menu_id) == 0) {
+      declared = true;
+      break;
+    }
+  }
+  if (!declared) {
+    return false;
+  }
+  char escaped[128];
+  json_escape(escaped, sizeof(escaped), menu_id);
+  char extra[192];
+  int written = snprintf(extra, sizeof(extra), "\"menu\":\"%s\"", escaped);
+  if (written < 0 || (size_t)written >= sizeof(extra)) {
+    return false;
+  }
+  return bd_plugin_send_event(plugin, "menu.activate", extra);
+}
+
+bool bd_plugin_hotkey_event(bd_plugin *plugin, const char *action_id,
+                            bool pressed) {
+  if (plugin == NULL || action_id == NULL || action_id[0] == '\0' ||
+      (plugin->manifest.capabilities & BD_PLUGIN_CAP_HOTKEY) == 0 ||
+      plugin->state != BD_PLUGIN_RUNNING || plugin->fd < 0) {
+    return false;
+  }
+  char escaped_action[128];
+  json_escape(escaped_action, sizeof(escaped_action), action_id);
+  char extra[224];
+  int written = snprintf(extra, sizeof(extra),
+                         "\"action\":\"%s\",\"pressed\":%s", escaped_action,
+                         pressed ? "true" : "false");
+  if (written < 0 || (size_t)written >= sizeof(extra)) {
+    return false;
+  }
+  return bd_plugin_send_event(plugin, "hotkey", extra);
 }
 
 void bd_plugin_host_destroy(bd_plugin_host *host) {
@@ -2228,6 +2617,26 @@ bd_plugin_state bd_plugin_state_of(const bd_plugin *plugin) {
   return plugin != NULL ? plugin->state : BD_PLUGIN_DISCOVERED;
 }
 
+static int plugin_rss_kb(const bd_plugin *plugin) {
+  if (plugin == NULL || plugin->pid <= 0) {
+    return 0;
+  }
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/statm", plugin->pid);
+  FILE *file = fopen(path, "r");
+  if (file == NULL) {
+    return 0;
+  }
+  long total = 0;
+  long resident = 0;
+  int rss_kb = 0;
+  if (fscanf(file, "%ld %ld", &total, &resident) == 2 && resident > 0) {
+    rss_kb = (int)(resident * (long)(sysconf(_SC_PAGESIZE) / 1024));
+  }
+  fclose(file);
+  return rss_kb;
+}
+
 bd_plugin_stats bd_plugin_get_stats(const bd_plugin *plugin) {
   bd_plugin_stats stats;
   memset(&stats, 0, sizeof(stats));
@@ -2247,19 +2656,7 @@ bd_plugin_stats bd_plugin_get_stats(const bd_plugin *plugin) {
                         ? __atomic_load_n(&plugin->frame_header->seq,
                                           __ATOMIC_ACQUIRE)
                         : 0;
-  if (plugin->pid > 0) {
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%d/statm", plugin->pid);
-    FILE *file = fopen(path, "r");
-    if (file != NULL) {
-      long total = 0;
-      long resident = 0;
-      if (fscanf(file, "%ld %ld", &total, &resident) == 2 && resident > 0) {
-        stats.rss_kb = (int)(resident * (long)(sysconf(_SC_PAGESIZE) / 1024));
-      }
-      fclose(file);
-    }
-  }
+  stats.rss_kb = plugin_rss_kb(plugin);
   return stats;
 }
 

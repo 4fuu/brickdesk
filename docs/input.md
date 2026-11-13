@@ -336,6 +336,12 @@ separate test state so hold timing stays deterministic. `menu.open`,
 `perf.cycle` and `session.return_home` are forwarded by inputd; the desktop
 executes `session.return_home` when an app owns the screen.
 
+A binding with `hotkey.<id>.plugin` set is routed to that plugin instead of the
+normal action dispatcher. `action_id` selects a declared menu entry (sent as
+`menu.activate`) or, for plugins with the `hotkey` capability, an action
+(sent as `hotkey` with `pressed`). If the plugin is stopped, the binding starts
+it and shows a startup notice; the event is not replayed after handshake.
+
 ## 7. Known deviations / device checks
 
 - `suppress=true` (per-binding grab + uinput forwarding) is not implemented.

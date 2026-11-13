@@ -35,6 +35,8 @@ static const char *ui_type_name(const bd_plugin_ui_node *node) {
       return "text";
     case BD_PLUGIN_UI_ICON:
       return "icon";
+    case BD_PLUGIN_UI_IMAGE:
+      return "image";
     case BD_PLUGIN_UI_PROGRESS:
       return "progress";
     case BD_PLUGIN_UI_TOGGLE:
@@ -61,6 +63,8 @@ static bool ui_node_type(const char *name, bd_plugin_ui_node_type *out) {
     *out = BD_PLUGIN_UI_TEXT;
   } else if (strcmp(name, "icon") == 0) {
     *out = BD_PLUGIN_UI_ICON;
+  } else if (strcmp(name, "image") == 0) {
+    *out = BD_PLUGIN_UI_IMAGE;
   } else if (strcmp(name, "progress") == 0) {
     *out = BD_PLUGIN_UI_PROGRESS;
   } else if (strcmp(name, "toggle") == 0) {
@@ -270,6 +274,27 @@ static bool ui_parse_node(ui_parser *parser, int token_index, int depth,
       if (!ui_member_string(parser, object, "name", node->icon,
                             sizeof(node->icon), true)) {
         return false;
+      }
+      break;
+    case BD_PLUGIN_UI_IMAGE:
+      if (!ui_member_string(parser, object, "src", node->image,
+                            sizeof(node->image), true)) {
+        return false;
+      }
+      if (node->image[0] == '\0' || node->image[0] == '/') {
+        return ui_error(parser, "image src must be a relative path");
+      }
+      node->image_height = 72;
+      node->radius = 8;
+      if (!ui_member_int(parser, object, "height", &node->image_height) ||
+          !ui_member_int(parser, object, "radius", &node->radius)) {
+        return false;
+      }
+      if (node->image_height < 24 || node->image_height > 320) {
+        return ui_error(parser, "image height must be between 24 and 320");
+      }
+      if (node->radius < 0 || node->radius > 32) {
+        return ui_error(parser, "image radius must be between 0 and 32");
       }
       break;
     case BD_PLUGIN_UI_PROGRESS:

@@ -93,6 +93,8 @@ static int measure_node(const bd_plugin_ui *ui, int index, int width,
       return 22 * count_lines(node->text) + 2;
     case BD_PLUGIN_UI_ICON:
       return 28;
+    case BD_PLUGIN_UI_IMAGE:
+      return node->image_height > 0 ? node->image_height : 72;
     case BD_PLUGIN_UI_PROGRESS:
       return node->text[0] != '\0' ? 26 : 10;
     case BD_PLUGIN_UI_TOGGLE:
@@ -190,6 +192,23 @@ static void draw_icon_node(ui_draw_context *context, const bd_plugin_ui_node *no
                      icon.y + size / 2 + bd_font_ascent(context->fonts->badge) / 2,
                      context->colors.accent, first);
   }
+}
+
+static void draw_image_node(ui_draw_context *context,
+                            const bd_plugin_ui_node *node, bd_rect rect) {
+  bd_texture *texture = NULL;
+  if (node->image[0] == '/') {
+    bd_image_state state = bd_gfx_image_texture(
+        context->gfx, node->image, rect.w, rect.h, &texture);
+    if (state == BD_IMAGE_READY && texture != NULL) {
+      bd_gfx_draw_texture_cover(context->gfx, texture, rect,
+                                bd_color_rgba(255, 255, 255, 255),
+                                node->radius);
+      return;
+    }
+  }
+  bd_gfx_fill_round_rect(context->gfx, rect, node->radius,
+                         context->colors.soft);
 }
 
 static void draw_progress_node(ui_draw_context *context,
@@ -403,6 +422,9 @@ static void draw_node(ui_draw_context *context, int index, bd_rect rect) {
       break;
     case BD_PLUGIN_UI_ICON:
       draw_icon_node(context, node, rect);
+      break;
+    case BD_PLUGIN_UI_IMAGE:
+      draw_image_node(context, node, rect);
       break;
     case BD_PLUGIN_UI_PROGRESS:
       draw_progress_node(context, node, rect);

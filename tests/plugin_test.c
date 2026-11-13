@@ -119,7 +119,7 @@ static bool write_manifest(const char *root, const char *id, const char *mode,
            "\"schema\":1,\"id\":\"%s\",\"name\":\"Fixture %s\","
            "\"version\":\"0.1.0\",\"api\":1,\"runtime\":\"shell\","
            "\"entry\":[\"run.sh\"],"
-           "\"capabilities\":[\"tile\",\"settings\",\"menu\"],"
+           "\"capabilities\":[\"tile\",\"settings\",\"menu\",\"hotkey\"],"
            "\"permissions\":[\"network\"],"
            "\"menu\":[{\"id\":\"open\",\"label\":\"Open fixture\"}],"
            "\"tile\":{\"w\":1,\"h\":1,\"refresh_hz\":15},"
@@ -247,9 +247,10 @@ static bool read_file_text(const char *path, char *out, size_t out_size) {
   return true;
 }
 
-static bd_plugin_host *make_host_paths(const char *plugin_dir,
-                                      const char *root,
-                                      bd_plugin_limits limits) {
+static bd_plugin_host *make_host_paths_budget(const char *plugin_dir,
+                                              const char *root,
+                                              bd_plugin_limits limits,
+                                              int max_total_rss_mb) {
   char runtime[1024];
   char state[1024];
   snprintf(runtime, sizeof(runtime), "%s/runtime", root);
@@ -260,12 +261,19 @@ static bd_plugin_host *make_host_paths(const char *plugin_dir,
   config.runtime_dir = runtime;
   config.state_dir = state;
   config.limits = &limits;
+  config.max_total_rss_mb = max_total_rss_mb;
   config.display_width = 1024;
   config.display_height = 768;
   config.dark = true;
   config.accent = 0xe06c4a;
   config.locale = "en-US";
   return bd_plugin_host_create(&config);
+}
+
+static bd_plugin_host *make_host_paths(const char *plugin_dir,
+                                      const char *root,
+                                      bd_plugin_limits limits) {
+  return make_host_paths_budget(plugin_dir, root, limits, 128);
 }
 
 static bd_plugin_host *make_host(const char *root, bd_plugin_limits limits) {
@@ -611,17 +619,21 @@ static void test_ui_validation(void) {
   check(ui.nodes[0].type == BD_PLUGIN_UI_COLUMN && ui.nodes[0].child_count == 2,
         "ui: root children");
 
-  const char *too_deep =
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"column\",\"children\":["
-      "{\"type\":\"text\",\"text\":\"x\"}]}]}]}]}]}]}]}]}";
-  check(!parse_ui(too_deep), "ui: depth 9 must be rejected");
+  char too_deep[4096];
+  size_t deep_used = 0;
+  for (int i = 0; i < 13; ++i) {
+    deep_used += (size_t)snprintf(too_deep + deep_used,
+                                  sizeof(too_deep) - deep_used,
+                                  "{\"type\":\"column\",\"children\":[");
+  }
+  deep_used += (size_t)snprintf(too_deep + deep_used,
+                                sizeof(too_deep) - deep_used,
+                                "{\"type\":\"text\",\"text\":\"x\"}");
+  for (int i = 0; i < 13; ++i) {
+    deep_used += (size_t)snprintf(too_deep + deep_used,
+                                  sizeof(too_deep) - deep_used, "]}");
+  }
+  check(!parse_ui(too_deep), "ui: depth 14 must be rejected");
   check(!parse_ui("{\"type\":\"unknown\"}"), "ui: unknown node must fail");
   check(!parse_ui("{\"type\":\"text\",\"text\":\"\"}"),
         "ui: empty text must fail");
@@ -629,12 +641,25 @@ static void test_ui_validation(void) {
         "ui: value > max must fail");
   check(!parse_ui("{\"type\":\"toggle\",\"label\":\"x\",\"value\":true}"),
         "ui: toggle without id must fail");
+  const char *image =
+      "{\"type\":\"image\",\"src\":\"art/cover.png\",\"height\":64,"
+      "\"radius\":6}";
+  check(bd_plugin_ui_parse(image, strlen(image), &ui, error, sizeof(error)),
+        "ui: image tree rejected: %s", error);
+  check(ui.node_count == 1 && ui.nodes[0].type == BD_PLUGIN_UI_IMAGE &&
+            ui.nodes[0].image_height == 64 && ui.nodes[0].radius == 6,
+        "ui: image fields");
+  check(!parse_ui("{\"type\":\"image\",\"src\":\"/etc/passwd\"}"),
+        "ui: absolute image path must fail");
+  check(!parse_ui("{\"type\":\"image\",\"src\":\"art/x.png\","
+                  "\"height\":8}"),
+        "ui: tiny image height must fail");
 
   char big[16384];
   size_t used = 0;
   used += (size_t)snprintf(big + used, sizeof(big) - used,
                            "{\"type\":\"column\",\"children\":[");
-  for (int row = 0; row < 24; ++row) {
+  for (int row = 0; row < 26; ++row) {
     used += (size_t)snprintf(big + used, sizeof(big) - used,
                              "%s{\"type\":\"row\",\"children\":[",
                              row == 0 ? "" : ",");
@@ -646,7 +671,7 @@ static void test_ui_validation(void) {
     used += (size_t)snprintf(big + used, sizeof(big) - used, "]}");
   }
   snprintf(big + used, sizeof(big) - used, "]}");
-  check(!parse_ui(big), "ui: more than 96 nodes must fail");
+  check(!parse_ui(big), "ui: more than 128 nodes must fail");
 
   char many_children[4096];
   used = 0;
@@ -1336,6 +1361,110 @@ static void test_settings_directory_sync_failure(void) {
   free(root);
 }
 
+static void test_menu_routing_and_sandbox(void) {
+  char *root = make_root();
+  check(root != NULL, "menu: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  check(write_manifest(root, "com.test.route", "normal", 32),
+        "menu: plugin manifest");
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 1000;
+  limits.idle_stop_ms = 0;
+  bd_plugin_host *host = make_host(root, limits);
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1, "menu: scan");
+    bd_plugin *plugin = bd_plugin_host_find(host, "com.test.route");
+    check(plugin != NULL, "menu: find");
+    if (plugin != NULL) {
+      check(bd_plugin_host_menu_count(host) == 1, "menu: count");
+      bd_plugin *menu_owner = NULL;
+      const bd_plugin_menu_item *item = NULL;
+      check(bd_plugin_host_menu_at(host, 0, &menu_owner, &item) &&
+                menu_owner == plugin && item != NULL &&
+                strcmp(item->id, "open") == 0,
+            "menu: item lookup");
+      check(bd_plugin_host_menu_at(host, 1, NULL, NULL) == false,
+            "menu: out-of-range index");
+      check(bd_plugin_has_permission(plugin, "network"), "menu: permission");
+      check(!bd_plugin_has_permission(plugin, "files.read:music"),
+            "menu: missing permission");
+
+      bd_plugin_set_tile_visible(plugin, true);
+      check(wait_for_state(host, plugin, BD_PLUGIN_RUNNING, 3000),
+            "menu: running");
+      check(bd_plugin_menu_activate(plugin, "open"), "menu: activate");
+      check(!bd_plugin_menu_activate(plugin, "missing"),
+            "menu: unknown id must fail");
+      check(bd_plugin_hotkey_event(plugin, "toggle", true),
+            "menu: hotkey press");
+      check(bd_plugin_hotkey_event(plugin, "toggle", false),
+            "menu: hotkey release");
+      bd_plugin_stats stats = bd_plugin_get_stats(plugin);
+      char status_path[64];
+      snprintf(status_path, sizeof(status_path), "/proc/%d/status", stats.pid);
+      char status[4096] = {0};
+      check(read_file_text(status_path, status, sizeof(status)) &&
+                strstr(status, "Seccomp:\t2") != NULL,
+            "menu: seccomp filter is not active");
+      check(strstr(status, "NoNewPrivs:\t1") != NULL,
+            "menu: no_new_privs is not active");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
+static void test_global_rss_budget(void) {
+  char *root = make_root();
+  check(root != NULL, "rss: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  check(write_manifest(root, "com.test.rss.a", "normal", 32) &&
+            write_manifest(root, "com.test.rss.b", "normal", 32),
+        "rss: manifests");
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 1000;
+  limits.idle_stop_ms = 0;
+  limits.rss_check_ms = 50;
+  bd_plugin_host *host = make_host_paths_budget(root, root, limits, 1);
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 2, "rss: scan");
+    bd_plugin *a = bd_plugin_host_find(host, "com.test.rss.a");
+    bd_plugin *b = bd_plugin_host_find(host, "com.test.rss.b");
+    check(a != NULL && b != NULL, "rss: find");
+    if (a != NULL && b != NULL) {
+      bd_plugin_set_tile_visible(a, true);
+      check(wait_for_state(host, a, BD_PLUGIN_RUNNING, 3000), "rss: a running");
+      bd_plugin_set_tile_visible(b, true);
+      check(wait_for_state(host, b, BD_PLUGIN_RUNNING, 3000), "rss: b running");
+      bd_plugin_set_tile_visible(a, false);
+      bd_plugin_set_tile_visible(b, false);
+      check(bd_plugin_host_total_rss_kb(host) > 0, "rss: total");
+      uint64_t deadline = now_ms() + 3000;
+      bool stopped = false;
+      while (now_ms() < deadline) {
+        bd_plugin_host_poll(host, 20);
+        if (bd_plugin_state_of(a) != BD_PLUGIN_RUNNING ||
+            bd_plugin_state_of(b) != BD_PLUGIN_RUNNING) {
+          stopped = true;
+          break;
+        }
+      }
+      check(stopped, "rss: budget did not stop a plugin");
+      check(bd_plugin_host_diagnostic_count(host) > 0, "rss: no diagnostic");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
 static void test_python_plugin(void) {
   bd_plugin_limits limits = bd_plugin_default_limits();
   limits.handshake_timeout_ms = 5000;
@@ -1430,6 +1559,8 @@ int main(void) {
   test_settings_directory_sync_failure();
   test_memory_limit();
   test_desktop_frames_with_busy_plugin();
+  test_menu_routing_and_sandbox();
+  test_global_rss_budget();
   test_python_plugin();
 
   if (g_failures != 0) {

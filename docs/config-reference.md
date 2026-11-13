@@ -214,7 +214,7 @@ Brick Pro 的厂商 LED 分区。`m` 是顶栏/Logo，`lr` 是摇杆环，`f1`/`
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
 | `enabled` | bool | `true` | — | 插件总开关 |
-| `max_total_rss_mb` | int | `128` | 16..1024 | 插件常驻内存总上限 |
+| `max_total_rss_mb` | int | `128` | 16..1024 | 所有运行中插件 RSS 总上限；超出后停止最久未活动的非可见插件 |
 | `idle_stop` | duration | `60s` | 0..24h | 插件空闲停止时间；不带单位按秒 |
 | `autostart_delay` | duration | `2s` | 0..10min | 开机后延迟启动插件；不带单位按秒 |
 
@@ -443,8 +443,8 @@ key 覆盖低优先级的同名 key，未写的 key 继续使用低层值。这�
 | `confirm` | bool | `false` | — | 触发前是否二次确认 |
 | `repeat` | bool | `false` | — | 按住时重复；会隐含 hold 语义 |
 | `repeat_ms` | int | `100` | 20..1000 | 重复间隔 |
-| `plugin` | string | 空 | ≤64 字符 | `plugin.invoke` 的插件 id |
-| `action_id` | string | 空 | ≤64 字符 | `plugin.invoke` 的动作 id |
+| `plugin` | string | 空 | ≤64 字符 | 插件 id；设置后该绑定的动作路由到插件，而不是普通动作 |
+| `action_id` | string | 空 | ≤64 字符 | 插件菜单 id（`menu.activate`）或热键动作 id（`hotkey`） |
 
 > `hold_ms` 的 schema 默认值是 500，但输入层只在文件里显式写了 `hold_ms`
 > 时才把绑定当作 hold。`brickdesk-config dump` 会显示这个默认值，判断语义

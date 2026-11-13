@@ -285,6 +285,8 @@ int main(int argc, char **argv) {
     plugin_config.locale = bd_config_get_string(settings, "ui.language", "zh-CN");
     plugin_config.state_dir = state_root;
     plugin_config.verbose = verbose;
+    plugin_config.max_total_rss_mb =
+        (int)bd_config_get_int(settings, "plugins.max_total_rss_mb", 128);
     plugin_host = bd_plugin_host_create(&plugin_config);
     if (plugin_host == NULL) {
       fprintf(stderr, "brickdesk: plugin host unavailable\n");

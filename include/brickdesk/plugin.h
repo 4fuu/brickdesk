@@ -38,8 +38,8 @@ typedef struct bd_plugin_frame bd_plugin_frame;
 #define BD_PLUGIN_MAX_DIAGNOSTICS 32
 #define BD_PLUGIN_LINE_MAX 65536
 #define BD_PLUGIN_UI_JSON_MAX 49152
-#define BD_PLUGIN_UI_MAX_NODES 96
-#define BD_PLUGIN_UI_MAX_DEPTH 8
+#define BD_PLUGIN_UI_MAX_NODES 128
+#define BD_PLUGIN_UI_MAX_DEPTH 12
 #define BD_PLUGIN_UI_MAX_OPTIONS 64
 #define BD_PLUGIN_UI_MAX_CHILDREN 24
 #define BD_PLUGIN_TILE_MAX_DIM 400
@@ -113,6 +113,7 @@ typedef struct bd_plugin_limits {
   int restart_max_ms;
   int restart_window_ms;
   int restart_limit;
+  int rss_check_ms;      /* global RSS sample interval, default 5000 */
 } bd_plugin_limits;
 
 bd_plugin_limits bd_plugin_default_limits(void);
@@ -128,6 +129,8 @@ typedef struct bd_plugin_host_config {
   uint32_t accent; /* 0xRRGGBB */
   const char *locale;
   bool verbose;
+  /* Global resident-memory budget for all running plugins; <=0 uses 128 MB. */
+  int max_total_rss_mb;
   /*
    * Host-owned state root for persisted plugin settings. NULL or empty uses
    * BRICKDESK_STATE_DIR from the environment, then the build-time state root.
@@ -228,6 +231,22 @@ int bd_plugin_host_fds(const bd_plugin_host *host, int *out, int max);
 /* Consumes the "visual state changed" flag (UI, frame, run state). */
 bool bd_plugin_host_take_dirty(bd_plugin_host *host);
 void bd_plugin_host_stop_all(bd_plugin_host *host);
+/* Stops one plugin gracefully; the next visible/settings activation restarts it. */
+bool bd_plugin_stop(bd_plugin *plugin);
+/* Sum of /proc/<pid>/statm RSS for every running plugin, in KiB. */
+int bd_plugin_host_total_rss_kb(const bd_plugin_host *host);
+/* True when the manifest lists `permission` exactly. */
+bool bd_plugin_has_permission(const bd_plugin *plugin, const char *permission);
+/* Declared menu entries across the host, in plugin-id order. */
+size_t bd_plugin_host_menu_count(const bd_plugin_host *host);
+bool bd_plugin_host_menu_at(const bd_plugin_host *host, size_t index,
+                            bd_plugin **plugin,
+                            const bd_plugin_menu_item **item);
+/* Sends host.event menu.activate; false when the plugin/menu is not live. */
+bool bd_plugin_menu_activate(bd_plugin *plugin, const char *menu_id);
+/* Sends host.event hotkey with action/pressed for a running plugin. */
+bool bd_plugin_hotkey_event(bd_plugin *plugin, const char *action_id,
+                            bool pressed);
 const char *bd_plugin_host_runtime_dir(const bd_plugin_host *host);
 /*
  * Updates the theme sent in later host.hello messages and notifies running
@@ -292,6 +311,7 @@ typedef enum bd_plugin_ui_node_type {
   BD_PLUGIN_UI_ROW,
   BD_PLUGIN_UI_TEXT,
   BD_PLUGIN_UI_ICON,
+  BD_PLUGIN_UI_IMAGE,
   BD_PLUGIN_UI_PROGRESS,
   BD_PLUGIN_UI_TOGGLE,
   BD_PLUGIN_UI_SLIDER,
@@ -309,6 +329,9 @@ typedef struct bd_plugin_ui_node {
   char style[16];  /* title, body, caption, mono */
   char action[40];
   char icon[40];   /* icon node name */
+  char image[BD_PLUGIN_MAX_PATH]; /* image node, resolved by the host */
+  int image_height; /* image node height in px */
+  int radius;       /* image/logical corner radius */
   char value_text[32]; /* select value */
   float value;
   float min_value;

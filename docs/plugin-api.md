@@ -97,7 +97,7 @@ choose the location.
 | `autostart` | no | Boolean; starts without a visible tile. Default false. |
 | `entry` | yes | Array of 1–8 strings. `entry[0]` is a relative executable path. |
 | `capabilities` | no | `tile`, `menu`, `settings`, `hotkey`, `background`. Unknown values reject the manifest. |
-| `permissions` | no | Up to 8 short strings, shown to the user. M1 does not enforce them. |
+| `permissions` | no | Up to 8 short strings, shown to the user and exported as `BRICKDESK_PLUGIN_PERMISSIONS`. Privileged system syscalls are blocked by seccomp for every plugin. |
 | `tile` | required with `tile` | `w`/`h` are 1 or 2; `refresh_hz` is 1–15. |
 | `menu` | no | Up to 8 objects with `id` and `label`; declares host menu entries. |
 | `limits.memory_mb` | no | 1–256; applied as `RLIMIT_AS`. Default 64. |
@@ -322,6 +322,7 @@ Node types:
 | `row` | `children`, `padding`, `gap` | Horizontal layout; icons get 28 px, the rest share the remaining width. |
 | `text` | `text`, `style` | `style`: `title`, `body`, `caption`, `mono`. Newlines up to 4 lines. |
 | `icon` | `name` | The host draws a rounded badge with the first character. |
+| `image` | `src`, optional `height` (24–320, default 72), optional `radius` (0–32, default 8) | Host-decoded PNG/JPEG from the plugin package; `src` is relative and may not contain `..`. |
 | `progress` | `value`, `max`, optional `text` | 0 <= `value` <= `max`. |
 | `toggle` | `id`, `label`, `value` | Interactive; `id` is required. |
 | `slider` | `id`, `label`, `value`, `min`, `max`, `step` | Interactive; `min` < `max`, `step` > 0. |
@@ -334,7 +335,7 @@ Toggles share the native settings switch geometry: a 44×24 px track with a
 4 px right inset so the switch stays clear of the row focus outline. Colours
 come from the host theme; plugins cannot override the switch shape.
 
-Common optional fields: `id` (up to 39 bytes), `padding` and `gap` (0–64).
+Common optional fields: `id` (up to 39 bytes), `padding` and `gap` (0–64). Trees may nest up to 12 levels and hold 128 nodes.
 Strings are limited to 127 bytes; icon names, actions, and ids to 39 bytes;
 select options to 31 bytes. Unknown node types, missing required fields,
 non-finite numbers, out-of-range values, and over-depth/over-count trees are
@@ -369,8 +370,11 @@ Settings example:
 
 User activation is sent back as `host.event`. Setting changes use
 `settings.changed`; buttons and explicit row activations use `ui.activate`
-through `bd_plugin_activate_node()`. Menu routing is reserved for the menu work
-(M1-09); the renderer and event API are already available.
+through `bd_plugin_activate_node()`. A declared menu entry is activated with
+`bd_plugin_menu_activate()` and arrives as
+`{"type":"menu.activate","menu":"open"}`; hotkeys declared by a plugin arrive
+as `{"type":"hotkey","action":"toggle","pressed":true}`. Menu and hotkey
+capabilities are required.
 
 ## 9. Shared-memory frames
 
@@ -422,6 +426,9 @@ see section 13.
 - `RLIMIT_NOFILE` from `limits.nofile` (default 64).
 - `nice` from `limits.nice` (default 10).
 - `PR_SET_PDEATHSIG(SIGKILL)` so a plugin cannot outlive the desktop.
+- `PR_SET_NO_NEW_PRIVS` and a seccomp filter that rejects privileged system
+  calls (`mount`, `ptrace`, `reboot`, module loading, namespaces, `bpf`,
+  `perf_event_open`, `chroot` and similar) with `EPERM`.
 - The plugin runs in its own process group; the host sends signals to the pid,
   not the group, and kills only its own child.
 - The host never executes a shell: `entry` is an argv array and `execv` is
@@ -430,11 +437,14 @@ see section 13.
 - Package paths are validated; symlinked package directories are skipped and
   the entry must be executable.
 - The socket and shared-memory file are mode `0660`.
-- `permissions` are declarative only in M1. There is no seccomp/user-namespace
-  sandbox yet.
-- The host does not yet enforce a global RSS budget across plugins
-  (`plugins.max_total_rss_mb` is read by the config schema but not applied);
-  each plugin's `RLIMIT_AS` is enforced.
+- `permissions` are declarative: they are exported to the plugin and shown to
+  the user, but path-based access is not restricted by a user namespace. The
+  seccomp deny list removes privileged system operations for every plugin.
+- The host enforces `plugins.max_total_rss_mb` over `/proc/<pid>/statm` every
+  `limits.rss_check_ms` (default 5 s). When over budget it stops the least
+  recently active plugin that is not visible and has no settings page open;
+  if every plugin is visible or in settings it logs a diagnostic and waits.
+  Each plugin's `RLIMIT_AS` remains enforced.
 
 ## 11. Host C API
 
@@ -480,7 +490,11 @@ The client SDK used by C plugins is in the same header:
 `bd_plugin_client_connect`, `bd_plugin_client_poll`,
 `bd_plugin_client_set_ui`, `bd_plugin_client_tile_frame`,
 `bd_plugin_client_notify`, and `bd_plugin_client_log`. The desktop-side
-`bd_plugin_activate_node()` sends `ui.activate` for a node id.
+`bd_plugin_activate_node()` sends `ui.activate` for a node id;
+`bd_plugin_host_menu_count()` / `bd_plugin_host_menu_at()` enumerate declared
+menu entries, `bd_plugin_menu_activate()` sends `menu.activate`,
+`bd_plugin_hotkey_event()` sends `hotkey`, `bd_plugin_stop()` evicts one
+plugin, and `bd_plugin_host_total_rss_kb()` reports the global RSS sample.
 
 ## 12. Minimal C plugin
 
@@ -550,9 +564,9 @@ device.
 | Framing | 4-byte length prefix | Newline-delimited JSON, matching inputd/perfd |
 | Tile transfer | `memfd` + `SCM_RIGHTS` | Host-created file path in `host.hello`; plugin maps it |
 | Package identity | Directory name equals `id` | Directory is a package name; `id` is validated and unique |
-| Menu/hotkey UI | Menu items and hotkeys declared | Capabilities and events exist; menu routing is M1-09 |
-| Images in UI | `image` node with host decoding | Not implemented; use icon/text/progress in M1 |
-| Global RSS | 128 MB total, LRU stop | Per-process `RLIMIT_AS` only |
+| Menu/hotkey UI | Menu items and hotkeys declared | `menu.activate` and `hotkey` events; hotkeys route through `hotkey.<id>.plugin` + `action_id` |
+| Images in UI | `image` node with host decoding | `image` node resolves package-relative paths and uses the host image cache |
+| Global RSS | 128 MB total, LRU stop | Enforced across running plugins; per-process `RLIMIT_AS` too |
 | Persistence | Settings persisted | Per-plugin `plugin-settings/<id>/settings.json` under the host state root |
 | Protocol patching | `plugin.ui.patch` | Whole-tree `plugin.ui.set` only |
 

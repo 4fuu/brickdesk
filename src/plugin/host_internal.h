@@ -84,6 +84,9 @@ struct bd_plugin_host {
   char state_dir[BD_PLUGIN_MAX_PATH];
   char locale[32];
   bd_plugin_limits limits;
+  int max_total_rss_mb;
+  uint64_t rss_check_ms;
+  bool rss_budget_warned;
   int display_width;
   int display_height;
   bool dark;

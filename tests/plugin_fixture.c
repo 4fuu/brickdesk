@@ -202,15 +202,22 @@ static int run_client_mode(const char *mode) {
     _exit(3);
   }
   if (strcmp(mode, "badui") == 0) {
-    const char *too_deep =
-        "{\"type\":\"column\",\"children\":[{\"type\":\"column\",\"children\":["
-        "{\"type\":\"column\",\"children\":[{\"type\":\"column\",\"children\":["
-        "{\"type\":\"column\",\"children\":[{\"type\":\"column\",\"children\":["
-        "{\"type\":\"column\",\"children\":[{\"type\":\"column\",\"children\":["
-        "{\"type\":\"column\",\"children\":[{\"type\":\"text\",\"text\":\"x\"}]"
-        "}]}]}]}]}]}]}]}]}";
+    char too_deep[4096];
+    size_t deep_used = 0;
+    for (int i = 0; i < 14; ++i) {
+      deep_used += (size_t)snprintf(too_deep + deep_used,
+                                    sizeof(too_deep) - deep_used,
+                                    "{\"type\":\"column\",\"children\":[");
+    }
+    deep_used += (size_t)snprintf(too_deep + deep_used,
+                                  sizeof(too_deep) - deep_used,
+                                  "{\"type\":\"text\",\"text\":\"x\"}");
+    for (int i = 0; i < 14; ++i) {
+      deep_used += (size_t)snprintf(too_deep + deep_used,
+                                    sizeof(too_deep) - deep_used, "]}");
+    }
     bd_plugin_client_notify(client, "plugin.ui.set", "{\"tile\":null}");
-    char payload[2048];
+    char payload[8192];
     snprintf(payload, sizeof(payload), "{\"tile\":%s}", too_deep);
     bd_plugin_client_notify(client, "plugin.ui.set", payload);
   } else if (strcmp(mode, "alloc") == 0) {

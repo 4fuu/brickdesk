@@ -32,6 +32,12 @@ bd_av_result bd_av_audio_get_percent_by_name(const bd_av_audio *audio,
 `/proc/asound/cards` 里的卡名和 `PCM/Playback + Volume` 控件，当前没有自动切换
 声卡，避免在未验证时把系统输出切到错误设备。
 
+## 深睡 hook
+
+`bd_audio_suspend()` 执行 `alsactl store -f /run/brickdesk/asound.state`，
+`bd_audio_resume()` 在状态文件存在时执行 `alsactl restore`。两者可安全重复调用；
+`alsactl` 不存在时返回错误，由 WP-03 记录但继续休眠。
+
 ## 测试
 
 `tests/device_av_test.c` 覆盖已有音量/静音/路由；新增的可选控件 helper 由

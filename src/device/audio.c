@@ -1,11 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "device_av_internal.h"
+#include "device_process.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define BD_AUDIO_DEFAULT_CARD "audiocodec"
 #define BD_AUDIO_DEFAULT_VOLUME "digital volume"
@@ -974,4 +976,46 @@ bd_av_result bd_av_audio_get_percent_by_name(const bd_av_audio *audio,
   *percent = span > 0 ? (int)(((values[0] - info->min) * 100 + span / 2) / span)
                       : 0;
   return BD_AV_OK;
+}
+
+
+#define BD_AUDIO_STATE_PATH "/run/brickdesk/asound.state"
+
+bool bd_audio_suspend(char *error, size_t error_size) {
+  if (error != NULL && error_size > 0) {
+    error[0] = '\0';
+  }
+  char *argv[] = {"alsactl", "store", "-f", BD_AUDIO_STATE_PATH, NULL};
+  int code = 0;
+  if (!bd_process_run(argv, NULL, 0, &code, error, error_size)) {
+    return false;
+  }
+  if (code != 0) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "alsactl store failed (%d)", code);
+    }
+    return false;
+  }
+  return true;
+}
+
+bool bd_audio_resume(char *error, size_t error_size) {
+  if (error != NULL && error_size > 0) {
+    error[0] = '\0';
+  }
+  if (access(BD_AUDIO_STATE_PATH, F_OK) != 0) {
+    return true;
+  }
+  char *argv[] = {"alsactl", "restore", "-f", BD_AUDIO_STATE_PATH, NULL};
+  int code = 0;
+  if (!bd_process_run(argv, NULL, 0, &code, error, error_size)) {
+    return false;
+  }
+  if (code != 0) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "alsactl restore failed (%d)", code);
+    }
+    return false;
+  }
+  return true;
 }

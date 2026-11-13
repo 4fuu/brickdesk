@@ -445,7 +445,7 @@ typedef struct bd_session_config {
   const char *frame_dir;  /* NULL: socket_dir */
   const char *state_root; /* NULL: BRICKDESK_STATE_DIR or /mnt/.../state */
   const char *session_id; /* NULL: generated per session */
-  int max_background;     /* <=0: 2 */
+  int max_background;     /* <=0: 3 */
   bd_session_timeouts timeouts; /* zero fields use defaults */
   bd_session_perf_ops perf;     /* optional */
   bd_session_event_fn on_event;

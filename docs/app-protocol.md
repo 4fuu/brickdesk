@@ -337,7 +337,7 @@ Only one foreground app is allowed. Launching while another app is
 foreground/launching/terminating returns `BD_SESSION_BUSY`; background the
 current app first. Background apps do not count as foreground.
 
-Background limit (default 2; read `session.max_background` from `brickdesk.ini`
+Background limit (default 3; read `session.max_background` from `brickdesk.ini`
 and pass it as `bd_session_config.max_background`) applies to apps in `BACKGROUND`, whether stopped by SIGSTOP or IPC-paused. When
 full, `bd_session_background()` returns
 `BD_SESSION_NEEDS_CONFIRM`, emits `BD_SESSION_EVENT_NEEDS_ATTENTION` with the

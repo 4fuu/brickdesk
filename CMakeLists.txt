@@ -208,6 +208,22 @@ target_compile_definitions(brickdesk_session PRIVATE
 )
 target_link_libraries(brickdesk_session PRIVATE brickdesk_warnings)
 
+# --- v3 home page -------------------------------------------------------
+# The home page is a reusable module: the event loop owns input/session and
+# feeds it actions, items, running state and a monotonic timestamp. It links
+# the session library only for the M1-06 last-frame reader.
+add_library(brickdesk_home STATIC
+  src/home/home.c
+  src/home/home_draw.c
+)
+target_include_directories(brickdesk_home
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_home
+  PUBLIC brickdesk_core brickdesk_session
+  PRIVATE brickdesk_warnings
+)
+
 # --- plugins ------------------------------------------------------------
 # Manifest parsing, lifecycle, JSON IPC, client SDK and the shared-memory
 # tile surface. Kept free of SDL/GL so plugin lifecycle tests can run

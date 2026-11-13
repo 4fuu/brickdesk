@@ -1133,6 +1133,33 @@ void bd_gfx_draw_texture_round(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
                         radius > 0 ? radius : -1, 0.0f, 0.0f, 1.0f, 1.0f, colors);
 }
 
+void bd_gfx_draw_texture_cover(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
+                               bd_color tint, int radius) {
+  if (gfx == NULL || texture == NULL || texture->id == 0 || !gfx->in_frame ||
+      dst.w <= 0 || dst.h <= 0 || texture->width <= 0 || texture->height <= 0) {
+    return;
+  }
+  radius = clamp_radius(radius, dst);
+  float dst_aspect = (float)dst.w / (float)dst.h;
+  float tex_aspect = (float)texture->width / (float)texture->height;
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 1.0f;
+  float v1 = 1.0f;
+  if (dst_aspect > tex_aspect) {
+    float visible = tex_aspect / dst_aspect;
+    v0 = (1.0f - visible) * 0.5f;
+    v1 = 1.0f - v0;
+  } else if (dst_aspect < tex_aspect) {
+    float visible = dst_aspect / tex_aspect;
+    u0 = (1.0f - visible) * 0.5f;
+    u1 = 1.0f - u0;
+  }
+  bd_color colors[4] = {tint, tint, tint, tint};
+  bd_gfx_batch_add_quad(gfx, texture->id, BD_GFX_MODE_RGBA, 0, 0.0f, dst,
+                        radius > 0 ? radius : -1, u0, v0, u1, v1, colors);
+}
+
 const char *bd_gfx_last_error(const bd_gfx *gfx) {
   if (gfx == NULL) {
     return "";

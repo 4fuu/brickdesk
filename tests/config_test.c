@@ -259,6 +259,10 @@ static void test_repo_defaults(void) {
         "repo defaults: theme.accent");
   CHECK(strcmp(bd_config_get_string(config, "theme.ambient", ""), "baked") == 0,
         "repo defaults: theme.ambient");
+  CHECK(bd_config_get_int(config, "session.max_background", 0) == 3,
+        "repo defaults: session.max_background");
+  CHECK(bd_config_get_bool(config, "ui.blur", false),
+        "repo defaults: ui.blur");
   CHECK(bd_config_get_int(config, "input.long_press_ms", -1) == 500,
         "repo defaults: input.long_press_ms");
   CHECK(bd_config_get_int(config, "hotkey.menu.hold_ms", -1) == 600,

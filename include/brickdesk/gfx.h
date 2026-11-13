@@ -200,6 +200,13 @@ void bd_gfx_draw_texture(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
 /* Draws a texture clipped to a rounded rectangle. radius <= 0 is square. */
 void bd_gfx_draw_texture_round(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
                                bd_color tint, int radius);
+/*
+ * Like draw_texture_round, but centre-crops the source to fill dst instead of
+ * stretching it (CSS object-fit: cover). Used by cover art and app frames whose
+ * aspect ratio differs from the tile.
+ */
+void bd_gfx_draw_texture_cover(bd_gfx *gfx, bd_texture *texture, bd_rect dst,
+                               bd_color tint, int radius);
 
 /*
  * Asynchronous PNG/JPEG loading. The decode and bilinear resize run on the

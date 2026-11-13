@@ -6,7 +6,10 @@ PowerVR GE8300, 1024x768), written in C11 with SDL2 and GLES2.
 This repository is at the M1 infrastructure stage: host build, SDL2/GLES2
 platform layer, minimal renderer, screenshot/input-replay tests, and host CI.
 The cover wall, text, themes and the device platform layer arrive in later
-milestones.
+milestones. The v3 home page is implemented as a reusable module in
+[src/home](src/home) with the API in
+[include/brickdesk/home.h](include/brickdesk/home.h); see
+[docs/home.md](docs/home.md). It is not wired into the event loop yet.
 
 ## Requirements
 
@@ -88,6 +91,10 @@ The suite includes:
 - `smoke_render`: renders a 1024x768 colour + texture frame to
   `build-host/tests/artifacts/smoke.png`
 - `version`, `idle_loop`: CLI and no-redraw-at-idle checks
+- `home_scale`: 5,000-item first-fit layout/index traversal, focus damage,
+  blur fallback, incremental launch and host timing checks
+- `home_capture`: deterministic screenshots of dark/light home, live focus,
+  running tile, return, quick panel, dialog, hint bar and launch frames
 - `scenario.boot`, `scenario.focus_move`: input replay + exact pixel compare
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
@@ -158,6 +165,7 @@ src/platform/          SDL2 window + GLES2 context (host_sdl.c also serves
                        target builds until the device layer lands)
 src/gfx/               GLES2 renderer and framebuffer capture
 src/app/               M1 placeholder desktop scene
+src/home/              v3 home page module (wall, focus, chrome, transitions)
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
 src/session/           app manifests, process lifecycle, app IPC, last frame

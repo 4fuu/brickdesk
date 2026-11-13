@@ -1,5 +1,7 @@
 #include "home_internal.h"
 
+#include "brickdesk/ui.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -595,40 +597,11 @@ static void draw_wall(bd_home *home, bd_gfx *gfx) {
   home->stats.total_items = home->count;
 }
 
-static void draw_wifi_icon(bd_gfx *gfx, bd_color color, int x, int y,
-                           bool unknown) {
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 9, 5, 4), 2, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 3, y + 5, 11, 3), 1, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y + 1, 17, 3), 1, color);
-  if (unknown) {
-    for (int i = 0; i < 14; ++i) {
-      bd_gfx_fill_rect(gfx, bd_rect_make(x + i + 1, y + 12 - i * 3 / 4, 1, 1),
-                       color);
-    }
+static bd_ui_wifi_state home_wifi_state(const bd_home *home) {
+  if (!home->status.wifi_known) {
+    return BD_UI_WIFI_UNKNOWN;
   }
-}
-
-static void draw_battery(const bd_home *home, bd_gfx *gfx, int x, int y) {
-  bd_rect body = bd_rect_make(x, y, 26, 13);
-  bd_gfx_stroke_round_rect(gfx, body, 3, 1, home->palette.ink3);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 27, y + 4, 2, 5), 1,
-                         home->palette.ink3);
-  int percent = home->status.battery_percent;
-  if (percent < 0) {
-    for (int i = 0; i < 20; ++i) {
-      bd_gfx_fill_rect(gfx, bd_rect_make(x + 3 + i, y + 10 - i * 7 / 19, 1, 1),
-                       home->palette.ink3);
-    }
-    return;
-  }
-  if (percent > 100) {
-    percent = 100;
-  }
-  int fill = (22 * percent) / 100;
-  if (fill > 0) {
-    bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 2, y + 2, fill, 9), 1,
-                           home->palette.ink2);
-  }
+  return home->status.wifi ? BD_UI_WIFI_CONNECTED : BD_UI_WIFI_DISCONNECTED;
 }
 
 static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
@@ -668,18 +641,20 @@ static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
   int clock_x = clock_right - clock_width;
   bd_gfx_draw_text(gfx, home->fonts.body16, clock_x, 41, palette->ink2,
                    home->clock);
-  int battery_x = clock_x - 12 - 30;
-  draw_battery(home, gfx, battery_x, 31);
-  int wifi_x = battery_x - 12 - 17;
-  draw_wifi_icon(gfx, home->status.wifi ? palette->ink2 : palette->ink3, wifi_x,
-                 31, !home->status.wifi_known);
+  int battery_left = clock_x - 12 - BD_UI_BATTERY_ICON_W;
+  bd_ui_draw_battery(gfx, battery_left + (BD_UI_BATTERY_ICON_W - 1) / 2, 35,
+                     home->status.battery_percent, palette->ink3,
+                     palette->ink2);
+  int wifi_left = battery_left - 12 - BD_UI_WIFI_ICON_W;
+  bd_ui_draw_wifi(gfx, wifi_left + (BD_UI_WIFI_ICON_W - 1) / 2, 35,
+                  home_wifi_state(home), palette->ink2);
 
   if (home->running_count > 0) {
     char chip[64];
     snprintf(chip, sizeof(chip), "%d 运行中", home->running_count);
     int text_width = bd_font_measure_text(home->fonts.badge13, chip);
     int chip_width = text_width + 20;
-    int chip_x = wifi_x - 20 - chip_width;
+    int chip_x = wifi_left - 20 - chip_width;
     if (chip_x < x + 16) {
       chip_x = x + 16;
     }
@@ -857,7 +832,7 @@ static const bd_texture *live_cover_texture(const bd_home *home) {
 }
 
 static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
-                            bd_color color, bool wifi_unknown) {
+                            bd_color color, bd_ui_wifi_state wifi_state) {
   switch (icon) {
     case 0: /* brightness */
       bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 6, y + 6, 8, 8), 4, color);
@@ -872,7 +847,8 @@ static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 13, y + 7, 2, 6), color);
       break;
     case 2: /* wifi */
-      draw_wifi_icon(gfx, color, x + 1, y + 5, wifi_unknown);
+      bd_ui_draw_wifi(gfx, x + BD_UI_WIFI_ICON_W / 2,
+                      y + BD_UI_WIFI_ICON_H / 2 + 2, wifi_state, color);
       break;
     case 3: /* bluetooth */
       bd_gfx_fill_rect(gfx, bd_rect_make(x + 9, y + 2, 2, 16), color);
@@ -1099,7 +1075,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
     draw_quick_row_background(home, gfx, row, focused);
     bd_color icon_color = focused ? home->accent.accent : palette->ink3;
     draw_quick_icon(gfx, i, row.x + 10, row.y + 14, icon_color,
-                    !home->status.wifi_known);
+                    home_wifi_state(home));
     static const char *const LABELS[4] = {"亮度", "音量", "Wi-Fi", "蓝牙"};
     bd_gfx_draw_text(gfx, home->fonts.body16, row.x + 40, row.y + 29,
                      focused ? palette->ink : palette->ink2, LABELS[i]);

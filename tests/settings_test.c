@@ -571,6 +571,7 @@ int main(void) {
   bd_settings_status status;
   memset(&status, 0, sizeof(status));
   status.clock = "22:26";
+  status.wifi_known = true;
   status.wifi = true;
   status.battery_percent = 82;
   bd_settings_set_status(settings, &status);

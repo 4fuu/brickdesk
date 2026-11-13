@@ -66,8 +66,9 @@ typedef struct bd_settings_status {
    * arrow, title and category are settings chrome, and the right side keeps
    * the Wi-Fi, battery and clock readouts. */
   const char *clock;       /* "22:26"; NULL or "" hides the clock */
-  bool wifi;
-  int battery_percent;     /* 0..100; negative hides the battery */
+  bool wifi_known;         /* false: wireless state is unknown */
+  bool wifi;               /* valid only when wifi_known */
+  int battery_percent;     /* 0..100; negative draws the unknown state */
 } bd_settings_status;
 
 typedef struct bd_settings_storage {

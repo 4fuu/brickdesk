@@ -277,6 +277,37 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  status.battery_percent = 100;
+  bd_home_set_status(home, &status);
+  now += 300;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_status_online")) {
+    return 1;
+  }
+
+  status.wifi = false;
+  status.battery_percent = 12;
+  bd_home_set_status(home, &status);
+  now += 300;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_status_offline")) {
+    return 1;
+  }
+
+  status.wifi_known = false;
+  status.battery_percent = -1;
+  bd_home_set_status(home, &status);
+  now += 300;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_status_unknown")) {
+    return 1;
+  }
+
+  status.wifi_known = true;
+  status.wifi = true;
+  status.battery_percent = 82;
+  bd_home_set_status(home, &status);
+
   bd_home_update(home, now);
   if (!bd_home_set_running(home, "demo-03", town_path, true,
                            FIXTURE_MEMORY_TOWN_MB)) {
@@ -317,6 +348,20 @@ int main(int argc, char **argv) {
   if (!write_png(gfx, out_dir, "home_quick_running")) {
     return 1;
   }
+  status.wifi_known = false;
+  status.wifi = false;
+  status.battery_percent = -1;
+  bd_home_set_status(home, &status);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_status_unknown")) {
+    return 1;
+  }
+  status.wifi_known = true;
+  status.wifi = true;
+  status.battery_percent = 82;
+  bd_home_set_status(home, &status);
 
   bd_home_close_quick(home);
   now += 220;

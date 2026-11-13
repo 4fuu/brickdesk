@@ -651,6 +651,40 @@ static void test_hotkey_edit(test_runtime *runtime, uint64_t *now) {
         "B closes settings after editing");
 }
 
+typedef struct keyboard_result {
+  bool called;
+  bool accepted;
+  char text[BD_KEYBOARD_TEXT_MAX + 1];
+} keyboard_result;
+
+static void keyboard_done(void *user, bool accepted, const char *text) {
+  keyboard_result *result = (keyboard_result *)user;
+  result->called = true;
+  result->accepted = accepted;
+  snprintf(result->text, sizeof(result->text), "%s",
+           text != NULL ? text : "");
+}
+
+static void test_keyboard(test_runtime *runtime, uint64_t *now) {
+  keyboard_result result;
+  memset(&result, 0, sizeof(result));
+  CHECK(bd_shell_prompt_text(runtime->shell, "测试输入", "ab", 8, false,
+                             keyboard_done, &result),
+        "open on-screen keyboard");
+  CHECK(bd_shell_keyboard_open(runtime->shell), "keyboard is open");
+  bd_shell_test_key(runtime->shell, BD_KEY_A, true, *now);
+  *now += 10;
+  bd_shell_test_key(runtime->shell, BD_KEY_A, false, *now);
+  *now += 10;
+  bd_shell_test_key(runtime->shell, BD_KEY_Y, true, *now);
+  *now += 10;
+  bd_shell_test_key(runtime->shell, BD_KEY_Y, false, *now);
+  *now += 10;
+  CHECK(result.called && result.accepted, "keyboard accepted");
+  CHECK(strcmp(result.text, "ab1") == 0, "keyboard text %s", result.text);
+  CHECK(!bd_shell_keyboard_open(runtime->shell), "keyboard closed");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: bd_shell_settings_test PERFD\n");
@@ -671,6 +705,7 @@ int main(int argc, char **argv) {
     test_theme_sync(&runtime, &now);
     test_perf_apply(&runtime, &now);
     test_hotkey_edit(&runtime, &now);
+    test_keyboard(&runtime, &now);
     key_press(runtime.shell, BD_KEY_B, now);
     now += 20;
     CHECK(!bd_shell_settings_visible(runtime.shell),

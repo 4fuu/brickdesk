@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "brickdesk/gfx.h"
+#include "brickdesk/keyboard.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/theme.h"
 #include "brickdesk/ui.h"
@@ -440,6 +441,25 @@ int main(int argc, char **argv) {
     fprintf(stderr, "gfx_capture: save %s failed: %s\n", path, bd_gfx_last_error(gfx));
     return 1;
   }
+
+  bd_keyboard *keyboard = bd_keyboard_create();
+  if (keyboard != NULL &&
+      bd_keyboard_open(keyboard, "Wi-Fi 密码", "hunter2", 64, true, NULL,
+                       NULL)) {
+    bd_gfx_damage_all(gfx);
+    bd_gfx_begin_frame(gfx);
+    page_background(gfx);
+    bd_gfx_draw_text(gfx, fonts.serif, 40, 66, INK, "屏幕键盘");
+    bd_keyboard_draw(keyboard, gfx, &fonts, ACCENT, 0);
+    bd_gfx_end_frame(gfx);
+    snprintf(path, sizeof(path), "%s/keyboard.png", out_dir);
+    if (!bd_gfx_save_png(gfx, path)) {
+      fprintf(stderr, "gfx_capture: save %s failed: %s\n", path,
+              bd_gfx_last_error(gfx));
+      return 1;
+    }
+  }
+  bd_keyboard_destroy(keyboard);
 
   render_blur(gfx, &fonts);
   snprintf(path, sizeof(path), "%s/blur.png", out_dir);

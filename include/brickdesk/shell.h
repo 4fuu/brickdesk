@@ -11,6 +11,7 @@
 #include "brickdesk/device_power.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/home.h"
+#include "brickdesk/keyboard.h"
 #include "brickdesk/notice.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/plugin.h"
@@ -110,6 +111,17 @@ bool bd_shell_confirm(bd_shell *shell, const char *title, const char *text,
                       uint32_t timeout_ms, bd_notice_confirm_fn on_done,
                       void *user);
 bool bd_shell_confirm_open(const bd_shell *shell);
+
+/*
+ * Opens the on-screen keyboard as a modal overlay.  The callback runs on the
+ * desktop thread with accepted=false when the user cancels.  While it is open
+ * the shell routes every key edge to the keyboard, so Wi-Fi/hotspot password
+ * entry does not leak into the page underneath.
+ */
+bool bd_shell_prompt_text(bd_shell *shell, const char *title,
+                          const char *initial, size_t max_length, bool mask,
+                          bd_keyboard_done_fn on_done, void *user);
+bool bd_shell_keyboard_open(const bd_shell *shell);
 
 /*
  * LED and haptic entry points shared with the power/battery work.

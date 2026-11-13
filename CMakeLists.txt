@@ -74,6 +74,7 @@ add_library(brickdesk_core STATIC
   src/app/theme.c
   src/app/ui.c
   src/app/wall.c
+  src/ui/keyboard.c
   src/gfx/batch.c
   src/gfx/capture.c
   src/gfx/image.c

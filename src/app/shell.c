@@ -30,6 +30,7 @@
 #include "brickdesk/battery_history.h"
 #include "brickdesk/haptics.h"
 #include "brickdesk/input_controls.h"
+#include "brickdesk/keyboard.h"
 #include "brickdesk/led.h"
 #include "brickdesk/notice.h"
 #include "brickdesk/perf_client.h"
@@ -168,6 +169,9 @@ struct bd_shell {
   bd_ui_fonts plugin_fonts;
   bool plugin_fonts_loaded;
   bd_accent_palette plugin_accent;
+  bd_keyboard *keyboard;
+  bd_ui_fonts keyboard_fonts;
+  bool keyboard_fonts_loaded;
 
   bd_session *session;
   int session_next_ms;
@@ -3858,6 +3862,12 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
     shell_volume_key(shell, key, pressed);
     return;
   }
+  if (bd_keyboard_is_open(shell->keyboard)) {
+    if (bd_keyboard_input(shell->keyboard, key, pressed)) {
+      shell->dirty = true;
+    }
+    return;
+  }
   if (!shell->visible) {
     return;
   }
@@ -4631,6 +4641,10 @@ bool bd_shell_render(bd_shell *shell) {
     bd_home_update(shell->home, shell_now(shell));
     bd_home_draw(shell->home, shell->gfx);
   }
+  if (bd_keyboard_is_open(shell->keyboard)) {
+    bd_keyboard_draw(shell->keyboard, shell->gfx, &shell->keyboard_fonts,
+                     shell->home_style.accent_base, shell_now(shell));
+  }
   if (shell->notice != NULL) {
     bd_notice_draw(shell->notice, shell->gfx, shell_now(shell));
   }
@@ -5027,6 +5041,12 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->visible = true;
   shell->dirty = true;
   shell->status_battery = -1;
+  shell->keyboard = bd_keyboard_create();
+  shell->keyboard_fonts_loaded =
+      bd_ui_fonts_load(&shell->keyboard_fonts, config->gfx);
+  if (!shell->keyboard_fonts_loaded) {
+    fprintf(stderr, "brickdesk: cannot load keyboard fonts\n");
+  }
   if (config->battery_root != NULL) {
     copy_text(shell->battery_root, sizeof(shell->battery_root),
               config->battery_root);
@@ -5355,6 +5375,12 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_ui_fonts_free(&shell->plugin_fonts);
     shell->plugin_fonts_loaded = false;
   }
+  bd_keyboard_destroy(shell->keyboard);
+  shell->keyboard = NULL;
+  if (shell->keyboard_fonts_loaded) {
+    bd_ui_fonts_free(&shell->keyboard_fonts);
+    shell->keyboard_fonts_loaded = false;
+  }
   free(shell->runtime);
   if (shell->apps != NULL) {
     bd_app_list_destroy(shell->apps);
@@ -5445,6 +5471,25 @@ bool bd_shell_confirm(bd_shell *shell, const char *title, const char *text,
 bool bd_shell_confirm_open(const bd_shell *shell) {
   return shell != NULL && shell->notice != NULL &&
          bd_notice_confirm_open(shell->notice);
+}
+
+bool bd_shell_prompt_text(bd_shell *shell, const char *title,
+                          const char *initial, size_t max_length, bool mask,
+                          bd_keyboard_done_fn on_done, void *user) {
+  if (shell == NULL || shell->keyboard == NULL || !shell->visible ||
+      bd_shell_confirm_open(shell)) {
+    return false;
+  }
+  if (!bd_keyboard_open(shell->keyboard, title, initial, max_length, mask,
+                        on_done, user)) {
+    return false;
+  }
+  shell->dirty = true;
+  return true;
+}
+
+bool bd_shell_keyboard_open(const bd_shell *shell) {
+  return shell != NULL && bd_keyboard_is_open(shell->keyboard);
 }
 
 void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,

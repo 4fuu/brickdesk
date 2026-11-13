@@ -176,9 +176,9 @@ mute are applied through `bd_settings_system` first, and `perf.global_profile`
 goes through `perf.global` and is stored only after daemon confirmation. Any
 such failure is reported as a partial-reset error; other defaults still apply.
 Dynamic sections (`hotkey.*`, `profile.*`, `app.*`, `core.*`, `device.*`) are
-deliberately left alone; the dialog says so. `bd_config` still has no
-delete-override API, so reset writes defaults rather than deleting `local.ini`
-lines.
+deliberately left alone; the dialog says so. The reset UI writes schema defaults
+rather than removing `local.ini` lines; `bd_config_unset()` is available for
+callers that need to restore the lower layer without writing a default value.
 
 ## Controls
 

@@ -769,6 +769,63 @@ static void test_set_save(void) {
   printf("ok: set and save\n");
 }
 
+static void test_reload_and_unset(void) {
+  char *dir = make_temp_dir();
+  char error[256];
+  CHECK(write_file(dir, "local.ini",
+                   "[meta]\n"
+                   "schema_version = 1\n"
+                   "\n"
+                   "[theme]\n"
+                   "accent = teal\n"),
+        "reload: seed local.ini");
+  bd_config_options options = {dir, false};
+  bd_config *config = bd_config_load(&options, error, sizeof(error));
+  CHECK(config != NULL, "reload: load: %s", error);
+  if (config == NULL) {
+    cleanup_dir(dir);
+    free(dir);
+    return;
+  }
+  int changes = 0;
+  bd_config_set_change_callback(config, change_callback, &changes);
+  CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "teal") == 0,
+        "reload: seeded accent");
+
+  CHECK(write_file(dir, "local.ini",
+                   "[meta]\n"
+                   "schema_version = 1\n"
+                   "\n"
+                   "[theme]\n"
+                   "accent = blue\n"),
+        "reload: rewrite local.ini");
+  CHECK(bd_config_reload(config, error, sizeof(error)), "reload: %s", error);
+  CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "blue") == 0,
+        "reload: accent did not change");
+  CHECK(bd_config_set(config, "theme.accent", "coral", error, sizeof(error)),
+        "reload: set after reload: %s", error);
+  CHECK(changes == 1, "reload: callback was not preserved (%d)", changes);
+
+  CHECK(bd_config_unset(config, "theme.accent", error, sizeof(error)),
+        "unset: %s", error);
+  CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "persimmon") ==
+            0,
+        "unset: did not restore the compiled default");
+  CHECK(bd_config_save(config, error, sizeof(error)), "unset: save: %s", error);
+  char *content = read_file(dir, "local.ini");
+  CHECK(content != NULL, "unset: local.ini missing");
+  CHECK(!text_contains(content, "accent ="), "unset: override was saved");
+  free(content);
+  CHECK(file_exists(dir, "local.ini.lock"), "save: lock file is missing");
+  CHECK(!bd_config_unset(config, "no.such.key", error, sizeof(error)),
+        "unset: unknown key must fail");
+
+  bd_config_free(config);
+  cleanup_dir(dir);
+  free(dir);
+  printf("ok: reload and unset\n");
+}
+
 static void test_atomic_failure(void) {
   char *dir = make_temp_dir();
   const char *original =
@@ -943,6 +1000,7 @@ int main(void) {
   test_accent();
   test_combo();
   test_set_save();
+  test_reload_and_unset();
   test_atomic_failure();
   test_migration();
   test_newer_version();

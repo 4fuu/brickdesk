@@ -7,11 +7,13 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -38,6 +40,7 @@
 #define BD_SHELL_PENDING_MAX 16
 #define BD_SHELL_PATH_MAX 1024
 #define BD_SHELL_STATUS_MS 5000
+#define BD_SHELL_CONFIG_DEBOUNCE_MS 200
 #define BD_SHELL_MEMORY_MS 1000
 #define BD_SHELL_MEMORY_RETRY_MS 5000
 #define BD_SHELL_PLUGIN_ITEM_ID "plugin-tile"
@@ -233,12 +236,19 @@ struct bd_shell {
   bool quit;
   uint64_t presents;
 
+  /* local.ini hot reload: inotify on the config directory plus SIGHUP. */
+  int config_watch_fd;
+  bool config_reload_pending;
+  uint64_t config_reload_due_ms;
+  bool config_watch_warned;
+
   /* Scenario harness clock: home transitions advance only on test_advance. */
   bool test_clock;
   uint64_t test_now_ms;
 };
 
 static void shell_led_refresh_internal(bd_shell *shell);
+static bool shell_power_asleep(const bd_shell *shell);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -614,6 +624,183 @@ static void shell_config_changed(void *user, const char *key) {
         &shell->power_linux,
         bd_config_get_bool(shell->settings, "power.safe_shutdown", true));
   }
+}
+
+/* ------------------------------------------------------- config hot reload */
+
+static volatile sig_atomic_t shell_config_sighup_requested;
+
+static void shell_config_sighup_handler(int signo) {
+  (void)signo;
+  shell_config_sighup_requested = 1;
+}
+
+static bool shell_config_watch_relevant(const char *name) {
+  if (name == NULL || name[0] == '\0') {
+    return true;
+  }
+  return strcmp(name, "local.ini") == 0 ||
+         strcmp(name, "brickdesk.ini") == 0 ||
+         strcmp(name, "perf.ini") == 0 ||
+         strcmp(name, "hotkeys.ini") == 0 ||
+         strcmp(name, "input.ini") == 0;
+}
+
+static void shell_config_watch_init(bd_shell *shell) {
+  shell->config_watch_fd = -1;
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = shell_config_sighup_handler;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  if (sigaction(SIGHUP, &action, NULL) != 0 && shell->verbose) {
+    fprintf(stderr, "brickdesk: config: cannot install SIGHUP handler: %s\n",
+            strerror(errno));
+  }
+  shell_config_sighup_requested = 0;
+
+  const char *dir = bd_config_dir(shell->settings);
+  if (dir == NULL || dir[0] == '\0') {
+    return;
+  }
+  int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  if (fd < 0) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: config: inotify unavailable: %s\n",
+              strerror(errno));
+    }
+    return;
+  }
+  uint32_t mask = IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE |
+                  IN_ATTRIB;
+  if (inotify_add_watch(fd, dir, mask) < 0) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: config: cannot watch %s: %s\n", dir,
+              strerror(errno));
+    }
+    close(fd);
+    return;
+  }
+  shell->config_watch_fd = fd;
+}
+
+static void shell_config_schedule_reload(bd_shell *shell, uint64_t now) {
+  uint64_t due = now + BD_SHELL_CONFIG_DEBOUNCE_MS;
+  if (!shell->config_reload_pending || due < shell->config_reload_due_ms) {
+    shell->config_reload_due_ms = due;
+  }
+  shell->config_reload_pending = true;
+}
+
+static void shell_config_watch_drain(bd_shell *shell, uint64_t now) {
+  if (shell->config_watch_fd < 0) {
+    return;
+  }
+  char buffer[4096]
+      __attribute__((aligned(__alignof__(struct inotify_event))));
+  bool relevant = false;
+  for (;;) {
+    ssize_t amount = read(shell->config_watch_fd, buffer, sizeof(buffer));
+    if (amount < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break;
+      }
+      if (shell->verbose) {
+        fprintf(stderr, "brickdesk: config: watch read: %s\n",
+                strerror(errno));
+      }
+      break;
+    }
+    if (amount == 0) {
+      break;
+    }
+    for (char *cursor = buffer; cursor < buffer + amount;) {
+      struct inotify_event *event = (struct inotify_event *)cursor;
+      if (event->len == 0 || shell_config_watch_relevant(event->name)) {
+        relevant = true;
+      }
+      cursor += sizeof(struct inotify_event) + event->len;
+    }
+  }
+  if (relevant) {
+    shell_config_schedule_reload(shell, now);
+  }
+}
+
+static void shell_config_apply_reload(bd_shell *shell, uint64_t now) {
+  char error[256] = {0};
+  if (!bd_config_reload(shell->settings, error, sizeof(error))) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: config reload failed: %s\n", error);
+    }
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "配置重新加载失败", 4000);
+    return;
+  }
+  size_t key_count = bd_config_key_count(shell->settings);
+  for (size_t i = 0; i < key_count; ++i) {
+    const char *key = bd_config_key(shell->settings, i);
+    if (key != NULL) {
+      shell_config_changed(shell, key);
+    }
+  }
+  bd_hotkey_table_load(&shell->hotkeys, shell->settings);
+  shell->hotkey_table = &shell->hotkeys;
+  bd_input_state_init(&shell->input, &shell->hotkeys, "global",
+                      (int)bd_config_get_int(shell->settings,
+                                             "input.double_tap_ms", 300));
+  bd_input_state_init(&shell->test_input, &shell->hotkeys, "global",
+                      (int)bd_config_get_int(shell->settings,
+                                             "input.double_tap_ms", 300));
+  long memory_budget =
+      bd_config_get_int(shell->settings, "session.memory_budget_mb", 560);
+  if (memory_budget < 0 || memory_budget > 4096) {
+    memory_budget = 560;
+  }
+  shell->memory_budget_mb = (int)memory_budget;
+  shell->led_profile_valid = false;
+  shell_led_refresh_internal(shell);
+  shell_home_quick_refresh(shell);
+  if (shell->settings_page != NULL && !shell_power_asleep(shell)) {
+    char system_error[128] = {0};
+    if (!bd_settings_sync_system(shell->settings_page, system_error,
+                                 sizeof(system_error)) &&
+        shell->verbose) {
+      fprintf(stderr, "brickdesk: settings: %s\n", system_error);
+    }
+  }
+  shell->dirty = true;
+  bool settings_open =
+      shell->settings_page != NULL &&
+      bd_settings_is_open(shell->settings_page);
+  if (!settings_open) {
+    bd_shell_notice(shell, BD_NOTICE_SUCCESS, "配置已重新加载", 1800);
+  } else if (shell->verbose) {
+    fprintf(stderr, "brickdesk: config reloaded\n");
+  }
+  (void)now;
+}
+
+static void shell_config_service(bd_shell *shell, uint64_t now) {
+  if (shell_config_sighup_requested) {
+    shell_config_sighup_requested = 0;
+    shell_config_schedule_reload(shell, now);
+  }
+  shell_config_watch_drain(shell, now);
+  if (shell->config_reload_pending && now >= shell->config_reload_due_ms) {
+    shell->config_reload_pending = false;
+    shell_config_apply_reload(shell, now);
+  }
+}
+
+static void shell_config_watch_close(bd_shell *shell) {
+  if (shell->config_watch_fd >= 0) {
+    close(shell->config_watch_fd);
+    shell->config_watch_fd = -1;
+  }
+  shell->config_reload_pending = false;
 }
 
 static void shell_battery_policy_config(int low_percent, bool recommend_shutdown,
@@ -2101,6 +2288,7 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
   bool asleep = shell_power_asleep(shell);
+  shell_config_service(shell, now);
   bd_haptics_update(shell->haptics, now);
   inputd_service(shell, monotonic_ms());
   shell_battery_deadline_check(shell, now);
@@ -3932,6 +4120,13 @@ static int shell_poll_timeout(bd_shell *shell) {
     /* A queued sleep/wake/shutdown must run on the next loop turn. */
     return 0;
   }
+  if (shell->config_reload_pending) {
+    uint64_t now = shell_now(shell);
+    uint64_t remaining = shell->config_reload_due_ms > now
+                             ? shell->config_reload_due_ms - now
+                             : 0;
+    best = merge_timeout(best, (int)remaining);
+  }
   if (shell->power_key_down && !shell->power_long_fired && !asleep) {
     uint64_t now = shell_now(shell);
     uint64_t deadline = shell->power_down_ms + BD_SHELL_POWER_TAP_MS;
@@ -4065,6 +4260,13 @@ static int shell_build_fds(bd_shell *shell, struct pollfd *fds, int capacity,
     kinds[count] = 1;
     ++count;
   }
+  if (shell->config_watch_fd >= 0 && count < capacity) {
+    fds[count].fd = shell->config_watch_fd;
+    fds[count].events = POLLIN;
+    fds[count].revents = 0;
+    kinds[count] = 4;
+    ++count;
+  }
   int session_fds[BD_SHELL_FD_MAX];
   int session_count = 0;
   if (shell->session != NULL) {
@@ -4159,6 +4361,9 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
       }
     } else if (kinds[i] == 1) {
       inputd_handle_poll(shell, fds[i].revents);
+      handled = true;
+    } else if (kinds[i] == 4) {
+      shell_config_watch_drain(shell, shell_now(shell));
       handled = true;
     } else {
       handled = true;
@@ -4356,6 +4561,7 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     shell_refresh_storage(shell);
   }
   bd_config_set_change_callback(config->settings, shell_config_changed, shell);
+  shell_config_watch_init(shell);
 
   bd_battery_policy_config battery_config;
   long low_battery =
@@ -4530,6 +4736,7 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_settings_destroy(shell->settings_page);
     shell->settings_page = NULL;
   }
+  shell_config_watch_close(shell);
   if (shell->notice != NULL) {
     bd_notice_destroy(shell->notice);
     shell->notice = NULL;

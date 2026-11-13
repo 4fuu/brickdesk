@@ -149,6 +149,22 @@ bool bd_config_set(bd_config *config, const char *key, const char *value,
 /* Atomically rewrites local.ini with only user overrides. */
 bool bd_config_save(bd_config *config, char *error, size_t error_size);
 
+/*
+ * Re-reads every configuration file from the same directory in place.  The
+ * change callback is preserved; pointers returned by bd_config_dir() stay
+ * valid.  Returns false and leaves the current snapshot untouched when the
+ * new files cannot be loaded.
+ */
+bool bd_config_reload(bd_config *config, char *error, size_t error_size);
+
+/*
+ * Removes the user override for one key (reverting to the lower layer or the
+ * compiled default) and marks local.ini for the next save.  Unknown keys or a
+ * read-only config return false.
+ */
+bool bd_config_unset(bd_config *config, const char *key, char *error,
+                     size_t error_size);
+
 void bd_config_set_change_callback(bd_config *config, bd_config_change_fn fn,
                                    void *user);
 

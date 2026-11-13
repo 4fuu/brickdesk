@@ -543,7 +543,12 @@ Power/Volume 通常属于独立的 `gpio-keys` 设备，即使 `input.ini` 没�
 - 写入流程：同目录临时文件 `local.ini.tmp.<pid>` → `write` → `fsync` →
   `rename` → 目录 `fsync`。失败时删除临时文件，原文件不变。
 - 权限 0644；打开临时文件使用 `O_NOFOLLOW`，不跟随符号链接。
-- 没有实现架构里的 `flock`；并发写仍是“最后写入者胜”，但不会出现半截文件。
+- 保存前对同目录的 `local.ini.lock` 加 `flock(LOCK_EX)`；同一进程/多进程
+  写入按锁串行，仍然不会出现半截文件。
+- 运行中的 `brickdesk` 监听配置目录（inotify）并在 200 ms 去抖后调用
+  `bd_config_reload()`；`kill -HUP <pid>` 也会触发同一次重载。重载失败保留
+  旧快照并在桌面显示通知，成功时主题、模糊、动画、LED、电源和按键表即时
+  生效。设置页自己保存 `local.ini` 时静默重载，不弹提示。
 
 ## 9. 命令行
 
@@ -592,6 +597,9 @@ bool bd_config_get_bool(const bd_config *, const char *key, bool fallback);
 bool bd_config_set(bd_config *, const char *key, const char *value,
                    char *error, size_t error_size);
 bool bd_config_save(bd_config *, char *error, size_t error_size);
+bool bd_config_reload(bd_config *, char *error, size_t error_size);
+bool bd_config_unset(bd_config *, const char *key, char *error,
+                     size_t error_size);
 
 void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
                                    void *user);
@@ -604,6 +612,9 @@ bool bd_config_describe(const bd_config *, const char *key,
   section 名可以带空格/点：`device.TrimUI Gamepad.A` 是合法 key。
 - `bd_config_set()` 只改内存并触发变化回调；`bd_config_save()` 才写
   `local.ini`。两者分开，UI 可以先批量改再保存。
+- `bd_config_reload()` 从同一目录重读所有层，保留变化回调；新文件加载失败
+  时旧快照不变。`bd_config_unset()` 删除某个用户覆盖，回到低层或编译默认，
+  下一次 `bd_config_save()` 写入结果。
 - 变化回调只在有效值真的变化时触发；把 key 设成当前值不会触发。
 - `bd_config_get()` 返回 `bd_config_value`，可拿到类型和原始规范值；
   `duration` 的 `integer` 单位是毫秒。
@@ -621,15 +632,13 @@ bool bd_config_describe(const bd_config *, const char *key,
 - 编译期默认 → 四个系统文件 → `local.ini` 的按 key 覆盖；
 - 类型、范围、枚举、accent、duration、combo 校验和 `file:line`；
 - schema_version 0→1 迁移、备份、只读安全模式；
-- 临时文件 + fsync + rename + 目录 fsync 的原子保存；
+- 临时文件 + fsync + rename + 目录 fsync 的原子保存，`flock` 串行化；
 - `check`/`get`/`set`/`dump`；
-- 主程序启动加载和 `--config-dir`。
+- 主程序启动加载和 `--config-dir`；
+- inotify + SIGHUP 热重载、`bd_config_reload()`、`bd_config_unset()`。
 
 明确留给后续 milestone：
 
-- inotify 热重载和 SIGHUP：M1-04 只提供内存 set + 回调，主程序启动时加载一次；
-- 删除/重置本地覆盖的 API；目前要移除某个覆盖需要手动编辑 `local.ini`；
-- `flock` 并发写锁；
 - 热键冲突/前缀/scope 合并：M1-05 已实现，见 `docs/input.md` 和
   `bd-input --check`；应用级 scope 切换仍待 M1-09；
 - profile 继承链、循环、未知 profile：M1-07 已实现，见 5.5/5.6；
@@ -650,7 +659,7 @@ bool bd_config_describe(const bd_config *, const char *key,
 4. 热键 section 采用逐 key 合并，而不是整个 section 覆盖；这样 `local.ini`
    只写改过的字段也能工作。
 5. 迁移重写文件会丢注释；原文件在 `.bak.vN` 里保留。
-6. 未实现 flock、inotify、`path`/`frequency` 类型、`dump --json`。
+6. `flock`、inotify 和 `unset` 已实现；仍未实现 `path`/`frequency` 类型、`dump --json`。
 
 ## 12. 测试
 
@@ -661,7 +670,8 @@ ctest --test-dir build-host --output-on-failure
 
 `config` 单测覆盖：覆盖层级（含反向优先级）、坏行行号、范围/枚举/combo、
 accent 预设与自定义十六进制、变化回调、`local.ini` 只写改动、未知 key 保留、
-原子写失败不破坏原文件、0→1 迁移、未来版本只读。
+原子写失败不破坏原文件、0→1 迁移、未来版本只读、`bd_config_reload()` 保留
+回调、`bd_config_unset()` 回到默认及保存后删除覆盖、保存生成 `.lock`。
 
 `perf_policy` 单测用 `tests/fixtures/sysfs/` 假 sysfs 和
 `tests/fixtures/perf/perf.ini` 覆盖：inherit 链、循环/未知 profile、

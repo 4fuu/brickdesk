@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include "config_internal.h"
@@ -1304,10 +1305,7 @@ bd_config *bd_config_load(const bd_config_options *options, char *error,
   return config;
 }
 
-void bd_config_free(bd_config *config) {
-  if (config == NULL) {
-    return;
-  }
+static void free_config_contents(bd_config *config) {
   for (size_t i = 0; i < config->entry_count; ++i) {
     free(config->entries[i].key);
     free(config->entries[i].section);
@@ -1316,6 +1314,9 @@ void bd_config_free(bd_config *config) {
     free(config->entries[i].source_file);
   }
   free(config->entries);
+  config->entries = NULL;
+  config->entry_count = 0;
+  config->entry_capacity = 0;
   for (size_t i = 0; i < config->record_count; ++i) {
     free(config->records[i].section);
     free(config->records[i].key);
@@ -1323,12 +1324,25 @@ void bd_config_free(bd_config *config) {
     free(config->records[i].file);
   }
   free(config->records);
+  config->records = NULL;
+  config->record_count = 0;
+  config->record_capacity = 0;
   for (size_t i = 0; i < config->diagnostic_count; ++i) {
     free((void *)config->diagnostics[i].file);
     free((void *)config->diagnostics[i].key);
     free((void *)config->diagnostics[i].message);
   }
   free(config->diagnostics);
+  config->diagnostics = NULL;
+  config->diagnostic_count = 0;
+  config->diagnostic_capacity = 0;
+}
+
+void bd_config_free(bd_config *config) {
+  if (config == NULL) {
+    return;
+  }
+  free_config_contents(config);
   free(config->dir);
   free(config->local_path);
   free(config);
@@ -1559,6 +1573,110 @@ static bool entry_matches(const bd_entry *entry, const char *normalized) {
   }
 }
 
+static bool entry_value_text(const bd_entry *entry, char *out,
+                             size_t out_size) {
+  if (!entry->valid) {
+    out[0] = '\0';
+    return true;
+  }
+  switch (entry->spec->type) {
+    case BD_CONFIG_BOOL:
+      snprintf(out, out_size, "%s", entry->boolean ? "true" : "false");
+      return true;
+    case BD_CONFIG_INT:
+    case BD_CONFIG_DURATION:
+      snprintf(out, out_size, "%ld", entry->integer);
+      return true;
+    case BD_CONFIG_ENUM:
+    case BD_CONFIG_STRING:
+    case BD_CONFIG_ACCENT:
+    case BD_CONFIG_COMBO:
+      snprintf(out, out_size, "%s", entry->text != NULL ? entry->text : "");
+      return true;
+    default:
+      return false;
+  }
+}
+
+static void entry_reset_default(bd_config *config, bd_entry *entry) {
+  free(entry->text);
+  entry->text = NULL;
+  free(entry->source_file);
+  entry->source_file = NULL;
+  entry->boolean = false;
+  entry->integer = 0;
+  entry->valid = false;
+  entry->seen = false;
+  entry->user_set = false;
+  entry->layer = BD_CONFIG_LAYER_DEFAULT;
+  entry->source_line = 0;
+  if (entry->spec->default_value == NULL) {
+    return;
+  }
+  char normalized[BD_CONFIG_VALUE_MAX];
+  char error[128];
+  if (bd_config_normalize(entry->spec, entry->spec->default_value, normalized,
+                          sizeof(normalized), error, sizeof(error))) {
+    entry_apply(config, entry, normalized, BD_CONFIG_LAYER_DEFAULT, NULL, 0);
+  }
+}
+
+bool bd_config_unset(bd_config *config, const char *key, char *error,
+                     size_t error_size) {
+  if (config == NULL || key == NULL || key[0] == '\0') {
+    set_error(error, error_size, "invalid argument");
+    return false;
+  }
+  if (config->read_only) {
+    set_error(error, error_size,
+              "configuration is read-only (written by a newer version)");
+    return false;
+  }
+  bd_entry *entry = find_entry_by_key(config, key);
+  if (entry == NULL) {
+    set_error(error, error_size, "unknown key '%s'", key);
+    return false;
+  }
+  char before[BD_CONFIG_VALUE_MAX] = "";
+  entry_value_text(entry, before, sizeof(before));
+  bool existed = entry->user_set;
+
+  size_t write = 0;
+  for (size_t i = 0; i < config->record_count; ++i) {
+    bd_record *record = &config->records[i];
+    bool user = record->layer == BD_CONFIG_LAYER_USER &&
+                strcmp(record->section, entry->section) == 0 &&
+                strcmp(record->key, entry->name) == 0;
+    if (user) {
+      free(record->section);
+      free(record->key);
+      free(record->value);
+      free(record->file);
+      continue;
+    }
+    if (write != i) {
+      config->records[write] = *record;
+    }
+    ++write;
+  }
+  config->record_count = write;
+
+  for (size_t i = 0; i < config->entry_count; ++i) {
+    entry_reset_default(config, &config->entries[i]);
+  }
+  apply_records(config);
+
+  entry = find_entry_by_key(config, key);
+  char after[BD_CONFIG_VALUE_MAX] = "";
+  if (entry != NULL) {
+    entry_value_text(entry, after, sizeof(after));
+  }
+  if (existed && strcmp(before, after) != 0 && config->change_fn != NULL) {
+    config->change_fn(config->change_user, key);
+  }
+  return true;
+}
+
 bool bd_config_set(bd_config *config, const char *key, const char *value,
                    char *error, size_t error_size) {
   if (config == NULL || key == NULL || value == NULL) {
@@ -1618,14 +1736,76 @@ bool bd_config_save(bd_config *config, char *error, size_t error_size) {
   }
   char backup[BD_PATH_MAX];
   int written = snprintf(backup, sizeof(backup), "%s.bak", config->local_path);
-  bool ok = written > 0 && (size_t)written < sizeof(backup) &&
-            write_atomic(config->local_path, backup, content.data,
-                         content.length, error, error_size);
-  if (written <= 0 || (size_t)written >= sizeof(backup)) {
-    set_error(error, error_size, "configuration path is too long");
+  char lock_path[BD_PATH_MAX];
+  int lock_written =
+      snprintf(lock_path, sizeof(lock_path), "%s.lock", config->local_path);
+  int lock_fd = -1;
+  bool ok = false;
+  if (lock_written <= 0 || (size_t)lock_written >= sizeof(lock_path)) {
+    set_error(error, error_size, "configuration lock path is too long");
+  } else {
+    lock_fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (lock_fd < 0) {
+      set_error(error, error_size, "cannot open %s: %s", lock_path,
+                strerror(errno));
+    } else if (flock(lock_fd, LOCK_EX) != 0) {
+      set_error(error, error_size, "cannot lock %s: %s", lock_path,
+                strerror(errno));
+    } else if (written > 0 && (size_t)written < sizeof(backup)) {
+      ok = write_atomic(config->local_path, backup, content.data,
+                        content.length, error, error_size);
+    } else {
+      set_error(error, error_size, "configuration path is too long");
+    }
+  }
+  if (lock_fd >= 0) {
+    (void)flock(lock_fd, LOCK_UN);
+    close(lock_fd);
   }
   strbuf_free(&content);
   return ok;
+}
+
+bool bd_config_reload(bd_config *config, char *error, size_t error_size) {
+  if (config == NULL || config->dir == NULL) {
+    set_error(error, error_size, "invalid argument");
+    return false;
+  }
+  bd_config_options options;
+  memset(&options, 0, sizeof(options));
+  options.config_dir = config->dir;
+  options.migrate = false;
+  bd_config *fresh = bd_config_load(&options, error, error_size);
+  if (fresh == NULL) {
+    return false;
+  }
+  bd_config_change_fn change_fn = config->change_fn;
+  void *change_user = config->change_user;
+  free_config_contents(config);
+  config->read_only = fresh->read_only;
+  config->oom = fresh->oom;
+  config->entries = fresh->entries;
+  config->entry_count = fresh->entry_count;
+  config->entry_capacity = fresh->entry_capacity;
+  config->records = fresh->records;
+  config->record_count = fresh->record_count;
+  config->record_capacity = fresh->record_capacity;
+  config->diagnostics = fresh->diagnostics;
+  config->diagnostic_count = fresh->diagnostic_count;
+  config->diagnostic_capacity = fresh->diagnostic_capacity;
+  config->change_fn = change_fn;
+  config->change_user = change_user;
+  fresh->entries = NULL;
+  fresh->entry_count = 0;
+  fresh->entry_capacity = 0;
+  fresh->records = NULL;
+  fresh->record_count = 0;
+  fresh->record_capacity = 0;
+  fresh->diagnostics = NULL;
+  fresh->diagnostic_count = 0;
+  fresh->diagnostic_capacity = 0;
+  bd_config_free(fresh);
+  return true;
 }
 
 void bd_config_set_change_callback(bd_config *config, bd_config_change_fn fn,

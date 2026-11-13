@@ -386,7 +386,8 @@ static bool menu_volume_set(void *user, int percent) {
 - shell 已经在 inputd 的 `switch` 广播中处理 `headphone` 的 0/1 值并调用
   `bd_av_audio_set_jack()`。缺失/未知值不猜测；如果输入层选择自己做路由，
   则把 `bd_av_audio_config.manual_route` 设为 true，只记录状态。
-- 应用内 menu shim 的真实 AV 接线仍是独立任务；shell callback 不能跨进程复用。
+- 应用内 menu shim 现在自行探测同一组 `bd_av_brightness`/`bd_av_audio` 后端；
+  shell callback 不能跨进程复用。缺失设备显示“不可用”，写入结果以设备回读为准。
 
 ## 7. 诊断工具
 

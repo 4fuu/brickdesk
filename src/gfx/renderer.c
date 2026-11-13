@@ -685,6 +685,14 @@ void bd_gfx_destroy(bd_gfx *gfx) {
   if (gfx->composite_program != 0) {
     glDeleteProgram(gfx->composite_program);
   }
+  bd_font_file *font_file = gfx->font_files;
+  while (font_file != NULL) {
+    bd_font_file *next = font_file->next;
+    free(font_file->path);
+    free(font_file->data);
+    free(font_file);
+    font_file = next;
+  }
   free(gfx->vertices);
   free(gfx->batches);
   free(gfx);
@@ -702,6 +710,22 @@ bd_gfx_stats bd_gfx_get_stats(const bd_gfx *gfx) {
   bd_gfx_stats empty;
   memset(&empty, 0, sizeof(empty));
   return gfx != NULL ? gfx->stats : empty;
+}
+
+bd_gfx_memory_stats bd_gfx_memory_get_stats(const bd_gfx *gfx) {
+  bd_gfx_memory_stats stats;
+  memset(&stats, 0, sizeof(stats));
+  if (gfx == NULL) {
+    return stats;
+  }
+  bd_image_cache_stats images = bd_gfx_image_cache_get_stats(gfx);
+  stats.texture_cache_bytes = images.resident_bytes;
+  stats.texture_cache_budget_bytes = images.budget_bytes;
+  stats.glyph_atlas_bytes = gfx->glyph_atlas_bytes;
+  stats.font_data_bytes = gfx->font_data_bytes;
+  stats.fbo_bytes = (size_t)gfx->width * (size_t)gfx->height * 4u +
+                    2u * (size_t)gfx->blur_width * (size_t)gfx->blur_height * 4u;
+  return stats;
 }
 
 void bd_gfx_damage_all(bd_gfx *gfx) {

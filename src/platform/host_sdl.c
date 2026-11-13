@@ -248,6 +248,40 @@ uint32_t bd_platform_ticks_ms(void) {
   return (uint32_t)SDL_GetTicks();
 }
 
+/*
+ * SDL's offscreen video driver spins inside SDL_WaitEventTimeout instead of
+ * blocking, which makes an idle host process burn most of a core. Device
+ * drivers (fbdev/mali) block normally, so only pay for the fallback when the
+ * offscreen driver is selected.
+ */
+static bool video_driver_busy_waits(void) {
+  static int cached = -1;
+  if (cached < 0) {
+    const char *driver = SDL_GetCurrentVideoDriver();
+    cached = driver != NULL && strcmp(driver, "offscreen") == 0;
+  }
+  return cached != 0;
+}
+
+static int wait_sdl_event(SDL_Event *sdl_event, int timeout_ms) {
+  if (!video_driver_busy_waits()) {
+    return SDL_WaitEventTimeout(sdl_event, timeout_ms);
+  }
+
+  if (timeout_ms >= 0) {
+    if (timeout_ms > 0) {
+      SDL_Delay((Uint32)timeout_ms);
+    }
+    return SDL_PollEvent(sdl_event);
+  }
+  for (;;) {
+    if (SDL_PollEvent(sdl_event)) {
+      return 1;
+    }
+    SDL_Delay(16);
+  }
+}
+
 int bd_platform_wait_event(bd_platform *platform, bd_event *event, int timeout_ms) {
   if (platform == NULL || event == NULL) {
     return -1;
@@ -258,7 +292,7 @@ int bd_platform_wait_event(bd_platform *platform, bd_event *event, int timeout_m
   event->pressed = false;
 
   SDL_Event sdl_event;
-  int result = SDL_WaitEventTimeout(&sdl_event, timeout_ms);
+  int result = wait_sdl_event(&sdl_event, timeout_ms);
   if (result <= 0) {
     return result;
   }

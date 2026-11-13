@@ -37,6 +37,7 @@ struct bd_font {
   int line_height;
   float scale;
   stbtt_fontinfo info;
+  bd_font_file *file;
   unsigned char *data;
   bd_font *fallback;
   bd_glyph *glyphs;
@@ -311,51 +312,119 @@ int bd_font_measure_text(const bd_font *font, const char *utf8) {
   return measure_text(font, utf8);
 }
 
-bd_font *bd_font_create(bd_gfx *gfx, const char *path, int pixel_size) {
-  if (gfx == NULL || path == NULL || pixel_size <= 0 || pixel_size > 192) {
-    return NULL;
+static char *duplicate_path(const char *path) {
+  size_t length = strlen(path);
+  char *copy = (char *)malloc(length + 1);
+  if (copy != NULL) {
+    memcpy(copy, path, length + 1);
   }
-  FILE *file = fopen(path, "rb");
-  if (file == NULL) {
+  return copy;
+}
+
+/*
+ * Font files are read-only and pixel-size independent. Body and badge text
+ * use the same Noto Sans SC file at different sizes; sharing the parsed bytes
+ * keeps one copy of the 2.1 MiB file instead of one per bd_font.
+ */
+static bd_font_file *font_file_acquire(bd_gfx *gfx, const char *path) {
+  for (bd_font_file *file = gfx->font_files; file != NULL; file = file->next) {
+    if (strcmp(file->path, path) == 0) {
+      ++file->refs;
+      return file;
+    }
+  }
+
+  FILE *stream = fopen(path, "rb");
+  if (stream == NULL) {
     bd_gfx_set_error(gfx, "cannot open font file");
     return NULL;
   }
-  if (fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
+  if (fseek(stream, 0, SEEK_END) != 0) {
+    fclose(stream);
     bd_gfx_set_error(gfx, "cannot seek font file");
     return NULL;
   }
-  long size = ftell(file);
+  long size = ftell(stream);
   if (size <= 0 || size > 64 * 1024 * 1024) {
-    fclose(file);
+    fclose(stream);
     bd_gfx_set_error(gfx, "font file is empty or too large");
     return NULL;
   }
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
+  if (fseek(stream, 0, SEEK_SET) != 0) {
+    fclose(stream);
     bd_gfx_set_error(gfx, "cannot rewind font file");
     return NULL;
   }
   unsigned char *data = (unsigned char *)malloc((size_t)size);
   if (data == NULL) {
-    fclose(file);
+    fclose(stream);
     bd_gfx_set_error(gfx, "out of memory for font data");
     return NULL;
   }
-  if (fread(data, 1, (size_t)size, file) != (size_t)size) {
+  if (fread(data, 1, (size_t)size, stream) != (size_t)size) {
     free(data);
-    fclose(file);
+    fclose(stream);
     bd_gfx_set_error(gfx, "short read on font file");
     return NULL;
   }
-  fclose(file);
+  fclose(stream);
+
+  bd_font_file *file = (bd_font_file *)calloc(1, sizeof(*file));
+  if (file == NULL) {
+    free(data);
+    bd_gfx_set_error(gfx, "out of memory for font cache entry");
+    return NULL;
+  }
+  file->path = duplicate_path(path);
+  if (file->path == NULL) {
+    free(data);
+    free(file);
+    bd_gfx_set_error(gfx, "out of memory for font path");
+    return NULL;
+  }
+  file->data = data;
+  file->size = (size_t)size;
+  file->refs = 1;
+  file->next = gfx->font_files;
+  gfx->font_files = file;
+  gfx->font_data_bytes += file->size;
+  return file;
+}
+
+static void font_file_release(bd_gfx *gfx, bd_font_file *file) {
+  if (file == NULL || --file->refs > 0) {
+    return;
+  }
+  bd_font_file **link = &gfx->font_files;
+  while (*link != NULL && *link != file) {
+    link = &(*link)->next;
+  }
+  if (*link == file) {
+    *link = file->next;
+  }
+  gfx->font_data_bytes -= file->size;
+  free(file->path);
+  free(file->data);
+  free(file);
+}
+
+bd_font *bd_font_create(bd_gfx *gfx, const char *path, int pixel_size) {
+  if (gfx == NULL || path == NULL || pixel_size <= 0 || pixel_size > 192) {
+    return NULL;
+  }
+  bd_font_file *file = font_file_acquire(gfx, path);
+  if (file == NULL) {
+    return NULL;
+  }
+  unsigned char *data = file->data;
 
   bd_font *font = (bd_font *)calloc(1, sizeof(*font));
   if (font == NULL) {
-    free(data);
+    font_file_release(gfx, file);
     return NULL;
   }
   font->gfx = gfx;
+  font->file = file;
   font->data = data;
   font->pixel_size = pixel_size;
 
@@ -406,6 +475,8 @@ bd_font *bd_font_create(bd_gfx *gfx, const char *path, int pixel_size) {
     bd_font_destroy(font);
     return NULL;
   }
+  gfx->glyph_atlas_bytes +=
+      (size_t)font->atlas_size * (size_t)font->atlas_size;
   return font;
 }
 
@@ -415,10 +486,16 @@ void bd_font_destroy(bd_font *font) {
   }
   if (font->atlas != 0) {
     glDeleteTextures(1, &font->atlas);
+    if (font->gfx != NULL) {
+      font->gfx->glyph_atlas_bytes -=
+          (size_t)font->atlas_size * (size_t)font->atlas_size;
+    }
   }
   free(font->glyphs);
   free(font->hash);
-  free(font->data);
+  if (font->file != NULL) {
+    font_file_release(font->gfx, font->file);
+  }
   free(font);
 }
 

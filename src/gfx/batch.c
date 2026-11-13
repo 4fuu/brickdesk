@@ -182,7 +182,8 @@ void bd_gfx_batch_finalize_damage(bd_gfx *gfx) {
     for (int i = 0; i < gfx->blur_active_count; ++i) {
       bool hit = false;
       for (int r = 0; r < count; ++r) {
-        if (bd_rect_overlaps_or_touches(work[r], gfx->blur_active[i], 0)) {
+        bd_rect overlap = bd_rect_intersect(work[r], gfx->blur_active[i]);
+        if (overlap.w > 0 && overlap.h > 0) {
           hit = true;
           break;
         }

@@ -128,9 +128,41 @@ int main(int argc, char **argv) {
 
   bd_image_free(&image);
   bd_gfx_texture_destroy(gfx, texture);
+
+  /*
+   * Body and badge text load the same font file at different sizes. The
+   * renderer must share the file bytes while keeping a separate atlas.
+   */
+  bd_gfx_memory_stats before = bd_gfx_memory_get_stats(gfx);
+  char font_path[1024];
+  snprintf(font_path, sizeof(font_path), "%s/fonts/Inter-500-subset.ttf",
+           BRICKDESK_ASSET_DIR);
+  bd_font *small = bd_font_create(gfx, font_path, 16);
+  bd_gfx_memory_stats after_small = bd_gfx_memory_get_stats(gfx);
+  bd_font *large = bd_font_create(gfx, font_path, 18);
+  bd_gfx_memory_stats after_large = bd_gfx_memory_get_stats(gfx);
+  printf("smoke: font_data_bytes=%zu atlas_bytes=%zu shared=%d\n",
+         after_large.font_data_bytes, after_large.glyph_atlas_bytes,
+         after_large.font_data_bytes == after_small.font_data_bytes ? 1 : 0);
+  bool fonts_shared = small != NULL && large != NULL &&
+                      after_small.font_data_bytes > before.font_data_bytes &&
+                      after_large.font_data_bytes ==
+                          after_small.font_data_bytes &&
+                      after_large.glyph_atlas_bytes >
+                          after_small.glyph_atlas_bytes;
+  bd_font_destroy(small);
+  bd_font_destroy(large);
+  bd_gfx_memory_stats after_free = bd_gfx_memory_get_stats(gfx);
+  bool fonts_released = after_free.font_data_bytes == before.font_data_bytes &&
+                        after_free.glyph_atlas_bytes == before.glyph_atlas_bytes;
+
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);
 
+  if (!fonts_shared || !fonts_released) {
+    fprintf(stderr, "smoke: font memory accounting or sharing failed\n");
+    return 1;
+  }
   if (non_black_percent < 10.0) {
     fprintf(stderr, "smoke: frame is mostly black\n");
     return 1;

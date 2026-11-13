@@ -2467,6 +2467,26 @@ bool bd_plugin_tile_consume(bd_plugin *plugin, bd_plugin_frame *out) {
   return true;
 }
 
+void bd_plugin_host_set_theme(bd_plugin_host *host, bool dark,
+                              uint32_t accent) {
+  if (host == NULL) {
+    return;
+  }
+  host->dark = dark;
+  host->accent = accent & 0xffffffu;
+  char extra[96];
+  int written = snprintf(extra, sizeof(extra),
+                         "\"dark\":%s,\"accent\":\"#%06x\"",
+                         dark ? "true" : "false", host->accent);
+  if (written <= 0 || (size_t)written >= sizeof(extra)) {
+    return;
+  }
+  for (int i = 0; i < host->count; ++i) {
+    bd_plugin_send_event(&host->plugins[i], "theme.changed", extra);
+  }
+  bd_plugin_mark_dirty(host);
+}
+
 void bd_plugin_reset_crash_limit(bd_plugin *plugin) {
   if (plugin == NULL) {
     return;

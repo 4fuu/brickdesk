@@ -1,13 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "brickdesk/config.h"
+#include "brickdesk/device_av.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/settings.h"
@@ -88,6 +92,122 @@ static bool focus_row(bd_settings *settings, const char *key) {
 static bool color_close(bd_color a, bd_color b) {
   return fabsf(a.r - b.r) < 0.01f && fabsf(a.g - b.g) < 0.01f &&
          fabsf(a.b - b.b) < 0.01f;
+}
+
+static bool fake_perf_apply(void *user, const char *profile, char *error,
+                            size_t error_size) {
+  (void)user;
+  (void)profile;
+  (void)error;
+  (void)error_size;
+  return true;
+}
+
+static bool failing_perf_apply(void *user, const char *profile, char *error,
+                               size_t error_size) {
+  (void)user;
+  (void)profile;
+  if (error != NULL && error_size > 0) {
+    snprintf(error, error_size, "perfd 未连接");
+  }
+  return false;
+}
+
+static bool write_text_file(const char *path, const char *text) {
+  FILE *file = fopen(path, "w");
+  if (file == NULL) {
+    return false;
+  }
+  bool ok = fputs(text, file) >= 0;
+  return fclose(file) == 0 && ok;
+}
+
+static bool make_path(const char *path) {
+  if (mkdir(path, 0777) == 0) {
+    return true;
+  }
+  return errno == EEXIST;
+}
+
+static bool av_set_brightness(void *user, int percent) {
+  bd_av_error error;
+  return bd_av_brightness_set((bd_av_brightness *)user, percent, &error) ==
+         BD_AV_OK;
+}
+
+static bool av_get_brightness(void *user, int *percent) {
+  bd_av_error error;
+  return bd_av_brightness_get((bd_av_brightness *)user, percent, &error) ==
+         BD_AV_OK;
+}
+
+static void test_real_sysfs_transaction(bd_platform *platform, bd_gfx *gfx,
+                                        bd_settings *settings,
+                                        bd_config *config) {
+  (void)platform;
+  (void)gfx;
+  char root[] = "/tmp/bd-settings-sysfs-XXXXXX";
+  char *temp = mkdtemp(root);
+  CHECK(temp != NULL, "fake sysfs temp dir");
+  if (temp == NULL) {
+    return;
+  }
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/sys", temp);
+  CHECK(make_path(path), "fake sysfs sys");
+  snprintf(path, sizeof(path), "%s/sys/class", temp);
+  CHECK(make_path(path), "fake sysfs class");
+  snprintf(path, sizeof(path), "%s/sys/class/backlight", temp);
+  CHECK(make_path(path), "fake sysfs backlight");
+  snprintf(path, sizeof(path), "%s/sys/class/backlight/test", temp);
+  CHECK(make_path(path), "fake sysfs device");
+  char brightness_path[2048];
+  char max_path[2048];
+  snprintf(brightness_path, sizeof(brightness_path), "%s/brightness", path);
+  snprintf(max_path, sizeof(max_path), "%s/max_brightness", path);
+  CHECK(write_text_file(brightness_path, "64\n"), "fake brightness");
+  CHECK(write_text_file(max_path, "255\n"), "fake max brightness");
+
+  bd_av_brightness brightness;
+  bd_av_error error;
+  bd_av_brightness_config av_config;
+  memset(&av_config, 0, sizeof(av_config));
+  av_config.sysfs_root = temp;
+  CHECK(bd_av_brightness_probe(&brightness, &av_config, &error) == BD_AV_OK,
+        "probe fake backlight: %s", error.message);
+
+  bd_settings_system system;
+  memset(&system, 0, sizeof(system));
+  system.user = &brightness;
+  system.set_brightness = av_set_brightness;
+  system.get_brightness = av_get_brightness;
+  bd_settings_set_system(settings, &system);
+  CHECK(bd_config_set(config, "display.brightness", "70", NULL, 0),
+        "set config brightness");
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
+        "open display for fake sysfs");
+  CHECK(focus_row(settings, "display.brightness"),
+        "focus brightness for fake sysfs");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "write fake sysfs brightness");
+  int percent = -1;
+  bd_av_error read_error;
+  CHECK(bd_av_brightness_get(&brightness, &percent, &read_error) == BD_AV_OK &&
+            percent == 26,
+        "fake sysfs readback %d", percent);
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 26,
+        "fake sysfs persisted brightness %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+
+  CHECK(chmod(brightness_path, 0444) == 0, "make brightness read-only");
+  long saved = bd_config_get_int(config, "display.brightness", -1);
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "read-only fake sysfs must reject the write");
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == saved,
+        "failed fake sysfs write must not save %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  chmod(brightness_path, 0644);
+  sf_remove_tree(temp);
 }
 
 static void test_schema_describe(bd_config *config) {
@@ -349,6 +469,167 @@ static void test_pages(bd_settings *settings, bd_config *config) {
         bd_config_get_int(config, "session.max_background", -1));
 }
 
+typedef struct reset_fail_av {
+  int brightness_calls;
+  int volume_calls;
+  int mute_calls;
+} reset_fail_av;
+
+static bool reset_fail_brightness(void *user, int percent) {
+  (void)percent;
+  ((reset_fail_av *)user)->brightness_calls++;
+  return false;
+}
+
+static bool reset_fail_volume(void *user, int percent) {
+  (void)percent;
+  ((reset_fail_av *)user)->volume_calls++;
+  return false;
+}
+
+static bool reset_fail_mute(void *user, bool muted) {
+  (void)muted;
+  ((reset_fail_av *)user)->mute_calls++;
+  return false;
+}
+
+static bool reset_fail_brightness_get(void *user, int *percent) {
+  (void)user;
+  *percent = 80;
+  return true;
+}
+
+static bool reset_fail_volume_get(void *user, int *percent) {
+  (void)user;
+  *percent = 40;
+  return true;
+}
+
+static bool reset_fail_mute_get(void *user, bool *muted) {
+  (void)user;
+  *muted = true;
+  return true;
+}
+
+typedef struct reset_perf_probe {
+  int calls;
+  char last[64];
+  bool reject;
+} reset_perf_probe;
+
+static bool reset_perf_apply(void *user, const char *profile, char *error,
+                             size_t error_size) {
+  reset_perf_probe *probe = (reset_perf_probe *)user;
+  probe->calls++;
+  snprintf(probe->last, sizeof(probe->last), "%s", profile);
+  if (probe->reject) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "perfd 拒绝重置");
+    }
+    return false;
+  }
+  return true;
+}
+
+static void confirm_reset(bd_settings *settings) {
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_SYSTEM),
+        "open system for reset");
+  CHECK(focus_row(settings, "!reset"), "focus reset row");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "open reset confirm");
+  CHECK(bd_settings_confirm_open(settings), "reset confirm open");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "focus reset action");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "confirm reset");
+  CHECK(!bd_settings_confirm_open(settings), "reset confirm closes");
+}
+
+static void test_reset_service_failures(bd_settings *settings,
+                                        bd_config *config,
+                                        bd_settings_system *working_system) {
+  char error[128] = {0};
+  CHECK(bd_config_set(config, "display.brightness", "80", error,
+                      sizeof(error)),
+        "reset failure seed brightness");
+  CHECK(bd_config_set(config, "audio.volume", "40", error, sizeof(error)),
+        "reset failure seed volume");
+  CHECK(bd_config_set(config, "audio.mute", "true", error, sizeof(error)),
+        "reset failure seed mute");
+  CHECK(bd_config_set(config, "perf.global_profile", "balanced", error,
+                      sizeof(error)),
+        "reset failure seed profile");
+
+  reset_fail_av fail_av;
+  memset(&fail_av, 0, sizeof(fail_av));
+  bd_settings_system failing_system;
+  memset(&failing_system, 0, sizeof(failing_system));
+  failing_system.user = &fail_av;
+  failing_system.set_brightness = reset_fail_brightness;
+  failing_system.set_volume = reset_fail_volume;
+  failing_system.set_muted = reset_fail_mute;
+  failing_system.get_brightness = reset_fail_brightness_get;
+  failing_system.get_volume = reset_fail_volume_get;
+  failing_system.get_muted = reset_fail_mute_get;
+  bd_settings_set_system(settings, &failing_system);
+
+  reset_perf_probe perf_probe;
+  memset(&perf_probe, 0, sizeof(perf_probe));
+  perf_probe.reject = true;
+  bd_settings_perf rejected = {.user = &perf_probe,
+                               .apply_global_profile = reset_perf_apply};
+  bd_settings_set_perf(settings, &rejected);
+  confirm_reset(settings);
+
+  CHECK(fail_av.brightness_calls > 0 && fail_av.volume_calls > 0 &&
+            fail_av.mute_calls > 0,
+        "reset calls each AV setter (%d/%d/%d)", fail_av.brightness_calls,
+        fail_av.volume_calls, fail_av.mute_calls);
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 80,
+        "failed AV reset keeps brightness %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  CHECK(bd_config_get_int(config, "audio.volume", -1) == 40,
+        "failed AV reset keeps volume %ld",
+        bd_config_get_int(config, "audio.volume", -1));
+  CHECK(bd_config_get_bool(config, "audio.mute", false),
+        "failed AV reset keeps mute");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               "balanced") == 0,
+        "rejected perf reset keeps profile %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(perf_probe.calls == 1 && strcmp(perf_probe.last, "default") == 0,
+        "reset applies the perf default through confirmation (calls=%d last=%s)",
+        perf_probe.calls, perf_probe.last);
+  CHECK(bd_settings_last_error(settings)[0] != '\0',
+        "partial reset surfaces an error");
+
+  CHECK(bd_config_set(config, "display.brightness", "80", error,
+                      sizeof(error)),
+        "disconnected reset seed brightness");
+  CHECK(bd_config_set(config, "audio.volume", "40", error, sizeof(error)),
+        "disconnected reset seed volume");
+  CHECK(bd_config_set(config, "perf.global_profile", "performance", error,
+                      sizeof(error)),
+        "disconnected reset seed profile");
+  bd_settings_set_system(settings, working_system);
+  bd_settings_set_perf(settings, NULL);
+  confirm_reset(settings);
+
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 70,
+        "working AV still resets brightness to %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  CHECK(bd_config_get_int(config, "audio.volume", -1) == 70,
+        "working AV still resets volume to %ld",
+        bd_config_get_int(config, "audio.volume", -1));
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               "performance") == 0,
+        "disconnected perf keeps profile %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(strstr(bd_settings_last_error(settings), "perf") != NULL,
+        "disconnected perf reset error %s",
+        bd_settings_last_error(settings));
+}
+
 static bool wait_for_plugin_long(bd_plugin_host *host, bd_plugin *plugin,
                                 uint64_t timeout_ms) {
   uint64_t deadline = sf_now_ms() + timeout_ms;
@@ -571,6 +852,7 @@ int main(void) {
   bd_settings_status status;
   memset(&status, 0, sizeof(status));
   status.clock = "22:26";
+  status.wifi_known = true;
   status.wifi = true;
   status.battery_percent = 82;
   bd_settings_set_status(settings, &status);
@@ -580,14 +862,61 @@ int main(void) {
   bd_settings_system system;
   bd_settings_system_stub_init(&stub, &system);
   bd_settings_set_system(settings, &system);
+  bd_settings_perf perf = {.user = NULL,
+                           .apply_global_profile = fake_perf_apply};
+  bd_settings_set_perf(settings, &perf);
 
   test_schema_describe(config);
   test_rows(settings);
   test_focus_damage(platform, gfx, settings);
   test_values(platform, gfx, settings, config, dir, &stub);
+  test_real_sysfs_transaction(platform, gfx, settings, config);
+  /* The fake sysfs tree is gone; restore the explicit test backend. */
+  bd_settings_set_system(settings, &system);
   test_pages(settings, config);
   test_plugin_scroll(platform, gfx, settings);
   test_reset_and_subpages(platform, gfx, settings, config);
+  test_reset_service_failures(settings, config, &system);
+
+  const char *profile =
+      bd_config_get_string(config, "perf.global_profile", "default");
+  char saved_profile[64];
+  snprintf(saved_profile, sizeof(saved_profile), "%s", profile);
+  bd_settings_perf rejected = {.user = NULL,
+                               .apply_global_profile = failing_perf_apply};
+  bd_settings_set_perf(settings, &rejected);
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_PERFORMANCE),
+        "open performance for rejection");
+  CHECK(focus_row(settings, "perf.global_profile"),
+        "focus perf for rejection");
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "rejected perf must not report success");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               saved_profile) == 0,
+        "rejected perf must not save %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(strcmp(bd_settings_last_error(settings), "perfd 未连接") == 0,
+        "perf error %s", bd_settings_last_error(settings));
+
+  bd_settings_set_perf(settings, NULL);
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "missing perf service must not report success");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               saved_profile) == 0,
+        "missing perf must not save");
+
+  int saved_brightness = (int)bd_config_get_int(config, "display.brightness", -1);
+  bd_settings_set_system(settings, NULL);
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
+        "open display without a system backend");
+  CHECK(focus_row(settings, "display.brightness"),
+        "focus brightness without a backend");
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT),
+        "missing device must not report a write");
+  CHECK(bd_config_get_int(config, "display.brightness", -1) ==
+            saved_brightness,
+        "missing device must not save brightness");
+  bd_settings_set_system(settings, &system);
 
   bd_settings_destroy(settings);
   bd_config_free(config);

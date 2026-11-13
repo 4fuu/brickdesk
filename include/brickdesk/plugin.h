@@ -229,6 +229,12 @@ int bd_plugin_host_fds(const bd_plugin_host *host, int *out, int max);
 bool bd_plugin_host_take_dirty(bd_plugin_host *host);
 void bd_plugin_host_stop_all(bd_plugin_host *host);
 const char *bd_plugin_host_runtime_dir(const bd_plugin_host *host);
+/*
+ * Updates the theme sent in later host.hello messages and notifies running
+ * plugins with theme.changed.  The desktop uses this when the settings page
+ * changes the accent; the tile renderer owns its already-uploaded colours.
+ */
+void bd_plugin_host_set_theme(bd_plugin_host *host, bool dark, uint32_t accent);
 
 const bd_plugin_manifest *bd_plugin_manifest_of(const bd_plugin *plugin);
 const char *bd_plugin_id(const bd_plugin *plugin);

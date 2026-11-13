@@ -309,6 +309,7 @@ target_link_libraries(brickdesk_home
 # about the other's callers.
 add_library(brickdesk_shell STATIC
   src/app/shell.c
+  src/app/perf_client.c
 )
 target_include_directories(brickdesk_shell
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -322,6 +323,8 @@ target_link_libraries(brickdesk_shell
     brickdesk_plugin
     brickdesk_session
     brickdesk_sysinfo
+    brickdesk_device
+    brickdesk_battery
   PRIVATE brickdesk_warnings
 )
 
@@ -365,6 +368,8 @@ target_link_libraries(brickdesk_settings
   PUBLIC brickdesk_core brickdesk_config brickdesk_input brickdesk_plugin
   PRIVATE brickdesk_perf brickdesk_warnings
 )
+
+target_link_libraries(brickdesk_shell PUBLIC brickdesk_settings)
 
 # --- in-app menu shim (M1-09) ------------------------------------------
 # LD_PRELOAD overlay for dynamically linked SDL2/EGL applications. It has no
@@ -412,6 +417,8 @@ endif()
 # --- application --------------------------------------------------------
 add_executable(brickdesk src/main.c)
 target_link_libraries(brickdesk PRIVATE brickdesk_shell brickdesk_warnings)
+target_compile_definitions(brickdesk PRIVATE
+  BRICKDESK_STATE_DIR="${BRICKDESK_STATE_DIR}")
 
 # Reference app for the session protocol. It writes the last-frame handoff
 # and a state file; see docs/app-protocol.md.

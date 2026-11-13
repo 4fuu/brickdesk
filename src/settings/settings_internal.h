@@ -118,6 +118,7 @@ struct bd_settings {
   bd_ui_fonts plugin_fonts;
 
   bd_settings_system system;
+  bd_settings_perf perf_apply;
   bd_plugin_host *host;
   bd_settings_status status;
   char clock[16];

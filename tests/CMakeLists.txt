@@ -89,8 +89,27 @@ target_compile_definitions(bd_plugin_test PRIVATE
   BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins")
 add_dependencies(bd_plugin_test bd_plugin_fixture bd_hello_plugin)
 
+add_executable(bd_shell_settings_test shell_settings_test.c)
+target_link_libraries(bd_shell_settings_test PRIVATE
+  brickdesk_shell
+  brickdesk_config
+  brickdesk_settings
+  brickdesk_warnings)
+target_compile_definitions(bd_shell_settings_test PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+  BRICKDESK_TEST_BATTERY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery/full")
+
+add_executable(bd_perf_client_test perf_client_test.c)
+target_link_libraries(bd_perf_client_test PRIVATE brickdesk_shell brickdesk_warnings)
+target_compile_definitions(bd_perf_client_test PRIVATE
+  BRICKDESK_TEST_SYSFS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sysfs"
+  BRICKDESK_TEST_PERF_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/perf")
+
 add_executable(bd_settings_test settings_test.c)
-target_link_libraries(bd_settings_test PRIVATE brickdesk_settings brickdesk_warnings)
+target_link_libraries(bd_settings_test PRIVATE
+  brickdesk_settings
+  brickdesk_device
+  brickdesk_warnings)
 target_compile_definitions(bd_settings_test PRIVATE
   BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
   BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
@@ -135,6 +154,16 @@ target_compile_definitions(bd_settings_capture PRIVATE
   BRICKDESK_TEST_PLUGIN_DIR="${PROJECT_SOURCE_DIR}/plugins"
   BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
 add_dependencies(bd_settings_capture bd_hello_plugin bd_plugin_fixture)
+
+# Scripted controller sequence through the real shell loop; not a CTest.
+add_executable(bd_shell_settings_demo shell_settings_demo.c)
+target_link_libraries(bd_shell_settings_demo PRIVATE
+  brickdesk_shell
+  brickdesk_config
+  brickdesk_settings
+  brickdesk_warnings)
+target_compile_definitions(bd_shell_settings_demo PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")
 
 # Scripted key sequence used to record the review clip; not a CTest.
 add_executable(bd_settings_demo settings_demo.c)
@@ -203,6 +232,16 @@ add_test(NAME home_scale COMMAND bd_home_scale)
 set_tests_properties(home_scale PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   TIMEOUT 300)
+
+add_test(NAME perf_client
+  COMMAND bd_perf_client_test $<TARGET_FILE:brickdesk-perfd>)
+set_tests_properties(perf_client PROPERTIES TIMEOUT 60)
+
+add_test(NAME shell_settings
+  COMMAND bd_shell_settings_test $<TARGET_FILE:brickdesk-perfd>)
+set_tests_properties(shell_settings PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 120)
 
 add_test(NAME settings COMMAND bd_settings_test)
 set_tests_properties(settings PROPERTIES

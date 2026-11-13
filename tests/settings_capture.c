@@ -185,6 +185,7 @@ int main(int argc, char **argv) {
   bd_settings_status status;
   memset(&status, 0, sizeof(status));
   status.clock = "22:26";
+  status.wifi_known = true;
   status.wifi = true;
   status.battery_percent = 82;
   bd_settings_set_status(settings, &status);
@@ -202,8 +203,33 @@ int main(int argc, char **argv) {
   uint64_t now = 1000;
 
   ok = open_page(settings, BD_SETTINGS_CATEGORY_APPEARANCE) &&
-       focus_key(settings, "theme.accent") &&
-       capture(platform, gfx, settings, out_dir, "settings_appearance", now) &&
+       focus_key(settings, "theme.accent") && ok;
+
+  status.battery_percent = 100;
+  bd_settings_set_status(settings, &status);
+  ok = capture(platform, gfx, settings, out_dir, "settings_status_online",
+               now) && ok;
+  now += 16;
+
+  status.wifi = false;
+  status.battery_percent = 12;
+  bd_settings_set_status(settings, &status);
+  ok = capture(platform, gfx, settings, out_dir, "settings_status_offline",
+               now) && ok;
+  now += 16;
+
+  status.wifi_known = false;
+  status.battery_percent = -1;
+  bd_settings_set_status(settings, &status);
+  ok = capture(platform, gfx, settings, out_dir, "settings_status_unknown",
+               now) && ok;
+  now += 16;
+
+  status.wifi_known = true;
+  status.wifi = true;
+  status.battery_percent = 82;
+  bd_settings_set_status(settings, &status);
+  ok = capture(platform, gfx, settings, out_dir, "settings_appearance", now) &&
        ok;
   now += 16;
   bd_settings_set_hint_visible(settings, true);

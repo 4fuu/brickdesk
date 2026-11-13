@@ -689,8 +689,8 @@ bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style) {
   home->custom_count = 0;
   home->surface_visible = true;
   home->quick_last_x = home->width;
-  home->brightness = 70;
-  home->volume = 45;
+  home->brightness = -1;
+  home->volume = -1;
   home->bluetooth = false;
   home->status.wifi_known = false;
   home->status.wifi = false;
@@ -980,6 +980,10 @@ void bd_home_set_surface_visible(bd_home *home, bool visible) {
   }
 }
 
+bool bd_home_surface_visible(const bd_home *home) {
+  return home != NULL && home->surface_visible;
+}
+
 int bd_home_focus(const bd_home *home) {
   return home != NULL ? home->focus : -1;
 }
@@ -1028,6 +1032,18 @@ static void ensure_visible(bd_home *home) {
     home->pan_anim.to = x;
     bd_home_damage_all(home);
   }
+}
+
+int bd_home_find_item(const bd_home *home, const char *id) {
+  if (home == NULL || id == NULL) {
+    return -1;
+  }
+  for (int i = 0; i < home->count; ++i) {
+    if (home->entries[i].id != NULL && strcmp(home->entries[i].id, id) == 0) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 void bd_home_set_focus(bd_home *home, int index) {
@@ -1234,6 +1250,80 @@ void bd_home_set_tab(bd_home *home, int tab) {
     }
   }
   bd_home_damage_all(home);
+}
+
+void bd_home_set_ambient_solid(bd_home *home, bool solid) {
+  if (home == NULL || home->style.ambient_solid == solid) {
+    return;
+  }
+  home->style.ambient_solid = solid;
+  if (home->launch == BD_HOME_LAUNCH_OPEN) {
+    home->launch_painted = false;
+  }
+  bd_home_damage_all(home);
+}
+
+bool bd_home_ambient_solid(const bd_home *home) {
+  return home != NULL && home->style.ambient_solid;
+}
+
+void bd_home_set_accent(bd_home *home, bd_color accent_base) {
+  if (home == NULL) {
+    return;
+  }
+  home->style.accent_base = accent_base;
+  bd_home_palette_apply(home);
+  if (home->launch == BD_HOME_LAUNCH_OPEN) {
+    home->launch_painted = false;
+  }
+  bd_home_damage_all(home);
+}
+
+bd_color bd_home_accent_base(const bd_home *home) {
+  return home != NULL ? home->style.accent_base : bd_color_rgb(224, 122, 95);
+}
+
+static void refresh_quick_values(bd_home *home) {
+  int value = -1;
+  home->brightness =
+      home->quick_backend.read != NULL &&
+              home->quick_backend.read(home->quick_backend.user,
+                                       BD_HOME_QUICK_BRIGHTNESS, &value)
+          ? clamp_int(value, 0, 100)
+          : -1;
+  value = -1;
+  home->volume =
+      home->quick_backend.read != NULL &&
+              home->quick_backend.read(home->quick_backend.user,
+                                       BD_HOME_QUICK_VOLUME, &value)
+          ? clamp_int(value, 0, 100)
+          : -1;
+}
+
+void bd_home_set_quick_backend(bd_home *home,
+                               const bd_home_quick_backend *backend) {
+  if (home == NULL) {
+    return;
+  }
+  if (backend != NULL) {
+    home->quick_backend = *backend;
+  } else {
+    memset(&home->quick_backend, 0, sizeof(home->quick_backend));
+  }
+  refresh_quick_values(home);
+  damage_quick_panel(home);
+}
+
+void bd_home_refresh_quick(bd_home *home) {
+  if (home == NULL) {
+    return;
+  }
+  int old_brightness = home->brightness;
+  int old_volume = home->volume;
+  refresh_quick_values(home);
+  if (old_brightness != home->brightness || old_volume != home->volume) {
+    damage_quick_panel(home);
+  }
 }
 
 void bd_home_set_blur_enabled(bd_home *home, bool enabled) {
@@ -1798,26 +1888,27 @@ static bool quick_adjust(bd_home *home, int delta) {
     return false;
   }
   int option = home->quick_sel - home->running_count;
-  bool changed = true;
-  switch (option) {
-    case 0:
-      home->brightness = clamp_int(home->brightness + delta * 10, 0, 100);
-      break;
-    case 1:
-      home->volume = clamp_int(home->volume + delta * 10, 0, 100);
-      break;
-    case 2:
-    case 3:
-      changed = false;
-      break;
-    default:
-      changed = false;
-      break;
+  if (option != 0 && option != 1) {
+    return false;
   }
-  if (changed) {
-    damage_quick_panel(home);
+  if (home->quick_backend.adjust == NULL) {
+    return false;
   }
-  return changed;
+  bd_home_quick_control control = option == 0 ? BD_HOME_QUICK_BRIGHTNESS
+                                              : BD_HOME_QUICK_VOLUME;
+  int value = -1;
+  if (!home->quick_backend.adjust(home->quick_backend.user, control,
+                                  delta * 10, &value)) {
+    return false;
+  }
+  value = clamp_int(value, 0, 100);
+  if (option == 0) {
+    home->brightness = value;
+  } else {
+    home->volume = value;
+  }
+  damage_quick_panel(home);
+  return true;
 }
 
 static bool quick_option_toggle(bd_home *home) {
@@ -1830,11 +1921,9 @@ static bool quick_option_toggle(bd_home *home) {
     case 1:
       return quick_adjust(home, 1);
     case 2:
-      return false;
     case 3:
-      home->bluetooth = !home->bluetooth;
-      damage_quick_panel(home);
-      return true;
+      /* No Wi-Fi/BT connection manager is wired this round. */
+      return false;
     default:
       return false;
   }

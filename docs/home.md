@@ -121,16 +121,28 @@ update once before starting an animation.
 - The top bar keeps category labels (18 px), Wi-Fi and battery status glyphs,
   the clock (16 px) and the text running count (13 px). The left project mark
   and "brickdesk" wordmark are both removed; there are no search/gear/avatar
-  buttons. When the platform exposes no battery or wireless interface, the
-  glyph gets a slash and the quick panel says "未知"; the shell never
-  substitutes 82% or an assumed connected state.
+  buttons. Wi-Fi/battery are drawn by the shared `bd_ui_draw_wifi()` /
+  `bd_ui_draw_battery()` helpers in `src/app/ui.c`; settings and the quick
+  panel use the same marks. When the platform exposes no battery or wireless
+  interface, the glyph gets a slash and the quick panel says "未知"; the shell
+  never substitutes 82% or an assumed connected state.
 - Type sizes are CSS pixels. The bundled Noto SC subsets report a 1.448 em
   ascent+descent span, so the module loads each face at 1.448× the nominal size.
   13 px is the smallest face used by badges, meta values and keycaps.
 - `bd_home_set_blur_enabled(false)` replaces the top/hint strip blur with plain
   gradients. Map this to `ui.blur` in the event loop.
+- `bd_home_set_ambient_solid(true)` switches `theme.ambient=solid` to a flat
+  backdrop; `baked` keeps the default vertical gradient. The shell applies both
+  from the config change callback, so a settings edit repaints without a
+  restart.
 - The quick panel's "N / M" limit comes from `bd_home_status.max_background`;
   the shell passes `session.max_background` (default 3).
+- Brightness and volume values come from `bd_home_quick_backend`: the shell
+  reads the real `device_av` value, applies a 10% step, persists the confirmed
+  read-back through config and returns it to the panel. A missing device shows
+  "未知" and an adjust attempt does nothing; there is no software-only
+  success. Wi-Fi/BT connection management is not wired this round, so the BT
+  row reads "不可用" and neither control toggles a fake state.
 - The quick panel has no persistent A/X/B footer. The hint bar, including its
   quick-panel actions, is drawn only while the Select hold action is active and
   is removed on release.

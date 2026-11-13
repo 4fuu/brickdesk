@@ -379,11 +379,14 @@ static bool menu_volume_set(void *user, int percent) {
 
 - 设置页和 menu 在同一个 UI 线程调用时无需额外锁；本模块不做线程安全承诺，
   多线程调用由调用方串行化。
-- 当前设置页的 `bd_settings_system` 只有 set 回调；`bd_av_*_get()` 可用于
-  页面打开时同步实际值。
-- 耳机事件建议由输入层在收到 `SW_HEADPHONE_INSERT` 后调用
-  `bd_av_audio_set_jack()`；如果输入层选择自己做路由，则把
-  `bd_av_audio_config.manual_route` 设为 true，只记录状态。
+- `bd_settings_system` 同时提供 set/get 回调。shell 用同一组
+  `bd_av_brightness`/`bd_av_audio` 句柄服务设置页和 home 快捷面板：页面显示
+  get 读到的真实值，set 成功后才写 config；set/get 失败显示“不可用”，不会
+  把软件默认值当成硬件成功。
+- shell 已经在 inputd 的 `switch` 广播中处理 `headphone` 的 0/1 值并调用
+  `bd_av_audio_set_jack()`。缺失/未知值不猜测；如果输入层选择自己做路由，
+  则把 `bd_av_audio_config.manual_route` 设为 true，只记录状态。
+- 应用内 menu shim 的真实 AV 接线仍是独立任务；shell callback 不能跨进程复用。
 
 ## 7. 诊断工具
 

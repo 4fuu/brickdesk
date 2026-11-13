@@ -194,62 +194,6 @@ int bd_sys_process_tree_rss_mb(int pid) {
   return (int)((total_kb + 1023u) / 1024u);
 }
 
-bool bd_sys_battery_percent(const char *root, int *percent) {
-  if (percent == NULL) {
-    return false;
-  }
-  char base[BD_SYSINFO_PATH];
-  if (!join_path(base, sizeof(base), root, "sys/class/power_supply")) {
-    return false;
-  }
-  DIR *directory = opendir(base);
-  if (directory == NULL) {
-    return false;
-  }
-  bool found = false;
-  int result = -1;
-  struct dirent *entry;
-  while ((entry = readdir(directory)) != NULL) {
-    if (entry->d_name[0] == '.') {
-      continue;
-    }
-    char supply_path[BD_SYSINFO_PATH];
-    char type_path[BD_SYSINFO_PATH];
-    char capacity_path[BD_SYSINFO_PATH];
-    if (!join_path(supply_path, sizeof(supply_path), base, entry->d_name) ||
-        !join_path(type_path, sizeof(type_path), supply_path, "type") ||
-        !join_path(capacity_path, sizeof(capacity_path), supply_path,
-                   "capacity")) {
-      continue;
-    }
-    char type[64];
-    if (!read_file_value(type_path, type, sizeof(type))) {
-      continue;
-    }
-    if (strcmp(type, "Battery") != 0) {
-      continue;
-    }
-    char capacity[64];
-    if (!read_file_value(capacity_path, capacity, sizeof(capacity))) {
-      continue;
-    }
-    char *end = NULL;
-    long value = strtol(capacity, &end, 10);
-    if (end == capacity || value < 0 || value > 100) {
-      continue;
-    }
-    result = (int)value;
-    found = true;
-    break;
-  }
-  closedir(directory);
-  if (!found) {
-    return false;
-  }
-  *percent = result;
-  return true;
-}
-
 bd_wifi_state bd_sys_wifi_state(const char *root) {
   char base[BD_SYSINFO_PATH];
   if (!join_path(base, sizeof(base), root, "sys/class/net")) {

@@ -210,8 +210,8 @@ int main(int argc, char **argv) {
 
   bd_home *home = bd_shell_home(shell);
   int plugin_index = bd_home_item_count(home) - 1;
-  CHECK(bd_home_item_count(home) == FIXTURE_APP_COUNT + 1,
-        "home should have all apps plus the plugin tile, got %d",
+  CHECK(bd_home_item_count(home) == FIXTURE_APP_COUNT + 2,
+        "home should have all apps, settings and the plugin tile, got %d",
         bd_home_item_count(home));
   CHECK(hello != NULL && bd_plugin_state_of(hello) != BD_PLUGIN_RUNNING,
         "shell creation alone must not start the plugin tile");

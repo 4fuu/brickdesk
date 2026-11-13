@@ -33,13 +33,6 @@ typedef enum bd_wifi_state {
 int bd_sys_process_tree_rss_mb(int pid);
 
 /*
- * Battery capacity from <root>/sys/class/power_supply/<supply>/capacity where
- * type is "Battery".  Returns false when no battery is exposed.  root may be
- * NULL or "" for the real /sys tree; tests pass a fixture prefix.
- */
-bool bd_sys_battery_percent(const char *root, int *percent);
-
-/*
  * Wireless link state from <root>/sys/class/net/<iface>/wireless and
  * operstate.  Returns UNKNOWN when no wireless interface exists or the state
  * cannot be read, DISCONNECTED when an interface exists but is down, and

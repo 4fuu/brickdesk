@@ -12,10 +12,14 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "brickdesk/device_av.h"
+#include "brickdesk/device_battery.h"
+#include "brickdesk/perf_client.h"
 #include "brickdesk/sysinfo.h"
 #include "brickdesk/theme.h"
 #include "brickdesk/ui.h"
@@ -28,6 +32,9 @@
 #define BD_SHELL_MEMORY_MS 1000
 #define BD_SHELL_MEMORY_RETRY_MS 5000
 #define BD_SHELL_PLUGIN_ITEM_ID "plugin-tile"
+#define BD_SHELL_SETTINGS_ITEM_ID "brickdesk-settings"
+#define BD_SHELL_PERF_TIMEOUT_MS 250
+#define BD_SHELL_BATTERY_RETRY_MS 60000
 
 typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
@@ -54,9 +61,25 @@ typedef struct shell_app_runtime {
 struct bd_shell {
   bd_platform *platform;
   bd_gfx *gfx;
-  const bd_config *settings;
+  bd_config *settings;
   bd_plugin_host *plugins;
   bool verbose;
+
+  bd_settings *settings_page;
+  bd_settings_system system;
+  bd_av_brightness av_brightness;
+  bool av_brightness_ready;
+  bd_av_audio av_audio;
+  bool av_audio_ready;
+  bd_home_quick_backend home_quick;
+  char perf_socket[BD_PERF_PATH_MAX];
+  char battery_root[BD_SHELL_PATH_MAX];
+
+  bd_battery battery;
+  bd_battery_policy battery_policy;
+  bool battery_policy_ready;
+  bool battery_opened;
+  uint64_t battery_next_ms;
 
   bd_app_list *apps;
   shell_app_runtime *runtime;
@@ -102,6 +125,7 @@ struct bd_shell {
   int status_battery;
   bool status_wifi_known;
   bool status_wifi;
+  int status_max_background;
   uint64_t status_sampled_ms;
 
   bool dirty;
@@ -152,6 +176,387 @@ static int merge_timeout(int best, int value) {
     return value;
   }
   return best;
+}
+
+/* ------------------------------------------------------ device and status */
+
+static void shell_publish_status(bd_shell *shell, bool force) {
+  (void)force;
+  if (shell == NULL || shell->home == NULL) {
+    return;
+  }
+  int max_background =
+      (int)bd_config_get_int(shell->settings, "session.max_background", 3);
+  bd_home_status home_status;
+  memset(&home_status, 0, sizeof(home_status));
+  home_status.clock = shell->clock;
+  home_status.wifi_known = shell->status_wifi_known;
+  home_status.wifi = shell->status_wifi;
+  home_status.battery_percent = shell->status_battery;
+  home_status.max_background = max_background;
+  bd_home_set_status(shell->home, &home_status);
+  if (shell->settings_page != NULL) {
+    bd_settings_status settings_status;
+    memset(&settings_status, 0, sizeof(settings_status));
+    settings_status.clock = shell->clock;
+    settings_status.wifi_known = shell->status_wifi_known;
+    settings_status.wifi = shell->status_wifi;
+    settings_status.battery_percent = shell->status_battery;
+    bd_settings_set_status(shell->settings_page, &settings_status);
+  }
+  shell->status_max_background = max_background;
+  shell->dirty = true;
+}
+
+static void shell_refresh_storage(bd_shell *shell) {
+  if (shell == NULL || shell->settings_page == NULL) {
+    return;
+  }
+  const char *dir = bd_config_dir(shell->settings);
+  struct statvfs info;
+  if (dir == NULL || statvfs(dir, &info) != 0 || info.f_frsize == 0) {
+    bd_settings_storage storage = {-1, -1};
+    bd_settings_set_storage(shell->settings_page, &storage);
+    return;
+  }
+  uint64_t total = (uint64_t)info.f_blocks * info.f_frsize;
+  uint64_t free_bytes = (uint64_t)info.f_bavail * info.f_frsize;
+  bd_settings_storage storage;
+  storage.total_mb = (long)(total / (1024u * 1024u));
+  storage.free_mb = (long)(free_bytes / (1024u * 1024u));
+  bd_settings_set_storage(shell->settings_page, &storage);
+}
+
+static bool shell_system_read(void *user, bd_home_quick_control control,
+                              int *percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || percent == NULL) {
+    return false;
+  }
+  if (control == BD_HOME_QUICK_BRIGHTNESS) {
+    return shell->system.get_brightness != NULL &&
+           shell->system.get_brightness(shell->system.user, percent);
+  }
+  return shell->system.get_volume != NULL &&
+         shell->system.get_volume(shell->system.user, percent);
+}
+
+static bool shell_system_write(bd_shell *shell,
+                               bd_home_quick_control control, int percent) {
+  if (control == BD_HOME_QUICK_BRIGHTNESS) {
+    return shell->system.set_brightness != NULL &&
+           shell->system.set_brightness(shell->system.user, percent);
+  }
+  return shell->system.set_volume != NULL &&
+         shell->system.set_volume(shell->system.user, percent);
+}
+
+static bool shell_home_adjust(void *user, bd_home_quick_control control,
+                              int delta, int *percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || percent == NULL) {
+    return false;
+  }
+  int current = 0;
+  if (!shell_system_read(shell, control, &current)) {
+    return false;
+  }
+  int next = current + delta;
+  if (next < 0) {
+    next = 0;
+  }
+  if (next > 100) {
+    next = 100;
+  }
+  if (!shell_system_write(shell, control, next)) {
+    return false;
+  }
+  int actual = 0;
+  if (!shell_system_read(shell, control, &actual)) {
+    return false;
+  }
+  const char *key = control == BD_HOME_QUICK_BRIGHTNESS
+                        ? "display.brightness"
+                        : "audio.volume";
+  char value[16];
+  char error[128] = {0};
+  snprintf(value, sizeof(value), "%d", actual);
+  if (!bd_config_set(shell->settings, key, value, error, sizeof(error))) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: config: %s\n", error);
+    }
+  } else if (!bd_config_save(shell->settings, error, sizeof(error))) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: save: %s\n", error);
+    }
+  }
+  *percent = actual;
+  return true;
+}
+
+static void shell_home_quick_refresh(bd_shell *shell) {
+  if (shell != NULL && shell->home != NULL) {
+    bd_home_refresh_quick(shell->home);
+  }
+}
+
+static bool shell_brightness_set(void *user, int percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || !shell->av_brightness_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_brightness_set(&shell->av_brightness, percent, &error) ==
+         BD_AV_OK;
+}
+
+static bool shell_brightness_get(void *user, int *percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || percent == NULL || !shell->av_brightness_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_brightness_get(&shell->av_brightness, percent, &error) ==
+         BD_AV_OK;
+}
+
+static bool shell_volume_set(void *user, int percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || !shell->av_audio_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_audio_set_volume(&shell->av_audio, percent, &error) == BD_AV_OK;
+}
+
+static bool shell_volume_get(void *user, int *percent) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || percent == NULL || !shell->av_audio_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_audio_get_volume(&shell->av_audio, percent, &error) == BD_AV_OK;
+}
+
+static bool shell_mute_set(void *user, bool muted) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || !shell->av_audio_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_audio_set_muted(&shell->av_audio, muted, &error) == BD_AV_OK;
+}
+
+static bool shell_mute_get(void *user, bool *muted) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || muted == NULL || !shell->av_audio_ready) {
+    return false;
+  }
+  bd_av_error error;
+  return bd_av_audio_get_muted(&shell->av_audio, muted, &error) == BD_AV_OK;
+}
+
+static void shell_open_devices(bd_shell *shell, const bd_shell_config *config) {
+  memset(&shell->system, 0, sizeof(shell->system));
+  memset(&shell->av_brightness, 0, sizeof(shell->av_brightness));
+  memset(&shell->av_audio, 0, sizeof(shell->av_audio));
+  shell->av_brightness_ready = false;
+  shell->av_audio_ready = false;
+  if (config->settings_system != NULL) {
+    shell->system = *config->settings_system;
+    shell->home_quick.read = shell_system_read;
+    shell->home_quick.adjust = shell_home_adjust;
+    shell->home_quick.user = shell;
+    return;
+  }
+
+  bd_av_error error;
+  bd_av_brightness_config brightness_config;
+  memset(&brightness_config, 0, sizeof(brightness_config));
+  brightness_config.sysfs_root = config->av_sysfs_root;
+  brightness_config.backend = BD_AV_BRIGHTNESS_AUTO;
+  bd_av_result brightness_result = bd_av_brightness_probe(
+      &shell->av_brightness, &brightness_config, &error);
+  shell->av_brightness_ready = brightness_result == BD_AV_OK;
+  if (!shell->av_brightness_ready && shell->verbose) {
+    fprintf(stderr, "brickdesk: brightness unavailable: %s\n",
+            error.message[0] != '\0' ? error.message : "probe failed");
+  }
+
+  bd_av_audio_config audio_config;
+  memset(&audio_config, 0, sizeof(audio_config));
+  audio_config.snd_root = config->av_snd_root;
+  audio_config.proc_cards = config->av_proc_cards;
+  audio_config.speaker_mute = config->av_speaker_mute;
+  bd_av_result audio_result =
+      bd_av_audio_open(&shell->av_audio, &audio_config, &error);
+  shell->av_audio_ready = audio_result == BD_AV_OK;
+  if (!shell->av_audio_ready && shell->verbose) {
+    fprintf(stderr, "brickdesk: audio unavailable: %s\n",
+            error.message[0] != '\0' ? error.message : "probe failed");
+  }
+
+  shell->system.user = shell;
+  shell->system.set_brightness = shell_brightness_set;
+  shell->system.set_volume = shell_volume_set;
+  shell->system.set_muted = shell_mute_set;
+  shell->system.get_brightness = shell_brightness_get;
+  shell->system.get_volume = shell_volume_get;
+  shell->system.get_muted = shell_mute_get;
+  shell->home_quick.read = shell_system_read;
+  shell->home_quick.adjust = shell_home_adjust;
+  shell->home_quick.user = shell;
+}
+
+static bool shell_perf_apply(void *user, const char *profile, char *error,
+                             size_t error_size) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return false;
+  }
+  bd_perf_client_result result;
+  bd_perf_client_status status = bd_perf_client_set_global(
+      shell->perf_socket, profile, BD_SHELL_PERF_TIMEOUT_MS, &result, error,
+      error_size);
+  if (status != BD_PERF_CLIENT_OK) {
+    if (error != NULL && error_size > 0 && error[0] == '\0') {
+      snprintf(error, error_size, "perf 服务%s", bd_perf_client_status_name(status));
+    }
+    return false;
+  }
+  if (strcmp(result.profile, profile) != 0) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "perf 确认了 %s，而不是 %s", result.profile,
+               profile);
+    }
+    return false;
+  }
+  return true;
+}
+
+static void shell_config_changed(void *user, const char *key) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || key == NULL) {
+    return;
+  }
+  if (strcmp(key, "theme.accent") == 0) {
+    const char *accent_name =
+        bd_config_get_string(shell->settings, "theme.accent", "persimmon");
+    const char *hex = bd_config_accent_hex(accent_name, true);
+    bd_color accent;
+    if (hex != NULL && bd_color_from_hex(hex, &accent)) {
+      shell->home_style.accent_base = accent;
+      bd_home_set_accent(shell->home, accent);
+      shell->plugin_accent = bd_accent_palette_from(accent, true);
+      if (shell->plugins != NULL) {
+        uint32_t rgb = ((uint32_t)(accent.r * 255.0f + 0.5f) << 16) |
+                       ((uint32_t)(accent.g * 255.0f + 0.5f) << 8) |
+                       (uint32_t)(accent.b * 255.0f + 0.5f);
+        bd_plugin_host_set_theme(shell->plugins, true, rgb);
+      }
+      shell->dirty = true;
+    }
+  } else if (strcmp(key, "ui.blur") == 0) {
+    bool blur = bd_config_get_bool(shell->settings, "ui.blur", true);
+    shell->home_style.blur_enabled = blur;
+    bd_home_set_blur_enabled(shell->home, blur);
+    shell->dirty = true;
+  } else if (strcmp(key, "theme.ambient") == 0) {
+    bool solid =
+        strcmp(bd_config_get_string(shell->settings, "theme.ambient", "baked"),
+               "solid") == 0;
+    shell->home_style.ambient_solid = solid;
+    bd_home_set_ambient_solid(shell->home, solid);
+    shell->dirty = true;
+  } else if (strcmp(key, "display.brightness") == 0 ||
+             strcmp(key, "audio.volume") == 0 ||
+             strcmp(key, "audio.mute") == 0) {
+    shell_home_quick_refresh(shell);
+  } else if (strcmp(key, "session.max_background") == 0) {
+    shell_publish_status(shell, true);
+  }
+}
+
+static void shell_battery_policy_config(int low_percent,
+                                        bd_battery_policy_config *config) {
+  bd_battery_policy_config_default(config);
+  int critical = low_percent;
+  if (critical < 0) {
+    critical = 0;
+  }
+  /* critical_percent must stay below reminder_percent (<=100). */
+  if (critical > 99) {
+    critical = 99;
+  }
+  int reminder = critical < 20 ? 20 : critical + 5;
+  if (reminder > 100) {
+    reminder = 100;
+  }
+  if (reminder <= critical) {
+    reminder = critical + 1;
+  }
+  config->critical_percent = critical;
+  config->reminder_percent = reminder;
+  if (reminder + config->reminder_hysteresis_percent > 100) {
+    config->reminder_hysteresis_percent = 100 - reminder;
+  }
+  if (critical + config->critical_hysteresis_percent > 100) {
+    config->critical_hysteresis_percent = 100 - critical;
+  }
+  /* This round only displays capacity; shutdown/PMIC is a separate task. */
+  config->recommend_shutdown = false;
+}
+
+static void shell_battery_sample(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || now < shell->battery_next_ms) {
+    return;
+  }
+  if (!shell->battery_opened) {
+    bd_battery_config config;
+    memset(&config, 0, sizeof(config));
+    config.sysfs_root = shell->battery_root[0] != '\0' ? shell->battery_root
+                                                        : NULL;
+    config.battery_name = NULL;
+    bd_battery_error error;
+    bd_battery_result opened = bd_battery_open(&shell->battery, &config, &error);
+    shell->battery_opened = opened != BD_BATTERY_ERR_ARGUMENT;
+    if (opened != BD_BATTERY_OK && shell->verbose) {
+      fprintf(stderr, "brickdesk: battery: %s\n", error.message);
+    }
+  }
+  bd_battery_status status;
+  memset(&status, 0, sizeof(status));
+  bd_battery_error error;
+  bd_battery_result read = bd_battery_read(&shell->battery, &status, &error);
+  if (read == BD_BATTERY_ERR_STALE) {
+    shell->battery_opened = false;
+  }
+  int percent = -1;
+  if (read == BD_BATTERY_OK && status.capacity_known) {
+    percent = status.capacity_percent;
+  }
+  if (percent != shell->status_battery) {
+    shell->status_battery = percent;
+    shell_publish_status(shell, true);
+  }
+  if (shell->battery_policy_ready) {
+    bd_battery_policy_output output;
+    memset(&output, 0, sizeof(output));
+    bd_battery_policy_result policy_result = bd_battery_policy_update(
+        &shell->battery_policy, read == BD_BATTERY_OK ? &status : NULL, now,
+        &output);
+    if (policy_result != BD_BATTERY_POLICY_OK) {
+      fprintf(stderr, "brickdesk: battery policy stopped: %s\n",
+              bd_battery_policy_result_name(policy_result));
+      shell->battery_policy_ready = false;
+    } else {
+      shell->battery_next_ms = output.next_sample_ms;
+    }
+  }
+  if (!shell->battery_policy_ready || shell->battery_next_ms == 0) {
+    /* Explicit degraded cadence; never a silent fast polling loop. */
+    shell->battery_next_ms = now + BD_SHELL_BATTERY_RETRY_MS;
+  }
 }
 
 /* --------------------------------------------------------------- JSON bits */
@@ -244,6 +649,20 @@ static bool json_bool(const char *json, const char *key, bool *out) {
   return false;
 }
 
+static bool json_int(const char *json, const char *key, int *out) {
+  const char *value = NULL;
+  if (!json_token(json, key, &value) || out == NULL) {
+    return false;
+  }
+  char *end = NULL;
+  long number = strtol(value, &end, 10);
+  if (end == value || number < -2147483647L || number > 2147483647L) {
+    return false;
+  }
+  *out = (int)number;
+  return true;
+}
+
 /* ----------------------------------------------------------- input source */
 
 static void shell_dispatch_action(bd_shell *shell, const char *action,
@@ -252,6 +671,7 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed);
 static bool shell_launch_app(bd_shell *shell, const char *app_id);
 static void shell_refresh_running(bd_shell *shell);
 static void shell_service(bd_shell *shell);
+static void shell_close_settings(bd_shell *shell);
 
 static void local_emit(void *user, const bd_input_output *event) {
   bd_shell *shell = (bd_shell *)user;
@@ -294,6 +714,11 @@ static void inputd_disconnect(bd_shell *shell, const char *reason) {
               reason != NULL ? reason : "eof");
     }
     bd_home_set_hint_visible(shell->home, false);
+    if (shell->settings_page != NULL) {
+      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
+      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
+      bd_settings_set_hint_visible(shell->settings_page, false);
+    }
     shell->dirty = true;
   }
 }
@@ -381,8 +806,39 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
     }
     return;
   }
+  if (strcmp(type, "switch") == 0) {
+    char name[32];
+    int value = -1;
+    if (!json_string(line, "switch", name, sizeof(name)) ||
+        !json_int(line, "value", &value)) {
+      return;
+    }
+    if (strcmp(name, "headphone") != 0 || (value != 0 && value != 1)) {
+      return;
+    }
+    if (!shell->av_audio_ready) {
+      if (shell->verbose) {
+        fprintf(stderr, "brickdesk: headphone switch ignored: audio unavailable\n");
+      }
+      return;
+    }
+    bd_av_error error;
+    bd_av_result result =
+        bd_av_audio_set_jack(&shell->av_audio, value == 1, &error);
+    if (result != BD_AV_OK && shell->verbose) {
+      fprintf(stderr, "brickdesk: headphone switch: %s\n",
+              error.message[0] != '\0' ? error.message
+                                       : bd_av_result_name(result));
+    }
+    return;
+  }
   if (strcmp(type, "release_all") == 0) {
     bd_home_set_hint_visible(shell->home, false);
+    if (shell->settings_page != NULL) {
+      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
+      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
+      bd_settings_set_hint_visible(shell->settings_page, false);
+    }
     shell->dirty = true;
   }
 }
@@ -696,7 +1152,9 @@ static void shell_update_home(bd_shell *shell, uint64_t now) {
   if (shell->home == NULL) {
     return;
   }
-  bd_home_set_surface_visible(shell->home, shell->visible);
+  bool settings_open = shell->settings_page != NULL &&
+                       bd_settings_is_open(shell->settings_page);
+  bd_home_set_surface_visible(shell->home, shell->visible && !settings_open);
   uint64_t wake_at = 0;
   bool was_active = bd_home_needs_frame_until(shell->home, &wake_at);
   bd_home_update(shell->home, now);
@@ -730,6 +1188,7 @@ static void shell_request_return(bd_shell *shell, const char *app_id) {
   if (shell->home == NULL || app_id == NULL || app_id[0] == '\0') {
     return;
   }
+  shell_close_settings(shell);
   copy_text(shell->return_app, sizeof(shell->return_app), app_id);
   shell_update_home(shell, shell_now(shell));
 }
@@ -884,36 +1343,30 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
     return;
   }
   shell->status_sampled_ms = now;
-  int battery = -1;
-  if (!bd_sys_battery_percent(NULL, &battery)) {
-    battery = -1;
-  }
   bd_wifi_state wifi = bd_sys_wifi_state(NULL);
   bool known = wifi != BD_WIFI_UNKNOWN;
   bool connected = wifi == BD_WIFI_CONNECTED;
-  if (!force && battery == shell->status_battery &&
-      known == shell->status_wifi_known && connected == shell->status_wifi) {
+  if (!force && known == shell->status_wifi_known &&
+      connected == shell->status_wifi) {
     return;
   }
-  shell->status_battery = battery;
   shell->status_wifi_known = known;
   shell->status_wifi = connected;
-  bd_home_status status;
-  memset(&status, 0, sizeof(status));
-  status.clock = shell->clock;
-  status.wifi_known = known;
-  status.wifi = connected;
-  status.battery_percent = battery;
-  status.max_background =
-      (int)bd_config_get_int(shell->settings, "session.max_background", 3);
-  bd_home_set_status(shell->home, &status);
-  shell->dirty = true;
+  shell_publish_status(shell, true);
 }
 
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
   shell_update_home(shell, now);
   shell_refresh_status(shell, false);
+  shell_battery_sample(shell, now);
+  if (shell->settings_page != NULL && bd_settings_is_open(shell->settings_page)) {
+    bd_settings_update(shell->settings_page, now);
+    uint64_t wake_at = 0;
+    if (bd_settings_needs_frame_until(shell->settings_page, &wake_at)) {
+      shell->dirty = true;
+    }
+  }
   if (!shell->inputd_connected) {
     bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
   }
@@ -1018,6 +1471,96 @@ static bool shell_home_input(bd_shell *shell, bd_home_action action) {
   return changed;
 }
 
+bool bd_shell_open_settings(bd_shell *shell, int category) {
+  if (shell == NULL || shell->home == NULL || shell->settings_page == NULL) {
+    return false;
+  }
+  if (!bd_settings_open(shell->settings_page, category)) {
+    return false;
+  }
+  bd_home_set_hint_visible(shell->home, false);
+  bd_home_set_surface_visible(shell->home, false);
+  shell_refresh_storage(shell);
+  shell_publish_status(shell, true);
+  shell->dirty = true;
+  return true;
+}
+
+static void shell_close_settings(bd_shell *shell) {
+  if (shell == NULL || shell->settings_page == NULL) {
+    return;
+  }
+  bool was_open = bd_settings_is_open(shell->settings_page);
+  if (was_open) {
+    bd_settings_close(shell->settings_page);
+  }
+  if (shell->home != NULL) {
+    bd_home_set_surface_visible(shell->home, shell->visible);
+    bd_home_damage(shell->home);
+  }
+  if (was_open) {
+    shell_home_quick_refresh(shell);
+    shell->dirty = true;
+  }
+}
+
+bool bd_shell_settings_visible(const bd_shell *shell) {
+  return shell != NULL && shell->settings_page != NULL &&
+         bd_settings_is_open(shell->settings_page);
+}
+
+static void shell_settings_key(bd_shell *shell, bd_key key, bool pressed) {
+  bd_settings *page = shell->settings_page;
+  if (page == NULL || !bd_settings_is_open(page)) {
+    return;
+  }
+  if (!pressed) {
+    if (key == BD_KEY_LEFT) {
+      bd_settings_hold(page, BD_SETTINGS_ACTION_LEFT, false);
+    } else if (key == BD_KEY_RIGHT) {
+      bd_settings_hold(page, BD_SETTINGS_ACTION_RIGHT, false);
+    }
+    return;
+  }
+  bool changed = false;
+  switch (key) {
+    case BD_KEY_A:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_ACCEPT);
+      break;
+    case BD_KEY_B:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_CANCEL);
+      break;
+    case BD_KEY_LEFT:
+      bd_settings_hold(page, BD_SETTINGS_ACTION_LEFT, true);
+      changed = true;
+      break;
+    case BD_KEY_RIGHT:
+      bd_settings_hold(page, BD_SETTINGS_ACTION_RIGHT, true);
+      changed = true;
+      break;
+    case BD_KEY_UP:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_UP);
+      break;
+    case BD_KEY_DOWN:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_DOWN);
+      break;
+    case BD_KEY_L1:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_CATEGORY_PREV);
+      break;
+    case BD_KEY_R1:
+      changed = bd_settings_input(page, BD_SETTINGS_ACTION_CATEGORY_NEXT);
+      break;
+    default:
+      return;
+  }
+  if (changed) {
+    shell->dirty = true;
+  }
+  if (!bd_settings_is_open(page)) {
+    shell_close_settings(shell);
+  }
+}
+
 static void shell_accept(bd_shell *shell) {
   if (shell->home == NULL) {
     return;
@@ -1031,6 +1574,10 @@ static void shell_accept(bd_shell *shell) {
     if (strcmp(app_id, BD_SHELL_PLUGIN_ITEM_ID) == 0) {
       return;
     }
+    if (strcmp(app_id, BD_SHELL_SETTINGS_ITEM_ID) == 0) {
+      bd_shell_open_settings(shell, BD_SETTINGS_CATEGORY_APPEARANCE);
+      return;
+    }
     shell_launch_app(shell, app_id);
     return;
   }
@@ -1041,7 +1588,15 @@ static void shell_accept(bd_shell *shell) {
 }
 
 static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed) {
-  if (!shell->visible || !pressed) {
+  if (!shell->visible) {
+    return;
+  }
+  if (shell->settings_page != NULL &&
+      bd_settings_is_open(shell->settings_page)) {
+    shell_settings_key(shell, key, pressed);
+    return;
+  }
+  if (!pressed) {
     return;
   }
   switch (key) {
@@ -1114,7 +1669,12 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
     return;
   }
   if (strcmp(action, "ui.hint") == 0 && shell->visible) {
-    bd_home_set_hint_visible(shell->home, pressed);
+    if (shell->settings_page != NULL &&
+        bd_settings_is_open(shell->settings_page)) {
+      bd_settings_set_hint_visible(shell->settings_page, pressed);
+    } else {
+      bd_home_set_hint_visible(shell->home, pressed);
+    }
     shell->dirty = true;
   }
   if (strcmp(action, "session.return_home") == 0 && pressed &&
@@ -1275,7 +1835,6 @@ static const shell_demo_item SHELL_DEMO_ITEMS[] = {
     {"demo-space", "星海拾荒者", "第 7 扇区 · 已玩 6 小时", 2, 2, 2, 76, 92,
      112, 0},
     {"demo-terminal", "终端", "本机 Shell", 1, 1, 3, 44, 46, 44, 0},
-    {"demo-settings", "设置", "显示与声音", 1, 1, 4, 111, 115, 123, 0},
     {"demo-music", "音乐", "夜航 · 林间电台", 2, 2, 5, 123, 90, 140,
      BD_HOME_ITEM_LIVE},
     {"demo-reading", "阅读", "《三体》第 14 章", 1, 1, 6, 93, 124, 90, 0},
@@ -1338,6 +1897,19 @@ static bool shell_has_plugin_tile(const bd_shell *shell) {
   return shell != NULL && shell->plugin_tile != NULL;
 }
 
+static void shell_settings_item(const bd_shell *shell, bd_home_item *item) {
+  memset(item, 0, sizeof(*item));
+  item->id = BD_SHELL_SETTINGS_ITEM_ID;
+  item->title = "设置";
+  item->subtitle = "显示、声音、网络与按键";
+  item->placeholder =
+      bd_color_mix(bd_color_rgb(18, 16, 13), shell->home_style.accent_base,
+                   0.34f);
+  item->span_w = 1;
+  item->span_h = 1;
+  item->flags = 0;
+}
+
 static void shell_plugin_tile_item(const bd_shell *shell, bd_home_item *item) {
   memset(item, 0, sizeof(*item));
   item->id = BD_SHELL_PLUGIN_ITEM_ID;
@@ -1388,14 +1960,14 @@ static bool shell_attach_plugin_tile(bd_shell *shell) {
                                  shell_plugin_tile_draw, shell);
 }
 
-static int shell_item_count_with_plugin(const bd_shell *shell, int count) {
-  return count + (shell_has_plugin_tile(shell) ? 1 : 0);
+static int shell_item_count_with_builtins(const bd_shell *shell, int count) {
+  return count + 1 + (shell_has_plugin_tile(shell) ? 1 : 0);
 }
 
 
 static bool shell_set_demo_items(bd_shell *shell) {
   int base = (int)(sizeof(SHELL_DEMO_ITEMS) / sizeof(SHELL_DEMO_ITEMS[0]));
-  int count = shell_item_count_with_plugin(shell, base);
+  int count = shell_item_count_with_builtins(shell, base);
   bd_home_item *items =
       (bd_home_item *)calloc((size_t)count, sizeof(*items));
   char(*covers)[512] = (char(*)[512])calloc((size_t)count, 512);
@@ -1419,8 +1991,10 @@ static bool shell_set_demo_items(bd_shell *shell) {
     items[i].flags = demo->flags;
     items[i].badge_number = i + 1;
   }
+  shell_settings_item(shell, &items[base]);
+  items[base].badge_number = base + 1;
   if (shell_has_plugin_tile(shell)) {
-    shell_plugin_tile_item(shell, &items[base]);
+    shell_plugin_tile_item(shell, &items[base + 1]);
   }
   bool ok = bd_home_set_items(shell->home, items, count);
   free(items);
@@ -1440,7 +2014,7 @@ static bool shell_set_app_items(bd_shell *shell) {
     return false;
   }
   int base = (int)count;
-  int total = shell_item_count_with_plugin(shell, base);
+  int total = shell_item_count_with_builtins(shell, base);
   bd_home_item *items = (bd_home_item *)calloc((size_t)total, sizeof(*items));
   char(*covers)[BD_APP_PATH_MAX] =
       (char(*)[BD_APP_PATH_MAX])calloc((size_t)total, BD_APP_PATH_MAX);
@@ -1479,8 +2053,10 @@ static bool shell_set_app_items(bd_shell *shell) {
                          : 0;
     items[i].badge_number = (int)i + 1;
   }
+  shell_settings_item(shell, &items[base]);
+  items[base].badge_number = base + 1;
   if (shell_has_plugin_tile(shell)) {
-    shell_plugin_tile_item(shell, &items[base]);
+    shell_plugin_tile_item(shell, &items[base + 1]);
   }
   bool ok = bd_home_set_items(shell->home, items, total);
   free(items);
@@ -1532,9 +2108,15 @@ bool bd_shell_render(bd_shell *shell) {
   if (shell == NULL || !shell->visible || shell->home == NULL) {
     return false;
   }
-  bd_home_update(shell->home, shell_now(shell));
+  bool settings_open = shell->settings_page != NULL &&
+                       bd_settings_is_open(shell->settings_page);
   bd_gfx_begin_frame(shell->gfx);
-  bd_home_draw(shell->home, shell->gfx);
+  if (settings_open) {
+    bd_settings_draw(shell->settings_page, shell->gfx);
+  } else {
+    bd_home_update(shell->home, shell_now(shell));
+    bd_home_draw(shell->home, shell->gfx);
+  }
   bd_gfx_end_frame(shell->gfx);
   bd_gfx_stats stats = bd_gfx_get_stats(shell->gfx);
   if (stats.presented) {
@@ -1581,12 +2163,27 @@ static int shell_poll_timeout(bd_shell *shell) {
       best = merge_timeout(best, (int)remaining);
     }
   }
+  if (shell->battery_next_ms != 0) {
+    uint64_t now = shell_now(shell);
+    uint64_t remaining = shell->battery_next_ms > now
+                             ? shell->battery_next_ms - now
+                             : 0;
+    best = merge_timeout(best, (int)remaining);
+  }
   if (shell->visible && shell->home != NULL) {
     uint64_t wake_at = 0;
-    if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+    bool frame_needed = false;
+    if (shell->settings_page != NULL &&
+        bd_settings_is_open(shell->settings_page)) {
+      frame_needed = bd_settings_needs_frame_until(shell->settings_page,
+                                                   &wake_at);
+    } else {
+      frame_needed = bd_home_needs_frame_until(shell->home, &wake_at);
+    }
+    if (frame_needed) {
       uint64_t now = shell_now(shell);
       uint64_t remaining = wake_at > now ? wake_at - now : 0;
-      /* A transition or decode keeps a 60 Hz frame deadline. */
+      /* A transition, decode or slider repeat keeps a 60 Hz deadline. */
       if (remaining > 16 || (shell->test_clock && remaining == 0)) {
         remaining = 16;
       }
@@ -1659,7 +2256,12 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
   }
   if (shell->visible && shell->home != NULL) {
     uint64_t wake_at = 0;
-    if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+    bool frame_needed = shell->settings_page != NULL &&
+                                bd_settings_is_open(shell->settings_page)
+                            ? bd_settings_needs_frame_until(shell->settings_page,
+                                                            &wake_at)
+                            : bd_home_needs_frame_until(shell->home, &wake_at);
+    if (frame_needed) {
       shell->dirty = true;
     }
   }
@@ -1715,7 +2317,12 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
     shell_service(shell);
     if (shell->visible && shell->home != NULL) {
       uint64_t wake_at = 0;
-      if (bd_home_needs_frame_until(shell->home, &wake_at)) {
+      bool frame_needed =
+          shell->settings_page != NULL &&
+                  bd_settings_is_open(shell->settings_page)
+              ? bd_settings_needs_frame_until(shell->settings_page, &wake_at)
+              : bd_home_needs_frame_until(shell->home, &wake_at);
+      if (frame_needed) {
         shell->dirty = true;
       }
     }
@@ -1798,6 +2405,13 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->inputd_fd = -1;
   shell->visible = true;
   shell->dirty = true;
+  shell->status_battery = -1;
+  if (config->battery_root != NULL) {
+    copy_text(shell->battery_root, sizeof(shell->battery_root),
+              config->battery_root);
+  }
+  copy_text(shell->perf_socket, sizeof(shell->perf_socket),
+            bd_perf_client_default_socket());
 
   const char *accent_name =
       bd_config_get_string(config->settings, "theme.accent", "persimmon");
@@ -1812,6 +2426,9 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->home_style.accent_base = accent;
   shell->home_style.blur_enabled =
       bd_config_get_bool(config->settings, "ui.blur", true);
+  shell->home_style.ambient_solid =
+      strcmp(bd_config_get_string(config->settings, "theme.ambient", "baked"),
+             "solid") == 0;
   shell->home_style.width = bd_gfx_width(config->gfx);
   shell->home_style.height = bd_gfx_height(config->gfx);
   shell->home = bd_home_create(config->gfx, &shell->home_style);
@@ -1822,6 +2439,58 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
   if (config->attach_plugin_tile) {
     shell_find_plugin_tile(shell, config->gfx);
+  }
+
+  shell_open_devices(shell, config);
+  bd_home_set_quick_backend(shell->home, &shell->home_quick);
+
+  bd_settings_style settings_style;
+  memset(&settings_style, 0, sizeof(settings_style));
+  settings_style.accent_base = accent;
+  settings_style.width = bd_gfx_width(config->gfx);
+  settings_style.height = bd_gfx_height(config->gfx);
+  shell->settings_page =
+      bd_settings_create(config->gfx, config->settings, &settings_style);
+  if (shell->settings_page == NULL) {
+    fprintf(stderr, "brickdesk: settings page unavailable\n");
+  } else {
+    bd_settings_set_system(shell->settings_page, &shell->system);
+    bd_settings_perf perf_backend = {.user = shell,
+                                     .apply_global_profile = shell_perf_apply};
+    bd_settings_set_perf(shell->settings_page, &perf_backend);
+    bd_settings_set_plugins(shell->settings_page, shell->plugins);
+    char system_error[128] = {0};
+    if (!bd_settings_sync_system(shell->settings_page, system_error,
+                                 sizeof(system_error)) &&
+        shell->verbose) {
+      fprintf(stderr, "brickdesk: settings: %s\n", system_error);
+    }
+    shell_refresh_storage(shell);
+  }
+  bd_config_set_change_callback(config->settings, shell_config_changed, shell);
+
+  bd_battery_policy_config battery_config;
+  long low_battery =
+      bd_config_get_int(config->settings, "power.low_battery_percent", 5);
+  if (low_battery < 0 || low_battery > 100) {
+    low_battery = 5;
+  }
+  shell_battery_policy_config((int)low_battery, &battery_config);
+  bd_battery_error battery_error;
+  bd_battery_policy_output battery_output;
+  bd_battery_policy_result battery_result = bd_battery_policy_init(
+      &shell->battery_policy, &battery_config, shell_now(shell),
+      &battery_output, &battery_error);
+  shell->battery_policy_ready = battery_result == BD_BATTERY_POLICY_OK;
+  shell->battery_next_ms =
+      shell->battery_policy_ready ? shell_now(shell)
+                                  : shell_now(shell) + BD_SHELL_BATTERY_RETRY_MS;
+  shell->battery_opened = false;
+  if (!shell->battery_policy_ready) {
+    fprintf(stderr, "brickdesk: battery policy unavailable: %s\n",
+            battery_error.message[0] != '\0' ? battery_error.message
+                                              : bd_battery_policy_result_name(
+                                                    battery_result));
   }
 
   bd_home_status status;
@@ -1838,8 +2507,12 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
       bd_config_get_int(config->settings, "session.max_background", 3);
   status.clock = shell->clock;
   status.max_background = (int)max_background;
+  status.battery_percent = -1;
   bd_home_set_status(shell->home, &status);
   shell_refresh_status(shell, true);
+  shell_battery_sample(shell, shell_now(shell));
+  shell_publish_status(shell, true);
+  shell_home_quick_refresh(shell);
 
   bd_hotkey_table_load(&shell->hotkeys, config->settings);
   shell->hotkey_table = &shell->hotkeys;
@@ -1896,6 +2569,11 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_session_destroy(shell->session);
   }
   inputd_disconnect(shell, "shutdown");
+  if (shell->settings_page != NULL) {
+    bd_config_set_change_callback(shell->settings, NULL, NULL);
+    bd_settings_destroy(shell->settings_page);
+    shell->settings_page = NULL;
+  }
   if (shell->home != NULL) {
     bd_home_set_surface_visible(shell->home, false);
   }
@@ -1912,6 +2590,7 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_app_list_destroy(shell->apps);
   }
   bd_home_destroy(shell->home);
+  bd_av_audio_close(&shell->av_audio);
   free(shell);
 }
 
@@ -1954,6 +2633,10 @@ bd_home *bd_shell_home(bd_shell *shell) {
   return shell != NULL ? shell->home : NULL;
 }
 
+bd_settings *bd_shell_settings(bd_shell *shell) {
+  return shell != NULL ? shell->settings_page : NULL;
+}
+
 void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,
                        uint64_t time_ms) {
   if (shell == NULL) {
@@ -1970,6 +2653,23 @@ void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms) {
   shell->test_clock = true;
   shell->test_now_ms = time_ms;
   bd_input_state_advance(&shell->test_input, time_ms, local_emit, shell);
+}
+
+bool bd_shell_test_battery_policy(const bd_shell *shell, uint64_t *next_ms,
+                                  bool *policy_ready, int *percent) {
+  if (shell == NULL) {
+    return false;
+  }
+  if (next_ms != NULL) {
+    *next_ms = shell->battery_next_ms;
+  }
+  if (policy_ready != NULL) {
+    *policy_ready = shell->battery_policy_ready;
+  }
+  if (percent != NULL) {
+    *percent = shell->status_battery;
+  }
+  return true;
 }
 
 bd_session *bd_shell_test_session(bd_shell *shell) {

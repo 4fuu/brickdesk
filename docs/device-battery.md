@@ -363,7 +363,7 @@ shutdown_on_low_battery = true
 
 ## 6. 事件循环接线形状
 
-下面是未来 shell 的接线形状，不是当前已实现的 home/settings：
+下面是 shell 当前使用的接线形状；本轮只展示容量/未知状态，不消费低电量弹窗或关机建议：
 
 ```c
 #include "brickdesk/device_battery.h"
@@ -378,7 +378,7 @@ if (bd_battery_open(&battery, &bcfg, &err) != BD_BATTERY_OK) {
 bd_battery_policy_config pcfg;
 bd_battery_policy_config_default(&pcfg);
 pcfg.critical_percent = power_config.low_battery_percent;
-pcfg.recommend_shutdown = power_config.shutdown_on_low_battery;
+pcfg.recommend_shutdown = false;  /* shutdown wiring is a separate task */
 
 bd_battery_policy policy;
 bd_battery_policy_output pout;
@@ -400,8 +400,13 @@ if (pout.recommendation == BD_BATTERY_RECOMMEND_PREPARE_SHUTDOWN) {
 
 - 读取失败时仍把 `status` 传给策略：`battery_available=false` / 容量 unknown
   会让策略进入 UNKNOWN，不会关机。
-- 每个 home/settings 消费者应先用 `capacity_known` 判断，未知时显示占位符，
-  不显示 0%。
+- shell 在 `src/app/shell.c` 中持有 `bd_battery`/`bd_battery_policy`，按
+  `output.next_sample_ms` 调度，未知容量显示为斜杠电池/“电量未知”，不显示
+  0%。本轮不消费 `PREPARE_SHUTDOWN`，也不会自动关机。shell 会把
+  `power.low_battery_percent`（完整 0..100 schema 范围）映射成合法的
+  critical/reminder 组合：critical 上限为 99，reminder 至少为 20 且高于
+  critical，并收紧 hysteresis 使总和不超过 100；策略初始化失败会明确报错，
+  退化为 60 s 容量采样而不是静默快速轮询。
 - 同一 `bd_battery` 可在单线程内复用；多线程读取需要调用方串行化。
 
 ## 7. 证据、版本与许可
@@ -837,18 +842,15 @@ adb shell '/mnt/SDCARD/brickdesk/bin/bd-battery'
 | `bd-battery` | target/host 可执行文件；target `dist/bin`、发布包 |
 | `bd_device_battery_test` | 测试可执行文件；CTest 名称 `device_battery` |
 
-后续接线点：
+当前接线状态：
 
-1. 协调线程在 shell 中持有 `bd_battery` 和 `bd_battery_policy`，生命周期
-   覆盖事件循环。
-2. 首页/设置页用 `bd_battery_read()` 替换旧简易读取；只显示
-   `capacity_known ? capacity_percent : unknown`、`status`、`external_power`。
-3. 配置层把 `low_battery_percent` 映射到 `critical_percent`，
-   `shutdown_on_low_battery` 作为消费者动作门；新增 reminder/高级键时只放
-   配置文件/高级页。
-4. 事件循环按 `next_sample_ms` 采样；在 power_supply uevent、插电、唤醒、
-   应用切换时提前调用 update。
-5. 收到 `PREPARE_SHUTDOWN` 后，消费者走 `bd_power_poweroff()` 的安全流程；
-   在真机验收第 10 节通过前，不要自动执行。
-6. 删除 home 分支旧 `/sys/.../capacity` 读取和旧的 `battery_percent`
-   直接赋值；统一由本 API 提供 unknown 语义。
+1. shell 持有 `bd_battery` 和 `bd_battery_policy`，生命周期覆盖事件循环。
+2. 首页/设置页使用同一状态快照；未知容量显示占位符，不显示 0%。
+3. `low_battery_percent` 映射到一组合法的 `critical_percent`/
+   `reminder_percent`/hysteresis；`recommend_shutdown` 固定为 false，本轮不接
+   自动关机。策略初始化失败会被记录并切换到明确的 60 s 降级采样。
+4. 事件循环按 `next_sample_ms` 调度；power_supply uevent、插电/唤醒提前
+   采样仍是真机项。
+5. `PREPARE_SHUTDOWN` 的安全流程（保存、确认、`bd_power_poweroff()`）另任务。
+6. 旧的 `bd_sys_battery_percent()` 和对应 sysinfo 测试已删除；RSS 与 Wi-Fi
+   状态仍保留在 `sysinfo`。

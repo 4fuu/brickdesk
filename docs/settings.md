@@ -1,9 +1,11 @@
 # v3 settings page
 
-`src/settings/` implements the v3 settings page as a reusable module. It is not
-wired into `src/main.c`; the event-loop task owns that hand-off. The page owns
-its category list, rows, focus, scroll, sub-pages and confirm dialog, and talks
-to the renderer only through `include/brickdesk/gfx.h`.
+`src/settings/` implements the v3 settings page as a reusable module and is
+wired into the production shell. The shell owns the page instance, feeds it
+from the same poll loop as the home page, session and plugin host, and hides the
+home/plugin surface while settings is open. The page owns its category list,
+rows, focus, scroll, sub-pages and confirm dialog, and talks to the renderer
+only through `include/brickdesk/gfx.h`.
 
 ## Files
 
@@ -13,9 +15,18 @@ to the renderer only through `include/brickdesk/gfx.h`.
 | `src/settings/settings.c` | page model: schema rows, navigation, values, hotkeys/perf/plugins, damage |
 | `src/settings/settings_draw.c` | category list, table, controls, sub-pages, hint strip, dialog |
 | `src/settings/settings_internal.h` | shared state, geometry and row structs |
-| `src/settings/system_stub.c` | recording brightness/volume/mute backend for M3 |
+| `src/settings/system_stub.c` | explicit recording backend for tests/captures; never installed by production |
 | `tests/settings_test.c` | schema rows, persistence/reload, hold repeat, damage parity, sub-pages |
 | `tests/settings_capture.c` | deterministic screenshots for every category, accent, slider, conflict, plugin and dialog |
+
+## Entry and exit
+
+The shell appends one built-in `brickdesk-settings` tile after the scanned app
+wall and before the optional plugin tile. It is created from the shell, not
+from `SHELL_DEMO_ITEMS`, so a unit with real apps still has an entry. A on that
+tile opens the page directly; it does not go through the session launcher.
+While the page is open the home surface and any plugin tile are hidden; B at
+the root closes the page, restores the home surface and repaints it.
 
 ## Layout
 
@@ -101,7 +112,10 @@ the affected bindings carry a warning dot. Combo editing is not implemented
 The performance page loads `perf.ini` through `bd_perf_policy_load()`, so the
 profile names are the real ones, including `inherit`-only profiles. The app
 rows are the effective `app.<id>.profile` keys from the loaded config. The
-global row writes `perf.global_profile`; perfd does not read it yet.
+global row calls `perf.global` on the perfd socket, waits for the daemon's
+confirmation, and only then writes `perf.global_profile`. A missing daemon,
+an active app lease, an unknown profile or an apply failure leaves the stored
+value unchanged and shows the daemon error in the bottom error line.
 
 The plugin page uses `bd_plugin_ui_settings()` and `bd_plugin_ui_draw()`. It
 calls `bd_plugin_activate()` and `bd_plugin_set_settings_open(true)` on open,
@@ -117,12 +131,19 @@ the square direction.
 
 Every edit goes through `bd_config_set()` and then `bd_config_save()`; the
 value is in `local.ini` as soon as the row changes. Brightness, volume and mute
-are applied first through `bd_settings_system`; if that hook rejects the value,
-the config is not changed. A missing hook is treated as success so the page
-works on a host without a device backend.
+are applied first through `bd_settings_system`; if that hook is missing or
+rejects the value, the config is not changed. The shell installs the shared
+`device_av` backlight/mixer backend. Its read hooks supply the row value, so a
+device whose stored preference and hardware disagree shows the hardware
+reading; a failed read shows "不可用". Production never installs a software
+stub that reports success.
 
-The system stub (`bd_settings_system_stub_init`) records the last value and
-call counts. M4 replaces it with the backlight and mixer implementations.
+`bd_settings_system_stub_init()` is the explicit recording backend used by
+tests, captures and the scripted demo. It records values and call counts and
+implements the same read hooks, so tests exercise the read/write path without
+pretending a missing device exists. `bd_settings_sync_system()` applies the
+persisted brightness/volume/mute once at shell startup, without rewriting the
+preference.
 
 Accent changes rebuild the dark palette from `bd_config_accent_hex()` and
 repaint the whole page, so the focus ring, swatches, toggles, sliders, icons and
@@ -130,11 +151,15 @@ hint bullet recolour immediately. The custom-colour sub-page edits R/G/B and
 writes `#rrggbb` on every step.
 
 The reset row opens a confirm dialog (default focus on 取消). Confirming writes
-the schema defaults for static keys and saves, then re-applies brightness,
-volume and mute through the system seam. Dynamic sections (`hotkey.*`,
-`profile.*`, `app.*`, `core.*`, `device.*`) are deliberately left alone; the
-dialog says so. `bd_config` still has no delete-override API, so reset writes
-defaults rather than deleting `local.ini` lines.
+the schema defaults for static keys and saves. Service-backed keys keep their
+old value when the device or daemon refuses the default: brightness/volume/
+mute are applied through `bd_settings_system` first, and `perf.global_profile`
+goes through `perf.global` and is stored only after daemon confirmation. Any
+such failure is reported as a partial-reset error; other defaults still apply.
+Dynamic sections (`hotkey.*`, `profile.*`, `app.*`, `core.*`, `device.*`) are
+deliberately left alone; the dialog says so. `bd_config` still has no
+delete-override API, so reset writes defaults rather than deleting `local.ini`
+lines.
 
 ## Controls
 
@@ -172,15 +197,15 @@ repaint also restores the 1 px frame exactly.
 
 ```c
 bd_settings_style style = {
-    .dark = true,
-    .accent_base = accent,          /* bd_config_accent_hex(..., dark) */
+    .accent_base = accent,          /* bd_config_accent_hex(..., true) */
     .width = 1024,
     .height = 768,
 };
 bd_settings *settings = bd_settings_create(gfx, config, &style);
 bd_settings_set_status(settings, &status);       /* clock, wifi, battery */
 bd_settings_set_storage(settings, &storage);     /* statvfs values, optional */
-bd_settings_set_system(settings, &system);       /* M4 backends */
+bd_settings_set_system(settings, &system);       /* device_av or explicit test backend */
+bd_settings_set_perf(settings, &perf);            /* perfd socket round-trip */
 bd_settings_set_plugins(settings, plugin_host);  /* optional */
 bd_settings_open(settings, BD_SETTINGS_CATEGORY_APPEARANCE);
 
@@ -197,19 +222,27 @@ bd_settings_hold(settings, BD_SETTINGS_ACTION_RIGHT, pressed);
 bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT);
 ```
 
-The loop should send L1/R1 as `CATEGORY_PREV/NEXT` and map B to `CANCEL`.
-When `bd_settings_input(CANCEL)` closes the page, the module has already queued
-a full-screen damage; the loop should draw the home page next. Destroy the
-settings object before the plugin host and the config it points at.
+The shell sends L1/R1 as `CATEGORY_PREV/NEXT` and maps B to `CANCEL`.
+Left/right press and release edges go to `bd_settings_hold()` only; the shell
+never also sends the same action to `bd_settings_input()`, so a slider steps
+once and a release always stops the repeat. `ui.hint` drives the bottom strip
+while Select is held. When `bd_settings_input(CANCEL)` closes the page the
+module has already queued full-screen damage; the shell restores the home /
+plugin surface and draws it. Destroy the settings object before the plugin
+host and the config it points at.
 
 ## Tests
 
 - `settings_test`: schema metadata (including dynamic keys), page row keys,
   two-row focus damage, byte-identical partial/full frames, accent live
   recolour, toggle persistence, volume hold repeat (400 ms delay, 80 ms
-  interval), `local.ini` contents and reload, brightness through the stub,
+  interval), `local.ini` contents and reload, real fake-sysfs write success and
+  a read-only failure that leaves the preference untouched, brightness through
+  the explicit backend,
   hotkey conflict counts, perf/app profile cycling, background limits, reset
-  confirm/cancel, custom accent sub-page, hint strip damage and B navigation.
+  confirm/cancel plus rejected/disconnected perf and failed-AV reset paths that
+  keep the old values and surface a partial error, custom accent sub-page, hint
+  strip damage and B navigation.
   A long 16-control plugin tree verifies that focus-following scroll reaches
   and activates the last control.
 - `settings_capture`: 14 dark screenshots (`settings_appearance`, `_hint`,
@@ -244,14 +277,13 @@ scripts/update-baselines.sh settings
   contrast guard.
 - hotkey editing is not implemented; the list and conflicts are read-only.
 - the plugin sub-page renders the host's tree, scrolls to the focused node and
-  can send `ui.activate`, but does not persist plugin settings (the host has no
-  settings storage yet).
-- `perf.global_profile` is stored but perfd does not consume it; the settings
-  page does not talk to the perfd socket.
-- brightness/volume/mute use the stub; real backlight/mixer backends arrive in
-  M4. The module is not wired into `src/main.c`, and nothing was validated on
-  GE8300 hardware. Device items: real backlight/mixer behaviour, plugin start
-  latency, the 13/14 px text at 3.95 inches, scroll behaviour with 64 hotkeys,
-  and the reset write cost (all static keys) on the SD card. Plugin settings
-  scrolling is covered on the host with a 16-control tree; deeply nested row
-  layouts are the remaining edge case.
+  can send `ui.activate`; plugin settings are persisted by the host under its
+  state directory and reloaded after a host restart.
+- the global performance row requires a real `perfd` confirmation. App rows
+  remain launch-time configuration for the session layer.
+- host tests use fake sysfs/AV trees and a scripted device backend. Device
+  items still to check: real backlight and mixer response, panel legibility at
+  3.95 inches, battery policy sampling on the actual charge curve, and the
+  reset write cost (all static keys) on the SD card. Plugin settings scrolling
+  is covered on the host with a 16-control tree; deeply nested row layouts are
+  the remaining edge case.

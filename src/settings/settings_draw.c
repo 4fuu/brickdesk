@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "brickdesk/theme.h"
+#include "brickdesk/ui.h"
 
 #define SETTINGS_CATEGORY_COUNT BD_SETTINGS_CATEGORY_COUNT
 
@@ -63,28 +64,11 @@ static void draw_chevron_right(bd_gfx *gfx, int cx, int cy, bd_color color) {
 
 /* ------------------------------------------------------------- top bar */
 
-static void draw_wifi(bd_gfx *gfx, int cx, int cy, bd_color color) {
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(cx - 2, cy + 5, 4, 4), 2, color);
-  bd_gfx_push_clip(gfx, bd_rect_make(cx - 10, cy - 8, 20, 12));
-  bd_gfx_stroke_round_rect(gfx, bd_rect_make(cx - 10, cy - 3, 20, 20), 10, 2,
-                           color);
-  bd_gfx_stroke_round_rect(gfx, bd_rect_make(cx - 6, cy + 1, 12, 12), 6, 2,
-                           color);
-  bd_gfx_pop_clip(gfx);
-}
-
-static void draw_battery(bd_gfx *gfx, int x, int cy, int percent,
-                         bd_color color, bd_color fill) {
-  int w = 25;
-  int h = 12;
-  int y = cy - h / 2;
-  bd_gfx_stroke_round_rect(gfx, bd_rect_make(x, y, w, h), 2, 1, color);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x + w + 1, cy - 3, 2, 6), 1, color);
-  int inner = (w - 4) * percent / 100;
-  if (inner > 0) {
-    bd_gfx_fill_round_rect(gfx, bd_rect_make(x + 2, y + 2, inner, h - 4), 1,
-                           fill);
+static bd_ui_wifi_state settings_wifi_state(const bd_settings *settings) {
+  if (!settings->status.wifi_known) {
+    return BD_UI_WIFI_UNKNOWN;
   }
+  return settings->status.wifi ? BD_UI_WIFI_CONNECTED : BD_UI_WIFI_DISCONNECTED;
 }
 
 static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
@@ -107,15 +91,13 @@ static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
                     settings->clock);
     right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 16;
   }
-  if (settings->status.battery_percent >= 0) {
-    right -= 28;
-    draw_battery(gfx, right, 62, settings->status.battery_percent,
-                 palette->ink2, palette->ink2);
-    right -= 14;
-  }
-  if (settings->status.wifi) {
-    draw_wifi(gfx, right - 9, 54, palette->ink2);
-  }
+  int battery_left = right - BD_UI_BATTERY_ICON_W;
+  bd_ui_draw_battery(gfx, battery_left + (BD_UI_BATTERY_ICON_W - 1) / 2, 66,
+                     settings->status.battery_percent, palette->ink2,
+                     palette->ink2);
+  int wifi_left = battery_left - 12 - BD_UI_WIFI_ICON_W;
+  bd_ui_draw_wifi(gfx, wifi_left + (BD_UI_WIFI_ICON_W - 1) / 2, 66,
+                  settings_wifi_state(settings), palette->ink2);
 }
 
 /* --------------------------------------------------------- category list */

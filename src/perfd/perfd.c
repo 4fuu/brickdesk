@@ -502,6 +502,55 @@ static void handle_apply(perfd *daemon, perfd_client *client, long id,
                result);
 }
 
+static void handle_global(perfd *daemon, perfd_client *client, long id,
+                         const char *line) {
+  char profile[BD_PERF_NAME_MAX + 1];
+  if (!json_field_string(line, "profile", profile, sizeof(profile)) ||
+      profile[0] == '\0') {
+    send_error(client, id, -32602, "missing profile");
+    return;
+  }
+  if (bd_perf_policy_find_profile(&daemon->policy, profile) == NULL) {
+    send_error(client, id, -32602, "unknown profile");
+    return;
+  }
+  if (bd_perf_leases_effective(&daemon->leases) != NULL) {
+    send_error(client, id, -32003,
+               "an app lease owns the profile; retry after it ends");
+    return;
+  }
+
+  char previous[BD_PERF_NAME_MAX + 1];
+  snprintf(previous, sizeof(previous), "%s", daemon->global_profile);
+  snprintf(daemon->global_profile, sizeof(daemon->global_profile), "%s",
+           profile);
+
+  perf_request request;
+  memset(&request, 0, sizeof(request));
+  snprintf(request.profile, sizeof(request.profile), "%s", profile);
+  bd_perf_plan plan;
+  char error[256] = "";
+  if (!daemon_apply(daemon, &request, &plan, error, sizeof(error))) {
+    snprintf(daemon->global_profile, sizeof(daemon->global_profile), "%s",
+             previous);
+    send_error(client, id, -32000, error[0] != '\0' ? error
+                                                    : "cannot apply profile");
+    return;
+  }
+
+  char key[sizeof(daemon->applied_key)];
+  request_key(&request, key, sizeof(key));
+  snprintf(daemon->applied_key, sizeof(daemon->applied_key), "%s", key);
+
+  char result[1024];
+  if (!format_plan_result(&plan, 0, result, sizeof(result))) {
+    send_error(client, id, -32000, "result is too large");
+    return;
+  }
+  client_sendf(client, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":%s}", id,
+               result);
+}
+
 static void handle_restore(perfd *daemon, perfd_client *client, long id,
                            const char *line, uint64_t now_ms) {
   char session[BD_PERF_SESSION_MAX + 1];
@@ -774,6 +823,8 @@ static void handle_client_line(perfd *daemon, perfd_client *client,
     handle_apply(daemon, client, id, line, now_ms, false);
   } else if (strcmp(method, "perf.set") == 0) {
     handle_apply(daemon, client, id, line, now_ms, true);
+  } else if (strcmp(method, "perf.global") == 0) {
+    handle_global(daemon, client, id, line);
   } else if (strcmp(method, "perf.restore") == 0) {
     handle_restore(daemon, client, id, line, now_ms);
   } else if (strcmp(method, "perf.get") == 0) {

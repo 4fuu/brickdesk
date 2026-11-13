@@ -471,6 +471,18 @@ static bool inputd_send(fake_inputd *server, const char *json) {
   return true;
 }
 
+static bool inputd_send_key_time(fake_inputd *server, const char *key,
+                                 bool pressed, uint64_t time_ms) {
+  char json[256];
+  int written = snprintf(json, sizeof(json),
+                         "{\"type\":\"key\",\"key\":\"%s\",\"pressed\":%s,"
+                         "\"time_ms\":%llu}",
+                         key, pressed ? "true" : "false",
+                         (unsigned long long)time_ms);
+  return written > 0 && (size_t)written < sizeof(json) &&
+         inputd_send(server, json);
+}
+
 /* --------------------------------------------------------------- runtime */
 
 typedef struct test_runtime {
@@ -909,6 +921,116 @@ static void wake_with_power_press(test_runtime *runtime, bool expect_ok) {
   bd_shell_iterate(runtime->shell, 5);
   CHECK(runtime_sleeping(runtime) == !expect_ok,
         "release after wake must not re-enter sleep");
+}
+
+static void test_source_switch_and_event_time(const char *child_path) {
+  test_runtime runtime;
+  if (!create_runtime(&runtime, "switch", child_path, false, false)) {
+    destroy_runtime(&runtime);
+    return;
+  }
+  for (int i = 0; i < 5; ++i) {
+    bd_shell_iterate(runtime.shell, 5);
+  }
+  CHECK(inputd_start(&runtime.inputd, runtime.input_socket, runtime.input_log),
+        "start inputd for switch test");
+  CHECK(wait_input_source(&runtime, "inputd", 8000),
+        "inputd connected for switch test");
+
+  /* inputd -> SDL: an un-released daemon POWER must not poison SDL. */
+  uint64_t stale = real_ms();
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true, stale),
+        "inputd POWER down");
+  runtime_run_for(&runtime, 1100);
+  inputd_stop(&runtime.inputd);
+  CHECK(wait_input_source(&runtime, "sdl", 3000),
+        "switch to SDL after inputd stop");
+  tap_power(&runtime);
+  CHECK(wait_power_state(&runtime, BD_POWER_STATE_LIGHT_SLEEP, 2000),
+        "fresh SDL tap after inputd disconnect did not sleep");
+  wake_with_power_press(&runtime, true);
+  runtime_run_for(&runtime, 1050); /* wake press guard */
+
+  /* SDL -> inputd: an un-released SDL POWER must not poison inputd. */
+  bd_shell_test_key(runtime.shell, BD_KEY_POWER, true, real_ms());
+  runtime_run_for(&runtime, 1100);
+  CHECK(inputd_start(&runtime.inputd, runtime.input_socket, runtime.input_log),
+        "restart inputd after SDL gesture");
+  CHECK(wait_input_source(&runtime, "inputd", 8000),
+        "switch back to inputd");
+  uint64_t short_time = real_ms();
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true,
+                             short_time - 300),
+        "fresh inputd short down");
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", false,
+                             short_time - 100),
+        "fresh inputd short up");
+  sleep_ms(30);
+  CHECK(wait_power_state(&runtime, BD_POWER_STATE_LIGHT_SLEEP, 2000),
+        "fresh inputd short tap after SDL gesture did not sleep");
+  wake_with_power_press(&runtime, true);
+  runtime_run_for(&runtime, 1050);
+
+  /* release_all also cancels an incomplete POWER gesture. */
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true, real_ms()),
+        "inputd POWER down before release_all");
+  runtime_run_for(&runtime, 1100);
+  CHECK(inputd_send(&runtime.inputd, "{\"type\":\"release_all\"}"),
+        "inputd release_all");
+  sleep_ms(20);
+  uint64_t after_release = real_ms();
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true,
+                             after_release - 200),
+        "fresh inputd down after release_all");
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", false,
+                             after_release - 20),
+        "fresh inputd up after release_all");
+  sleep_ms(30);
+  CHECK(wait_power_state(&runtime, BD_POWER_STATE_LIGHT_SLEEP, 2000),
+        "fresh tap after release_all did not sleep");
+  wake_with_power_press(&runtime, true);
+  runtime_run_for(&runtime, 1050);
+
+  /* A queued 1500 ms hold is a long press, not a compressed tap. */
+  uint64_t long_time = real_ms();
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true,
+                             long_time - 2000),
+        "queued long down");
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", false,
+                             long_time - 500),
+        "queued long up");
+  sleep_ms(30);
+  runtime_run_for(&runtime, 150);
+  CHECK(runtime_power_state(&runtime) == BD_POWER_STATE_IDLE,
+        "queued 1500 ms hold became a sleep");
+  CHECK(!runtime_sleeping(&runtime), "queued long hold marked sleeping");
+
+  /* Exactly 1000 ms remains inside the documented short-tap window. */
+  uint64_t boundary_time = real_ms();
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", true,
+                             boundary_time - 1200),
+        "queued boundary down");
+  CHECK(inputd_send_key_time(&runtime.inputd, "POWER", false,
+                             boundary_time - 200),
+        "queued boundary up");
+  sleep_ms(30);
+  CHECK(wait_power_state(&runtime, BD_POWER_STATE_LIGHT_SLEEP, 2000),
+        "queued 1000 ms boundary did not sleep");
+  wake_with_power_press(&runtime, true);
+  runtime_run_for(&runtime, 1050);
+
+  /* Older clients/fixtures without time_ms stay compatible. */
+  CHECK(inputd_send(&runtime.inputd,
+                    "{\"type\":\"key\",\"key\":\"POWER\",\"pressed\":true}"),
+        "legacy inputd down without time_ms");
+  CHECK(inputd_send(&runtime.inputd,
+                    "{\"type\":\"key\",\"key\":\"POWER\",\"pressed\":false}"),
+        "legacy inputd up without time_ms");
+  sleep_ms(30);
+  CHECK(wait_power_state(&runtime, BD_POWER_STATE_LIGHT_SLEEP, 2000),
+        "legacy no-timestamp tap did not sleep");
+  wake_with_power_press(&runtime, true);
+  destroy_runtime(&runtime);
 }
 
 /* ------------------------------------------------------------------ tests */
@@ -1417,6 +1539,7 @@ int main(int argc, char **argv) {
   }
   const char *child_path = argv[1];
   test_home_sleep_and_inputd(child_path);
+  test_source_switch_and_event_time(child_path);
   test_app_freeze_and_plugin_heartbeat(child_path);
   test_settings_location_and_repeat(child_path);
   test_brightness_failures(child_path);

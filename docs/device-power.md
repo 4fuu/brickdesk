@@ -414,9 +414,15 @@ RAM 冻结不是 `app.pause`、存档或掉电保护。
   输入回调里调用 bd_power。
 - `bd_shell_iterate()` 在普通 service/render 之前执行 `shell_power_service()`；
   `bd_shell_render()` 也会先执行排队请求并拒绝在睡眠/`DEGRADED` 时出帧。
-- 醒着时 POWER 在 1000 ms 内松开 → 排队轻睡；超过 1000 ms 的长按本切片忽略，
-  长按关机/配置留给后续任务。睡眠中 POWER 按下 → 排队唤醒，按下即唤醒；唤醒
-  后的 1 秒和该次松开都不再触发睡眠。
+- 醒着时 POWER 在 1000 ms 内松开 → 排队轻睡（恰好 1000 ms 仍算短按）；超过
+  1000 ms 的长按本切片忽略，长按关机/配置留给后续任务。睡眠中 POWER 按下 →
+  排队唤醒，按下即唤醒；唤醒后的 1 秒和该次松开都不再触发睡眠。
+- inputd 的 key 事件使用消息里的 `time_ms` 计算按下时长，不能在消费时用当前
+  时钟压缩排队事件。缺少 `time_ms` 的旧客户端/夹具回退到消费时刻；生产 inputd
+  总会发送该字段。唤醒后的 1 秒忽略窗口用真实单调时钟，不用事件时间。
+- 输入源切换或 inputd `release_all` 会取消旧的未松开 POWER 手势，两个方向都
+  一样（inputd→SDL、SDL→inputd）；不会合成 release、sleep 或 wake，新来源必须
+  从新的按下开始。
 - 轻睡期间继续服务 inputd 连接/重连、session IPC/子进程回收、plugin IPC 和
   heartbeat，并使用它们真实的 poll 截止时间。`bd_plugin_host_poll()` 不会被
   跳过，否则插件会在唤醒时被 `last_rx` 误判超时。
@@ -473,6 +479,9 @@ plugin host/plugin 进程、运行后才出现的 fake inputd，以及 fake AV/b
   下一次 wake 重试 thaw。失败路径不丢 app 身份/配额，也不报告已睡。
 - 睡眠中普通按键/动作、设置长按重复、home/settings 更新与 present 均被抑制；
   poll 不 busy loop；inputd 在睡眠中重连、断开/再连，未发送 `release_all`。
+- 输入源双向切换和 `release_all` 取消未松开的 POWER 手势；旧来源不会吞掉新来源
+  的按下。排队 1500 ms 长按不睡眠，1000 ms 边界睡眠，缺 `time_ms` 的旧消息仍
+  兼容。
 - 插件 heartbeat timeout 短于睡眠时长时，插件保持 RUNNING、pid 不变、
   heartbeat 继续，唤醒后通信继续；不可见磁贴不保留 refresh_hz deadline。
 - 设置页开启时轻睡，`settings_open`、分类、焦点、行、子页和 home 焦点不变，
@@ -482,7 +491,7 @@ plugin host/plugin 进程、运行后才出现的 fake inputd，以及 fake AV/b
 没有调用 `reboot(2)`，也没有真实电源键或面板操作。
 
 本切片本地验证（2026-11-13，host orb）：`BRICKDESK_WERROR=ON` 构建通过；
-`shell_power` 11.03 s 通过；完整 CTest 45/45（157.04 s）；设备脚本
+`shell_power` 20.94 s 通过；完整 CTest 45/45（183.08 s）；设备脚本
 `scripts/device/test/run-tests.sh` 全部通过。此前同一完整套件的一次运行中
 `plugin`/`shell_inputd_reconnect` 曾因负载超时失败，随后单项复跑和最终整套
 均通过；这里保留首次失败记录，不把重跑当作没有发生过。

@@ -703,6 +703,25 @@ static bool json_int(const char *json, const char *key, int *out) {
   return true;
 }
 
+static bool json_u64(const char *json, const char *key, uint64_t *out) {
+  const char *value = NULL;
+  if (!json_token(json, key, &value) || out == NULL || value[0] == '-') {
+    return false;
+  }
+  errno = 0;
+  char *end = NULL;
+  unsigned long long number = strtoull(value, &end, 10);
+  if (end == value || errno == ERANGE) {
+    return false;
+  }
+  if (*end != '\0' && *end != ',' && *end != '}' && *end != ' ' &&
+      *end != '\t' && *end != '\n' && *end != '\r') {
+    return false;
+  }
+  *out = (uint64_t)number;
+  return true;
+}
+
 /* ----------------------------------------------------------- input source */
 
 static void shell_dispatch_action(bd_shell *shell, const char *action,
@@ -715,6 +734,7 @@ static void shell_service(bd_shell *shell);
 static void shell_close_settings(bd_shell *shell);
 static void shell_power_service(bd_shell *shell);
 static bool shell_power_asleep(const bd_shell *shell);
+static void shell_power_cancel_gesture(bd_shell *shell);
 
 static void local_emit(void *user, const bd_input_output *event) {
   bd_shell *shell = (bd_shell *)user;
@@ -746,6 +766,8 @@ static const char *preferred_input_socket(void) {
 }
 
 static void inputd_release_switch_state(bd_shell *shell) {
+  /* A POWER gesture from the old source must not survive the switch. */
+  shell_power_cancel_gesture(shell);
   bd_input_state_release_all(&shell->input, monotonic_ms(), local_emit, shell);
   bd_home_set_hint_visible(shell->home, false);
   if (shell->settings_page != NULL) {
@@ -983,7 +1005,16 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
           (shell_power_asleep(shell) || shell->power_input_suspended)) {
         return;
       }
-      shell_dispatch_key(shell, key, pressed, monotonic_ms());
+      uint64_t event_ms = 0;
+      if (!json_u64(line, "time_ms", &event_ms)) {
+        /*
+         * Compatibility for older clients/fixtures: production inputd emits
+         * time_ms.  Without one, consume at the current monotonic time rather
+         * than inventing a duration.
+         */
+        event_ms = monotonic_ms();
+      }
+      shell_dispatch_key(shell, key, pressed, event_ms);
     }
     return;
   }
@@ -1017,6 +1048,7 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
     return;
   }
   if (strcmp(type, "release_all") == 0) {
+    shell_power_cancel_gesture(shell);
     bd_home_set_hint_visible(shell->home, false);
     if (shell->settings_page != NULL) {
       bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
@@ -1638,6 +1670,24 @@ static bool shell_power_asleep(const bd_shell *shell) {
          state == BD_POWER_STATE_DEGRADED;
 }
 
+/*
+ * Drops an incomplete POWER gesture when the authoritative input source
+ * changes or inputd resets all keys.  It never injects a release or a
+ * sleep/wake request: the new source must start a fresh gesture.
+ */
+static void shell_power_cancel_gesture(bd_shell *shell) {
+  if (shell == NULL) {
+    return;
+  }
+  bool was_down = shell->power_key_down;
+  shell->power_key_down = false;
+  shell->power_down_ms = 0;
+  if (was_down && shell->power_request == SHELL_POWER_REQUEST_WAKE) {
+    /* A wake request derived from an un-released press is stale too. */
+    shell->power_request = SHELL_POWER_REQUEST_NONE;
+  }
+}
+
 static int shell_power_input_release(void *user) {
   bd_shell *shell = (bd_shell *)user;
   if (shell == NULL) {
@@ -2213,12 +2263,13 @@ static void shell_power_key_event(bd_shell *shell, bool pressed,
     /* The release belongs to the press that woke (or will wake) the shell. */
     return;
   }
-  if (time_ms < shell->power_ignore_until_ms) {
+  if (monotonic_ms() < shell->power_ignore_until_ms) {
     return;
   }
   uint64_t held = time_ms >= shell->power_down_ms
                       ? time_ms - shell->power_down_ms
                       : 0;
+  shell->power_down_ms = 0;
   if (held > BD_SHELL_POWER_TAP_MS) {
     /* Long-press shutdown is a separate task; this slice ignores it. */
     if (shell->verbose) {

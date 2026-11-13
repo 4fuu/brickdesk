@@ -324,6 +324,41 @@ adb shell 'getprop 2>/dev/null | head; adbd --version 2>/dev/null'
 - 拔卡/只读 SD 的恢复：`runtrimui.sh` 的 `e2fsck` 逻辑是否生效；brickdesk 的
   `recover.sh` 是否能在只读 SD 下至少启动原厂 UI。
 
+### 4.8 Benchmark and memory (M1-13)
+
+The host benchmark and budgets are documented in `docs/performance.md`. The
+following device checks are still unverified because no target `bench_render`
+is staged yet.
+
+- [ ] Cross-build `bench_render` for aarch64, place it in
+  `$DEVICE_ROOT/bin`, deploy `assets/` (fonts and covers) next to it, and add
+  the binary to `ci/check-glibc.sh` in the target workflow. The JSON schema is
+  device-ready.
+- [ ] `scripts/device/bench.sh --scenario idle --idle-ms 3000`: expect
+  `presented=0` and `cpu_ms` near zero in the JSON.
+- [ ] While the desktop runs, `scripts/device/perf.sh -n 30 -i 1 -o
+  /tmp/perf.csv`: record `VmRSS`, `VmHWM`, CPU%, CPU frequency and temperature.
+- [ ] `--scenario focus`, `pan`, `blur` at 120 frames: record avg/p50/p95/max,
+  draw calls and repainted pixels. Do not compare absolute host llvmpipe
+  timings; compare only the relative shape and device-to-device runs.
+- [ ] `--scenario wall5000`: confirm visited items stay in the dozens (host:
+  42-72) and resident texture bytes stay below the configured 96 MiB.
+- [ ] `--scenario plugin15`: this is host-side upload/repaint only. Repeat with
+  the real plugin host and the hello plugin to include IPC and plugin CPU.
+- [ ] `--scenario settings`: full-screen overlay; check p95 and temperature
+  after a 5-minute loop.
+- [ ] Read renderer accounting from JSON: `font_data_bytes`,
+  `glyph_atlas_bytes`, `fbo_bytes`, `texture_cache_bytes`. Set the device RSS
+  ceiling from the measured `VmHWM`, not the host 320 MiB guard.
+- [ ] Confirm `/proc/self/clear_refs` peak reset works on the device kernel;
+  if `peak_reset=false`, treat `rss_peak_kb` as process-lifetime/sampled peak.
+- [ ] `bench_render` uses `glFinish()`. For present latency use
+  `display_probe`'s `swap_ms_p50`, not the bench frame time.
+
+Host reference (llvmpipe, not a device budget): idle 0 ms CPU / 0 presents,
+focus 4.7 ms avg, pan 28.9 ms, blur 8.3 ms, wall5000 28.0 ms, plugin15 4.3 ms,
+settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
+
 ## 5. 设备脚本
 
 所有脚本都用 `ADB`（默认 `adb`）和 `ANDROID_SERIAL` 选择设备；默认部署目录
@@ -336,6 +371,7 @@ adb shell 'getprop 2>/dev/null | head; adbd --version 2>/dev/null'
 | `logs.sh` | 拉应用日志、dmesg、logread、系统信息 | 默认输出 `build-device/logs` |
 | `screenshot.sh` | 通过 `display_probe --dump-fb` 读 fb0，拉回 PPM/PNG | 需要应用不占用 fb0 或能读 |
 | `perf.sh` | 采 CPU/RSS/频率/温度/电量 CSV | 不依赖 `top`/`pidof` |
+| `bench.sh` | 运行已部署的 `bench_render` 并拉回 JSON | 需要 target 版 `bench_render` |
 | `recover.sh` | 杀掉 brickdesk/display_probe，启动原厂 UI | 不修改原厂分区 |
 | `smoke.sh` | deploy → probe → logs → recover | 失败也会尝试恢复 |
 

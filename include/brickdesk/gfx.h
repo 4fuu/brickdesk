@@ -95,6 +95,20 @@ typedef struct bd_image_cache_stats {
   int failed;
 } bd_image_cache_stats;
 
+/*
+ * Renderer-owned memory accounting. All values are logical byte counts for
+ * the resources the renderer allocated: decoded cover textures, font atlases,
+ * unique font file data, and the persistent scene/blur FBO attachments.
+ * Driver overhead and non-cached textures are not included.
+ */
+typedef struct bd_gfx_memory_stats {
+  size_t texture_cache_bytes;
+  size_t texture_cache_budget_bytes;
+  size_t glyph_atlas_bytes;
+  size_t font_data_bytes;
+  size_t fbo_bytes;
+} bd_gfx_memory_stats;
+
 bd_color bd_color_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 bd_color bd_color_rgb(uint8_t r, uint8_t g, uint8_t b);
 /* Mixes in straight sRGB space; t=0 returns a, t=1 returns b. */
@@ -126,6 +140,7 @@ bool bd_gfx_has_damage(const bd_gfx *gfx);
 int bd_gfx_damage_rects(const bd_gfx *gfx, bd_rect *out, int capacity);
 
 bd_gfx_stats bd_gfx_get_stats(const bd_gfx *gfx);
+bd_gfx_memory_stats bd_gfx_memory_get_stats(const bd_gfx *gfx);
 
 /* Solid and rounded primitives. radius <= 0 is a plain rectangle. */
 void bd_gfx_clear(bd_gfx *gfx, bd_color color);

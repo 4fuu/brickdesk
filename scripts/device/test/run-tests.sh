@@ -27,7 +27,7 @@ die() {
     exit 1
 }
 
-scripts="$DEVICE_DIR/deploy.sh $DEVICE_DIR/run.sh $DEVICE_DIR/logs.sh $DEVICE_DIR/screenshot.sh $DEVICE_DIR/perf.sh $DEVICE_DIR/recover.sh $DEVICE_DIR/smoke.sh $DEVICE_DIR/common.sh $SCRIPT_DIR/fake-adb $SCRIPT_DIR/run-tests.sh $REPO_ROOT/scripts/build-target.sh $REPO_ROOT/scripts/build-sdl2.sh $REPO_ROOT/ci/check-glibc.sh"
+scripts="$DEVICE_DIR/deploy.sh $DEVICE_DIR/run.sh $DEVICE_DIR/logs.sh $DEVICE_DIR/screenshot.sh $DEVICE_DIR/perf.sh $DEVICE_DIR/bench.sh $DEVICE_DIR/recover.sh $DEVICE_DIR/smoke.sh $DEVICE_DIR/common.sh $SCRIPT_DIR/fake-adb $SCRIPT_DIR/run-tests.sh $REPO_ROOT/scripts/build-target.sh $REPO_ROOT/scripts/build-sdl2.sh $REPO_ROOT/ci/check-glibc.sh"
 
 printf '== syntax check ==\n'
 for script in $scripts; do

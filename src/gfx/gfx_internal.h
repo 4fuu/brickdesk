@@ -78,6 +78,14 @@ typedef struct bd_image_result {
   struct bd_image_result *next;
 } bd_image_result;
 
+typedef struct bd_font_file {
+  char *path;
+  unsigned char *data;
+  size_t size;
+  int refs;
+  struct bd_font_file *next;
+} bd_font_file;
+
 typedef struct bd_image_entry {
   char *path;
   int width;
@@ -173,6 +181,9 @@ struct bd_gfx {
   bool in_frame;
   uint64_t frame_number;
   uint64_t glyph_clock;
+  size_t glyph_atlas_bytes;
+  size_t font_data_bytes;
+  bd_font_file *font_files;
 
   void *image_mutex;
   void *image_work_cond;

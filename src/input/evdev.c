@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -468,24 +469,92 @@ bool bd_evdev_has_sw(const bd_evdev *device, unsigned code) {
   return bit_test(device->sw_bits, sizeof(device->sw_bits), code);
 }
 
-int bd_evdev_read(const bd_evdev *device, bd_evdev_event *out) {
+bool bd_evdev_ready(bd_evdev *device) {
+  if (device == NULL || device->fd < 0) {
+    return false;
+  }
+  struct pollfd poll_fd;
+  poll_fd.fd = device->fd;
+  poll_fd.events = POLLIN;
+  poll_fd.revents = 0;
+  int result;
+  do {
+    result = poll(&poll_fd, 1, 0);
+  } while (result < 0 && errno == EINTR);
+  if (result < 0) {
+    return false;
+  }
+  if ((poll_fd.revents & (POLLERR | POLLNVAL)) != 0) {
+    return false;
+  }
+  if (!device->is_fake) {
+    return (poll_fd.revents & POLLHUP) == 0;
+  }
+  if (device->pending_length > 0) {
+    return true;
+  }
+
+  /*
+   * FIFO poll semantics differ between kernels (a writerless FIFO may
+   * report 0 instead of POLLHUP). read() is authoritative: 0 means no
+   * writer (EOF), EAGAIN means a writer exists but has no data. A byte of a
+   * real event is kept in pending_bytes and replayed by bd_evdev_read().
+   */
+  unsigned char byte = 0;
+  ssize_t amount;
+  do {
+    amount = read(device->fd, &byte, 1);
+  } while (amount < 0 && errno == EINTR);
+  if (amount == 1) {
+    device->pending_bytes[0] = byte;
+    device->pending_length = 1;
+    return true;
+  }
+  if (amount == 0) {
+    return false;
+  }
+  return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+
+int bd_evdev_read(bd_evdev *device, bd_evdev_event *out) {
   if (device == NULL || out == NULL || device->fd < 0) {
     return -1;
   }
   struct input_event raw;
-  ssize_t bytes = read(device->fd, &raw, sizeof(raw));
+  size_t filled = device->pending_length;
+  if (filled > sizeof(raw)) {
+    filled = 0;
+  }
+  if (filled > 0) {
+    memcpy(&raw, device->pending_bytes, filled);
+  }
+  ssize_t bytes =
+      read(device->fd, (unsigned char *)&raw + filled, sizeof(raw) - filled);
   if (bytes < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      if (filled > 0) {
+        memcpy(device->pending_bytes, &raw, filled);
+      }
+      device->pending_length = filled;
       return 0;
     }
+    device->pending_length = 0;
     return -1;
   }
   if (bytes == 0) {
+    if (filled > 0) {
+      memcpy(device->pending_bytes, &raw, filled);
+    }
+    device->pending_length = filled;
     return 0;
   }
-  if ((size_t)bytes != sizeof(raw)) {
+  size_t total = filled + (size_t)bytes;
+  if (total < sizeof(raw)) {
+    memcpy(device->pending_bytes, &raw, total);
+    device->pending_length = total;
     return 0;
   }
+  device->pending_length = 0;
 
   memset(out, 0, sizeof(*out));
   out->time_ms = monotonic_ms();

@@ -20,6 +20,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "brickdesk/input.h"
+
 #if defined(__linux__)
 #include <linux/input.h>
 #else
@@ -729,6 +731,65 @@ static void test_grab(void) {
   stop_daemon();
 }
 
+static void test_evdev_probe(void) {
+  char probe_dir[TEST_PATH_MAX];
+  char fifo_path[TEST_PATH_MAX];
+  join_path(probe_dir, sizeof(probe_dir), g_root, "input-probe");
+  CHECK(mkdir(probe_dir, 0755) == 0, "mkdir %s: %s", probe_dir,
+        strerror(errno));
+  join_path(fifo_path, sizeof(fifo_path), probe_dir, "event0");
+  CHECK(mkfifo(fifo_path, 0600) == 0, "mkfifo %s: %s", fifo_path,
+        strerror(errno));
+
+  bd_evdev device;
+  memset(&device, 0, sizeof(device));
+  device.fd = open(fifo_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  CHECK(device.fd >= 0, "open %s: %s", fifo_path, strerror(errno));
+  device.is_fake = true;
+
+  /* No writer: read()-EOF must win even when poll() reports no events. */
+  CHECK(!bd_evdev_ready(&device),
+        "writerless FIFO was reported ready by bd_evdev_ready");
+  int writer = open(fifo_path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  CHECK(writer >= 0, "open writer %s: %s", fifo_path, strerror(errno));
+  CHECK(bd_evdev_ready(&device),
+        "FIFO with an open writer was reported not ready");
+  close(writer);
+  close(device.fd);
+
+  /* A readiness byte must be replayed as part of the first event. */
+  int pipe_fds[2];
+  CHECK(pipe(pipe_fds) == 0, "pipe: %s", strerror(errno));
+  struct input_event event;
+  memset(&event, 0, sizeof(event));
+  event.type = EV_KEY;
+  event.code = BTN_SOUTH;
+  event.value = 1;
+  CHECK(write(pipe_fds[1], &event, sizeof(event)) == (ssize_t)sizeof(event),
+        "write pipe event: %s", strerror(errno));
+  unsigned char first = 0;
+  CHECK(read(pipe_fds[0], &first, 1) == 1,
+        "read first probe byte: %s", strerror(errno));
+  int flags = fcntl(pipe_fds[0], F_GETFL, 0);
+  if (flags >= 0) {
+    fcntl(pipe_fds[0], F_SETFL, flags | O_NONBLOCK);
+  }
+
+  memset(&device, 0, sizeof(device));
+  device.fd = pipe_fds[0];
+  device.pending_bytes[0] = first;
+  device.pending_length = 1;
+  bd_evdev_event parsed;
+  CHECK(bd_evdev_read(&device, &parsed) == 1,
+        "probe byte prevented first event delivery");
+  CHECK(parsed.kind == BD_EVDEV_EVENT_KEY, "wrong replayed event kind");
+  CHECK(parsed.code == BTN_SOUTH, "wrong replayed event code");
+  CHECK(parsed.value == 1, "wrong replayed event value");
+  CHECK(device.pending_length == 0, "probe byte was not consumed");
+  close(pipe_fds[0]);
+  close(pipe_fds[1]);
+}
+
 static void test_fd_recovery(void) {
   char device_dir[TEST_PATH_MAX];
   join_path(device_dir, sizeof(device_dir), g_root, "input-fd");
@@ -938,6 +999,8 @@ int main(int argc, char **argv) {
   printf("inputd_hotplug: lifecycle, replug, hold release and idle checks passed\n");
   test_grab();
   printf("inputd_hotplug: grab hotplug checks passed\n");
+  test_evdev_probe();
+  printf("inputd_hotplug: evdev readiness and probe-byte checks passed\n");
   test_fd_recovery();
   printf("inputd_hotplug: fd-loss reopen and grab recovery checks passed\n");
   test_transient_open();

@@ -304,6 +304,12 @@ typedef struct bd_evdev {
    */
   bool is_fake;
   bool fake_grab_allowed;
+  /*
+   * Readiness probes may consume bytes from a pending event. bd_evdev_read()
+   * prepends them so the first record is delivered intact.
+   */
+  unsigned char pending_bytes[32];
+  size_t pending_length;
   unsigned char key_bits[(BD_EVDEV_KEY_MAX + 8) / 8];
   unsigned char abs_bits[(BD_EVDEV_ABS_MAX + 8) / 8];
   unsigned char sw_bits[(BD_EVDEV_SW_MAX + 8) / 8];
@@ -343,8 +349,17 @@ bool bd_evdev_has_key(const bd_evdev *device, unsigned code);
 bool bd_evdev_has_abs(const bd_evdev *device, unsigned code);
 bool bd_evdev_has_sw(const bd_evdev *device, unsigned code);
 
+/*
+ * Checks whether an opened device can currently produce input. Real evdev
+ * nodes use poll(). The FIFO test backend additionally distinguishes "writer
+ * open but no data" (EAGAIN) from "no writer" (read returns 0), because poll
+ * may report neither POLLIN nor POLLHUP for a writerless FIFO. If the probe
+ * consumes a byte of a pending event, bd_evdev_read() replays it.
+ */
+bool bd_evdev_ready(bd_evdev *device);
+
 /* Reads one event. Returns 1 on an event, 0 when nothing is pending, -1 on error. */
-int bd_evdev_read(const bd_evdev *device, bd_evdev_event *out);
+int bd_evdev_read(bd_evdev *device, bd_evdev_event *out);
 
 /* Reads the current key bitmap; used after SYN_DROPPED. */
 bool bd_evdev_key_bits(const bd_evdev *device, unsigned char *bits,

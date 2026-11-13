@@ -170,7 +170,11 @@ When a device read returns `POLLHUP`/`POLLERR`, `POLLNVAL`, or an error, inputd:
    covers an fd invalidated by resume/error while the node still exists. A
    candidate that opens but is immediately `POLLHUP` (for example a FIFO
    without a writer) is closed again instead of being registered and removed
-   repeatedly; the next retry uses the same 250 ms..5 s backoff.
+   repeatedly; the next retry uses the same 250 ms..5 s backoff. On kernels
+   where `poll()` reports neither `POLLIN` nor `POLLHUP` for a writerless
+   FIFO, readiness uses `read()`: EOF means no writer and `EAGAIN` means a
+   writer is present. A byte consumed by that probe is replayed by
+   `bd_evdev_read()` as part of the first event.
 
 A later rescan reopens the path, re-runs `input.ini` matching and registers it
 exactly once. Node identity (device/inode) distinguishes a replug from the

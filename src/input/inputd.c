@@ -1246,7 +1246,6 @@ static bool device_add(inputd *daemon, const bd_evdev *evdev, bool replay,
   return true;
 }
 
-static bool device_ready(const bd_evdev *device);
 static void device_retry_schedule(inputd *daemon, uint64_t now_ms);
 
 static void device_remove(inputd *daemon, inputd_device *device, uint64_t now_ms,
@@ -1358,24 +1357,6 @@ static void device_attach(inputd *daemon, bd_evdev *evdev, uint64_t now_ms) {
   }
 }
 
-static bool device_ready(const bd_evdev *device) {
-  if (device == NULL || device->fd < 0) {
-    return false;
-  }
-  struct pollfd poll_fd;
-  poll_fd.fd = device->fd;
-  poll_fd.events = POLLIN;
-  poll_fd.revents = 0;
-  int result;
-  do {
-    result = poll(&poll_fd, 1, 0);
-  } while (result < 0 && errno == EINTR);
-  if (result < 0) {
-    return false;
-  }
-  return (poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
-}
-
 static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
                              size_t error_size, bool *retry_needed) {
   if (retry_needed != NULL) {
@@ -1399,20 +1380,6 @@ static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
 
   bool matched[BD_INPUTD_MAX_DEVICES] = {false};
   for (int f = 0; f < found_count; ++f) {
-    if (!device_ready(&found[f])) {
-      /*
-       * A node can exist but be immediately dead (a FIFO without a writer,
-       * or a device invalidated by resume). Keep the directory watch, close
-       * the probe fd and retry with backoff; do not register and then
-       * immediately HUP the same node.
-       */
-      bd_evdev_close(&found[f]);
-      if (retry_needed != NULL) {
-        *retry_needed = true;
-      }
-      continue;
-    }
-
     bool existing_path = false;
     for (size_t i = 0; i < daemon->device_count; ++i) {
       inputd_device *device = &daemon->devices[i];
@@ -1429,16 +1396,47 @@ static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
                        node_dev == device->node_dev &&
                        node_ino == device->node_ino;
       if (same_node) {
+        /*
+         * The device is already open. Do not readiness-probe this second fd:
+         * a probe byte read from a FIFO would otherwise be discarded with
+         * the candidate.
+         */
         bd_evdev_close(&found[f]);
       } else {
         device_remove(daemon, device, now_ms, "replaced", false);
-        device_attach(daemon, &found[f], now_ms);
+        if (!bd_evdev_ready(&found[f])) {
+          /*
+           * The replacement node exists but has no readable peer yet. Keep
+           * the directory watch and retry with backoff instead of
+           * registering and immediately HUPing it.
+           */
+          bd_evdev_close(&found[f]);
+          if (retry_needed != NULL) {
+            *retry_needed = true;
+          }
+        } else {
+          device_attach(daemon, &found[f], now_ms);
+        }
       }
       break;
     }
-    if (!existing_path) {
-      device_attach(daemon, &found[f], now_ms);
+    if (existing_path) {
+      continue;
     }
+    if (!bd_evdev_ready(&found[f])) {
+      /*
+       * A node can exist but be immediately dead (a FIFO without a writer,
+       * or a device invalidated by resume). Keep the directory watch, close
+       * the probe fd and retry with backoff; do not register and then
+       * immediately HUP the same node.
+       */
+      bd_evdev_close(&found[f]);
+      if (retry_needed != NULL) {
+        *retry_needed = true;
+      }
+      continue;
+    }
+    device_attach(daemon, &found[f], now_ms);
   }
 
   for (size_t i = 0; i < daemon->device_count; ++i) {

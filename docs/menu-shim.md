@@ -113,6 +113,12 @@ persimmon accent from `bd_config_accent_hex()`/`theme.accent`, 20 px panel
 corners, 12 px row corners and the Noto SC subset for Chinese. The app's frame
 is the background; there is no live blur.
 
+The footer uses the same keycap vocabulary as the home hint bar and the
+settings footer: 22 px keys with 4 px corners, 13 px sans key labels, a 1 px
+ink border at 22% and a 4% ink fill. `A 确认` and `B 返回` sit left of a 1 px
+divider; `←→ 调整` sits right. The row is centred on the existing footer
+baseline, so the panel, row geometry and body text sizes are unchanged.
+
 ## 6. GL state
 
 `bd_menu_gl_create()` saves the application state before touching GL and
@@ -172,7 +178,8 @@ format. The desktop can show this frame while the app is paused or backgrounded.
 1. `apps/demo` under `bd_session` with `libbrickdesk-menu.so` preloaded and a
    real `brickdesk-inputd --replay` stream. It checks the menu grab/ungrab,
    the background/resume path, the menu control action, the saved state, and
-   the last-frame header, and copies `menu_open.png`/`menu_focus.png`.
+   the last-frame header, and copies `menu_open.png`/`menu_focus.png`/
+   `menu_brightness.png` (default focus, a moved focus and a slider page).
 2. A second fresh demo run selects **quit** and checks the session save/quit
    path and exit status.
 3. `tests/menu_state_app.c` opens and closes the menu, then compares the full

@@ -162,7 +162,7 @@ if [ "$menu" -eq 1 ]; then
     --config "$ROOT/config" \
     --assets "$ROOT/assets" \
     --out-dir "$out_dir"
-  for name in menu_open menu_focus; do
+  for name in menu_open menu_focus menu_brightness; do
     image="$out_dir/$name.png"
     if [ ! -f "$image" ]; then
       printf 'update-baselines: %s was not produced\n' "$image" >&2

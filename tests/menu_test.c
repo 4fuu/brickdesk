@@ -10,7 +10,7 @@
  * keys. The shim opens the overlay, writes the last frame, grabs input, sends
  * the background and quit menu actions through the session menu socket, and
  * releases the grab. The test checks the session state transitions, the state
- * file, the last-frame header, inputd's grab/ungrab log, and copies the two
+ * file, the last-frame header, inputd's grab/ungrab log, and copies three
  * deterministic menu screenshots for baseline comparison.
  *
  * Phase 2 runs tests/menu_state_app under the same shim and a replay that
@@ -434,9 +434,19 @@ static void run_demo_phase(const char *demo, const char *inputd,
             "5600 key MENU up\n"
             "6200 key DOWN down\n"
             "6250 key DOWN up\n"
-            "6800 key A down\n"
-            "6850 key A up\n"
-            "9000 quit\n";
+            "6500 key DOWN down\n"
+            "6550 key DOWN up\n"
+            "6800 key DOWN down\n"
+            "6850 key DOWN up\n"
+            "7100 key LEFT down\n"
+            "7150 key LEFT up\n"
+            "7400 key UP down\n"
+            "7450 key UP up\n"
+            "7700 key UP down\n"
+            "7750 key UP up\n"
+            "8000 key A down\n"
+            "8050 key A up\n"
+            "9500 quit\n";
   write_file(replay_path, replay);
   write_demo_manifest(manifest_path, demo, shim, cap_dir, socket_path);
 
@@ -480,12 +490,15 @@ static void run_demo_phase(const char *demo, const char *inputd,
 
   bool copied_open = false;
   bool copied_focus = false;
+  bool copied_controls = false;
   bool resumed = false;
   bool terminated = false;
   char open_path[PATH_MAX];
   char focus_path[PATH_MAX];
+  char controls_path[PATH_MAX];
   join_path(open_path, sizeof(open_path), cap_dir, "menu-0001.png");
   join_path(focus_path, sizeof(focus_path), cap_dir, "menu-0002.png");
+  join_path(controls_path, sizeof(controls_path), cap_dir, "menu-0004.png");
 
   int resumed_wait = 0;
   for (int waited = 0; session != NULL && waited < 18000; waited += 10) {
@@ -544,6 +557,12 @@ static void run_demo_phase(const char *demo, const char *inputd,
       check(copy_file(focus_path, target), "cannot copy menu_focus.png");
       copied_focus = true;
     }
+    if (!quit_phase && !copied_controls && access(controls_path, R_OK) == 0) {
+      char target[PATH_MAX];
+      join_path(target, sizeof(target), out_dir, "menu_brightness.png");
+      check(copy_file(controls_path, target), "cannot copy menu_brightness.png");
+      copied_controls = true;
+    }
     if (obs->exited) {
       break;
     }
@@ -570,6 +589,7 @@ static void run_demo_phase(const char *demo, const char *inputd,
     }
     check(copied_open, "menu open screenshot was not produced");
     check(copied_focus, "menu focus screenshot was not produced");
+    check(copied_controls, "menu brightness screenshot was not produced");
   }
   check(context.obs.exited, "app did not exit after termination");
   if (context.obs.exited) {

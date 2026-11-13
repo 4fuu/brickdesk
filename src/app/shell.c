@@ -24,6 +24,7 @@
 #include "brickdesk/device_av.h"
 #include "brickdesk/device_battery.h"
 #include "brickdesk/app_history.h"
+#include "brickdesk/device_display.h"
 #include "brickdesk/battery_history.h"
 #include "brickdesk/haptics.h"
 #include "brickdesk/led.h"
@@ -114,6 +115,11 @@ struct bd_shell {
   bool av_brightness_ready;
   bd_av_audio av_audio;
   bool av_audio_ready;
+  bd_display display;
+  bool display_ready;
+  bool dp_connected_known;
+  bool dp_connected;
+  uint64_t dp_next_ms;
   bd_home_quick_backend home_quick;
   char perf_socket[BD_PERF_PATH_MAX];
   char battery_root[BD_SHELL_PATH_MAX];
@@ -510,6 +516,72 @@ static void shell_open_devices(bd_shell *shell, const bd_shell_config *config) {
   shell->home_quick.user = shell;
 }
 
+static bool shell_display_apply(bd_shell *shell) {
+  if (shell == NULL || !shell->display_ready) {
+    return false;
+  }
+  bd_display_settings settings;
+  memset(&settings, 0, sizeof(settings));
+  settings.color_temperature =
+      (int)bd_config_get_int(shell->settings, "display.color_temperature", 0);
+  settings.contrast =
+      (int)bd_config_get_int(shell->settings, "display.contrast", 50);
+  settings.saturation =
+      (int)bd_config_get_int(shell->settings, "display.saturation", 50);
+  settings.exposure =
+      (int)bd_config_get_int(shell->settings, "display.exposure", 50);
+  settings.white_point =
+      bd_config_get_bool(shell->settings, "display.white_point", true);
+  settings.red_gain =
+      (int)bd_config_get_int(shell->settings, "display.white_point_red", 100);
+  settings.green_gain = (int)bd_config_get_int(
+      shell->settings, "display.white_point_green", 94);
+  settings.blue_gain = (int)bd_config_get_int(
+      shell->settings, "display.white_point_blue", 54);
+  bd_display_error error;
+  bd_display_error_clear(&error);
+  bd_display_result result =
+      bd_display_apply(&shell->display, &settings, &error);
+  if (result != BD_DISPLAY_OK) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: display: %s\n",
+              error.message[0] != '\0' ? error.message
+                                       : bd_display_result_name(result));
+    }
+    return false;
+  }
+  if (shell->verbose && shell->display.white_point_error[0] != '\0') {
+    fprintf(stderr, "brickdesk: display: %s\n",
+            shell->display.white_point_error);
+  }
+  return true;
+}
+
+static void shell_display_dp_poll(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || !shell->display_ready || now < shell->dp_next_ms) {
+    return;
+  }
+  shell->dp_next_ms = now + 5000;
+  bool connected = false;
+  char connector[64];
+  if (!bd_display_dp_connected(&shell->display, &connected, connector,
+                               sizeof(connector))) {
+    return;
+  }
+  if (shell->dp_connected_known && shell->dp_connected == connected) {
+    return;
+  }
+  shell->dp_connected_known = true;
+  shell->dp_connected = connected;
+  char message[160];
+  if (connected) {
+    snprintf(message, sizeof(message), "外接显示已连接：%s", connector);
+  } else {
+    snprintf(message, sizeof(message), "外接显示已断开");
+  }
+  bd_shell_notice(shell, BD_NOTICE_INFO, message, 0);
+}
+
 static bool shell_perf_apply(void *user, const char *profile, char *error,
                              size_t error_size) {
   bd_shell *shell = (bd_shell *)user;
@@ -578,6 +650,8 @@ static void shell_config_changed(void *user, const char *key) {
              strcmp(key, "audio.volume") == 0 ||
              strcmp(key, "audio.mute") == 0) {
     shell_home_quick_refresh(shell);
+  } else if (strncmp(key, "display.", 8) == 0) {
+    shell_display_apply(shell);
   } else if (strcmp(key, "session.max_background") == 0) {
     shell_publish_status(shell, true);
   } else if (strncmp(key, "led.", 4) == 0 ||
@@ -1992,6 +2066,7 @@ static void shell_process_pending(bd_shell *shell) {
       switch (pending->kind) {
         case SHELL_PENDING_STATE:
           if (pending->state == BD_SESSION_FOREGROUND) {
+            shell_display_apply(shell);
             copy_text(shell->led_app_id, sizeof(shell->led_app_id),
                       pending->app_id);
             shell->led_profile_valid = false;
@@ -2004,6 +2079,7 @@ static void shell_process_pending(bd_shell *shell) {
           }
           break;
         case SHELL_PENDING_EXIT: {
+          shell_display_apply(shell);
           if (strcmp(shell->led_app_id, pending->app_id) == 0) {
             shell->led_app_id[0] = '\0';
             shell->led_ambient_known = false;
@@ -2111,6 +2187,7 @@ static void shell_service(bd_shell *shell) {
     shell_refresh_status(shell, false);
     shell_battery_sample(shell, now);
     shell_led_ambient_sample(shell, now);
+    shell_display_dp_poll(shell, now);
     if (shell->notice != NULL && shell->visible &&
         bd_notice_update(shell->notice, now)) {
       shell->dirty = true;
@@ -4304,6 +4381,24 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
 
   shell_open_devices(shell, config);
+  {
+    bd_display_config display_config;
+    memset(&display_config, 0, sizeof(display_config));
+    display_config.sysfs_root = config->av_sysfs_root;
+    bd_display_error display_error;
+    bd_display_error_clear(&display_error);
+    shell->display_ready =
+        bd_display_probe(&shell->display, &display_config, &display_error) ==
+        BD_DISPLAY_OK;
+    if (!shell->display_ready && shell->verbose) {
+      fprintf(stderr, "brickdesk: display enhancements: %s\n",
+              display_error.message[0] != '\0'
+                  ? display_error.message
+                  : bd_display_result_name(display_error.code));
+    } else if (shell->display_ready) {
+      shell_display_apply(shell);
+    }
+  }
   {
     char device_error[192] = {0};
     shell->led = bd_led_create(config->settings, config->av_sysfs_root,

@@ -44,7 +44,7 @@
 | 耳机状态 | API 已实现，接线未做 | 调用方喂 `SW_HEADPHONE_INSERT` | 本模块不读 evdev；`set_jack()` 记录并自动切换 |
 | 耳机音量控件 | 只枚举，不管理 | `Headphone Volume` | 能力标志 `has_headphone_volume`；没有专用 setter |
 | 蓝牙 A2DP / USB DAC | 明确不支持 | — | 不在本任务范围 |
-| 色温/对比度/饱和度 | 明确不支持 | — | 不在本任务范围 |
+| 色温/对比度/饱和度/曝光 | 已实现，见 [device-display.md](device-display.md) | `/sys/class/disp/disp/attr/*` | 本模块只负责背光，不写这些节点 |
 | `dispdbg` debugfs 亮度 | 明确不支持 | — | CrossMix 使用；依赖 debugfs/root，未作为后端 |
 | 电源/PMIC/LED/马达 | 不在范围 | — | 不实现 |
 

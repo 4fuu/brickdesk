@@ -135,7 +135,12 @@ static const char *const APPEARANCE_SKIP[] = {
     "ui.cover_cache_mb", NULL};
 static const char *const SOUND_KEYS[] = {"audio.volume", "audio.mute", NULL};
 static const char *const SOUND_SECTIONS[] = {"audio", NULL};
-static const char *const DISPLAY_KEYS[] = {"display.brightness", NULL};
+static const char *const DISPLAY_KEYS[] = {
+    "display.brightness",       "display.color_temperature",
+    "display.contrast",         "display.saturation",
+    "display.exposure",         "display.white_point",
+    "display.white_point_red",  "display.white_point_green",
+    "display.white_point_blue", NULL};
 static const char *const DISPLAY_SECTIONS[] = {"display", NULL};
 static const char *const DISPLAY_SKIP[] = {"display.width", "display.height",
                                            "display.refresh_hz", NULL};
@@ -161,8 +166,8 @@ const bd_settings_page_def BD_SETTINGS_PAGES[BD_SETTINGS_CATEGORY_COUNT] = {
      APPEARANCE_KEYS, APPEARANCE_SECTIONS, APPEARANCE_SKIP},
     {"声音", "音量与静音", "音量与静音通过系统接口生效。", SOUND_KEYS,
      SOUND_SECTIONS, NULL},
-    {"显示", "屏幕背光", "亮度通过系统接口应用到背光。", DISPLAY_KEYS,
-     DISPLAY_SECTIONS, DISPLAY_SKIP},
+    {"显示", "背光、色温与白点", "亮度走背光接口；其余写厂商 disp 节点。",
+     DISPLAY_KEYS, DISPLAY_SECTIONS, DISPLAY_SKIP},
     {"灯光", "分区颜色、效果与指示",
      "顶部灯条、摇杆环、F1/F2 与扳机分区独立设置；F2 与 F1 共用亮度。",
      LIGHTS_KEYS, LIGHTS_SECTIONS, NULL},
@@ -186,6 +191,14 @@ static const bd_settings_label LABELS[] = {
     {"audio.volume", "音量", "系统输出音量", NULL, 1},
     {"audio.mute", "静音", "关闭全部系统声音", NULL, 1},
     {"display.brightness", "亮度", "屏幕背光", NULL, 1},
+    {"display.color_temperature", "色温", "负值偏冷，正值偏暖", NULL, 10},
+    {"display.contrast", "对比度", "厂商 enhance_contrast", NULL, 5},
+    {"display.saturation", "饱和度", "厂商 enhance_saturation", NULL, 5},
+    {"display.exposure", "曝光", "厂商 enhance_bright", NULL, 5},
+    {"display.white_point", "白点校正", "按 sRGB 生成 gamma 表", NULL, 1},
+    {"display.white_point_red", "白点红增益", "100 为中性", NULL, 5},
+    {"display.white_point_green", "白点绿增益", "100 为中性", NULL, 5},
+    {"display.white_point_blue", "白点蓝增益", "100 为中性", NULL, 5},
     {"led.enabled", "启用灯光", "关闭后所有分区熄灭", NULL, 1},
     {"led.m.brightness", "顶栏亮度", "顶部灯条 / Logo 分区", NULL, 1},
     {"led.m.color", "顶栏颜色", "顶部灯条 / Logo 分区", NULL, 0},

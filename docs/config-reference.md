@@ -132,6 +132,14 @@ schema_version = 1
 | `height` | int | `768` | 240..4096 | 逻辑高度；Brick Pro 为 768 |
 | `refresh_hz` | int | `60` | 30..120 | 刷新率 |
 | `brightness` | int | `70` | 0..100 | 背光百分比 |
+| `color_temperature` | int | `0` | -200..200 | 厂商 `color_temperature`；负冷正暖 |
+| `contrast` | int | `50` | 10..100 | 厂商 `enhance_contrast` |
+| `saturation` | int | `50` | 0..100 | 厂商 `enhance_saturation` |
+| `exposure` | int | `50` | 10..100 | 厂商 `enhance_bright` |
+| `white_point` | bool | `true` | — | 是否启用 `/dev/disp` gamma 白点 |
+| `white_point_red` | int | `100` | 0..200 | 白点红增益，100 中性 |
+| `white_point_green` | int | `94` | 0..200 | 白点绿增益，Brick Pro 预设 |
+| `white_point_blue` | int | `54` | 0..200 | 白点蓝增益，Brick Pro 预设 |
 
 ### 4.4 `[audio]`
 

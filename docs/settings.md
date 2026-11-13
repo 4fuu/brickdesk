@@ -93,7 +93,7 @@ needs a rebuild just to show a new number.
 |---|---|
 | 外观 | `theme.accent` (+ custom RGB sub-page), `theme.ambient`, `ui.animations`, `ui.blur` |
 | 声音 | `audio.volume`, `audio.mute` |
-| 显示 | `display.brightness` |
+| 显示 | `display.brightness`, `color_temperature`, `contrast`, `saturation`, `exposure`, `white_point` + RGB gains |
 | 灯光 | `led.enabled`, per-zone brightness/color/effect for `m`/`lr`/`f1`/`f2`/`rear`, `led.indicator_brightness`, `led.ambient`, `led.ambient_brightness` |
 | 按键 | one conflict summary plus every `[hotkey.<id>]` combo, action, trigger and warning marker |
 | 性能 | `perf.global_profile` and every `[app.<id>] profile` override, both cycled through perf.ini profile names |
@@ -106,6 +106,8 @@ New config keys added for this page:
 - `[audio] volume` (0..100, default 70) and `[audio] mute` (bool, false);
 - `[session] memory_budget_mb` (128..1024, default 560);
 - `[perf] global_profile` (string, default `default`);
+- `[display]` colour temperature/contrast/saturation/exposure and white-point
+  keys (see [docs/device-display.md](device-display.md));
 - `[led]` master/indicator/ambient keys and per-zone `brightness`/`color`/`effect`
   (see [docs/config-reference.md](config-reference.md) 4.6);
 - `[input] haptics`, `haptic_strength`, `haptic_duration_ms`.

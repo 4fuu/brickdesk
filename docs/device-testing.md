@@ -207,6 +207,13 @@ adb shell 'ls -l /sys/class/disp/disp/attr 2>/dev/null; ls -l /sys/devices/virtu
 - `/dev/disp` 可打开；`ioctl 0x102` 的亮度范围（原厂 0–255）是否能实际改变背光。
 - `/sys/class/backlight/*` 是否存在；如果存在，优先用它，避免写厂商 ioctl。
 - 亮度 0/1/8/255 是否出现“0 仍微亮”或“1 全黑”；恢复时是否需要先写 8。
+- `color_temperature` -200/0/200、`enhance_contrast` 10/50/100、
+  `enhance_saturation` 0/50/100、`enhance_bright` 10/50/100 的实际方向、
+  范围和是否闪烁；设置页“显示”逐项调整。
+- 白点校正：`/dev/disp` gamma 表 0x10b/0x10c/0x10d 是否生效；100/94/54 与
+  100/100/100 的色偏差异；关闭后是否恢复。
+- USB-C DP：`ls /sys/class/drm`，接入外接屏后 connector 的 `status` 是否变
+  `connected`，桌面是否出现提示；内屏是否保持 1024×768。
 - `eglSwapInterval(1)` 是否生效，快速横向滚动是否撕裂。
 
 截图验证（fb0 读回）：

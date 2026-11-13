@@ -49,6 +49,15 @@ const bd_config_spec bd_config_specs[] = {
     {"display", "height", BD_CONFIG_INT, "768", 240, 4096, NULL, 0, 0, 0},
     {"display", "refresh_hz", BD_CONFIG_INT, "60", 30, 120, NULL, 0, 0, 0},
     {"display", "brightness", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
+    {"display", "color_temperature", BD_CONFIG_INT, "0", -200, 200, NULL, 0, 0,
+     0},
+    {"display", "contrast", BD_CONFIG_INT, "50", 10, 100, NULL, 0, 0, 0},
+    {"display", "saturation", BD_CONFIG_INT, "50", 0, 100, NULL, 0, 0, 0},
+    {"display", "exposure", BD_CONFIG_INT, "50", 10, 100, NULL, 0, 0, 0},
+    {"display", "white_point", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"display", "white_point_red", BD_CONFIG_INT, "100", 0, 200, NULL, 0, 0, 0},
+    {"display", "white_point_green", BD_CONFIG_INT, "94", 0, 200, NULL, 0, 0, 0},
+    {"display", "white_point_blue", BD_CONFIG_INT, "54", 0, 200, NULL, 0, 0, 0},
 
     /* audio */
     {"audio", "volume", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},

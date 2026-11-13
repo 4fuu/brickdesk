@@ -165,12 +165,17 @@ add_library(brickdesk_device STATIC
   src/device/audio_alsa.c
   src/device/brightness.c
   src/device/brightness_common.c
+  src/device/display.c
 )
 target_include_directories(brickdesk_device
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/device"
 )
-target_link_libraries(brickdesk_device PRIVATE brickdesk_warnings)
+target_link_libraries(brickdesk_device
+  PRIVATE
+    brickdesk_warnings
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
+)
 # The in-app menu shim is a shared library and links this static archive.  The
 # device code must therefore be position independent; keep it that way for the
 # shell and the bd-av tool too.

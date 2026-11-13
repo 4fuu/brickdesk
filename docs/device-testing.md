@@ -242,6 +242,9 @@ adb shell 'ls -l /tmp/trimui_inputd/ 2>/dev/null'
   是否从 0 变 3，扬声器是否静音。
 - 游戏运行时，`trimui_inputd`/`keymon` 是否 grab 物理设备；全局音量/亮度是否双份输入。
 - `/tmp/trimui_inputd/grab` 由谁创建、何时删除。
+- 热插拔：保持一个键按住时拔出设备，确认只释放该设备的键；另一设备按住的键仍保持。
+  重插后 `bd-input --watch` 应只看到一次新设备/按键；抓取期间插入无法 grab 的设备时，
+  日志/协议应出现 `hotplug_grab_failed`，且不能假装该设备已被独占。
 - 长按/组合键（Menu+音量、Select+音量、Menu+Select、Menu+Start、电源 1/2/6 s）
   是否有重复、粘键、丢失。
 - 挂起/恢复后 evdev fd 是否失效，是否需要重新枚举；inputd 被 kill 后 supervisor

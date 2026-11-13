@@ -296,6 +296,14 @@ typedef struct bd_evdev {
   bool has_abs;
   bool has_sw;
   bool is_gamepad; /* has BTN_SOUTH/BTN_GAMEPAD or a D-pad HAT */
+  /*
+   * Test backend: a FIFO event* node under --device-dir is read like evdev
+   * and described by <path>.meta. `fake_grab_allowed` simulates EVIOCGRAB
+   * success/failure without uinput or hardware. Real evdev nodes leave both
+   * fields false.
+   */
+  bool is_fake;
+  bool fake_grab_allowed;
   unsigned char key_bits[(BD_EVDEV_KEY_MAX + 8) / 8];
   unsigned char abs_bits[(BD_EVDEV_ABS_MAX + 8) / 8];
   unsigned char sw_bits[(BD_EVDEV_SW_MAX + 8) / 8];
@@ -432,9 +440,20 @@ bool bd_device_map_parse_value(const char *text, bd_device_map_type *type,
  *   {"type":"switch","switch":"headphone","value":1,"time_ms":1236}
  *   {"type":"grab","active":true,"pending":false,"forced":false}
  *   {"type":"release_all","time_ms":1237}
+ *   {"type":"device","action":"added","device":"TrimUI Gamepad",
+ *    "path":"/dev/input/event2","grabbed":false,"time_ms":1238}
+ *   {"type":"device","action":"removed","device":"TrimUI Gamepad",
+ *    "path":"/dev/input/event2","reason":"hangup","time_ms":1239}
  *   {"type":"pong","time_ms":1238}
  *   {"type":"error","cmd":"grab","error":"EBUSY","device":"..."}
- *   {"type":"warning","message":"syn_dropped","device":"..."}
+ *   {"type":"warning","message":"syn_dropped","device":"...",
+ *    "time_ms":1239}
+ *   {"type":"warning","message":"hotplug_grab_failed",
+ *    "device":"/dev/input/event5","error":"Device or resource busy",
+ *    "time_ms":1240}
+ *
+ * `hello` still lists registered device names. Device add/remove lines are
+ * additive diagnostics; clients that do not know them can ignore the type.
  *
  * A line is at most 4096 bytes. A client that cannot keep up is disconnected;
  * the daemon never blocks on a subscriber.

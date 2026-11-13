@@ -63,16 +63,25 @@ chord > hold threshold > double > sequence > delayed tap.
 ## 3. `brickdesk-inputd`
 
 ```sh
-brickdesk-inputd [--config-dir DIR] [--socket PATH] [--replay FILE]
-                 [--replay-fast] [--exit-after-replay] [--no-grab] [--verbose]
+brickdesk-inputd [--config-dir DIR] [--socket PATH] [--device-dir DIR]
+                 [--replay FILE] [--replay-fast] [--exit-after-replay]
+                 [--no-grab] [--verbose]
 ```
 
 - Default is passive: it opens every `/dev/input/event*` read-only and never
   grabs. Games/foreground apps still receive every key.
-- The daemon blocks in `poll()`; the timeout is the next hotkey/replay
-  deadline, capped at 500 ms for signals. It does not busy-wait.
+- The daemon blocks in `poll()`; the timeout is the next hotkey/replay/device
+  scan deadline, capped at 500 ms for signals. It does not busy-wait.
+- It watches the device directory with `inotify` and rescans on create,
+  delete, move or attribute changes. If `inotify` or the directory is
+  unavailable, it falls back to periodic scans with bounded exponential
+  backoff (250 ms, doubling to 5 s). Starting with no device directory or no
+  devices is supported; the socket stays open and devices that appear later
+  are picked up.
 - If `/dev/input` does not exist, it logs a warning and keeps the socket open;
   use `--replay` on a host.
+- `--device-dir DIR` overrides `/dev/input`. It is also the entry point for
+  the hardware-free FIFO backend described in 3.3.
 - Default socket path: `$BRICKDESK_INPUT_SOCKET`, else
   `/run/brickdesk/inputd.sock`; if `/run/brickdesk` cannot be created,
   `/tmp/brickdesk-inputd.sock`.
@@ -85,6 +94,14 @@ brickdesk-inputd [--config-dir DIR] [--socket PATH] [--replay FILE]
 menu: while it is open the game should not receive input. If any device fails
 (e.g. `EBUSY` because the game grabbed it first), inputd rolls back and sends
 an error.
+
+A device added while the grab is active is grabbed before it is registered. If
+that fails, inputd does not add it to the poll set and broadcasts
+`hotplug_grab_failed` with the path and `strerror`; it never reports the grab
+as covering a device it could not acquire. The device is retried after
+ungrab. Removing a device during a grab releases only that device's logical
+keys and holds; the grab stays active for the remaining devices (and for
+later hotplug devices).
 
 `{"cmd":"ungrab"}` waits until all logical keys are released, then ungrabs. If
 keys are still held after 500 ms it force-ungrabs so the device cannot get
@@ -117,6 +134,9 @@ Daemon to client:
 {"type":"switch","switch":"headphone","value":1,"source":"gpio-keys","time_ms":1236}
 {"type":"grab","active":true,"pending":false,"forced":false}
 {"type":"release_all","time_ms":1237}
+{"type":"device","action":"added","device":"TrimUI Gamepad","path":"/dev/input/event2","grabbed":false,"time_ms":1238}
+{"type":"device","action":"removed","device":"TrimUI Gamepad","path":"/dev/input/event2","reason":"hangup","time_ms":1239}
+{"type":"warning","message":"hotplug_grab_failed","device":"/dev/input/event5","error":"Device or resource busy","time_ms":1240}
 {"type":"pong","time_ms":1238}
 {"type":"error","cmd":"grab","error":"Device or resource busy","device":"/dev/input/event2"}
 {"type":"warning","message":"syn_dropped","device":"TrimUI Gamepad","time_ms":1239}
@@ -125,10 +145,52 @@ Daemon to client:
 - Action events go to clients with `actions=true` (the default).
 - Key events go to clients with `keys=true`, and always to everyone while
   grabbed (the menu needs the keys the hotkey layer normally reserves).
+- `device` added/removed lines are additive diagnostic notifications. They are
+  broadcast to every client; older clients can ignore them. `hello` still
+  lists the currently registered devices only, so a rescan or replug cannot
+  duplicate a name in the list.
+- `hotplug_grab_failed` is broadcast once per rejected path until ungrab.
 - `source` is `EVIOCGNAME`; for replay it is `"replay"`.
 - `trigger` is `tap`, `chord`, `hold`, `repeat`, `double` or `sequence`.
   `phase` is `down` or `up`; non-hold actions normally emit only `down`.
 - `switch` names: `headphone`, `tablet`, `lid`, or a numeric code.
+  `SW_HEADPHONE_INSERT` keeps using the existing `switch` line; no separate
+  audio backend or message is involved.
+
+### 3.3 Device loss and the FIFO test backend
+
+When a device read returns `POLLHUP`/`POLLERR`, `POLLNVAL`, or an error, inputd:
+
+1. releases only that device's logical pressed keys and active holds (the
+   global `release_all` notification is not sent, so keys held on another
+   device stay down);
+2. closes the fd and removes it from the poll set and `hello` list;
+3. leaves the grab active for the remaining devices.
+
+A later rescan reopens the path, re-runs `input.ini` matching and registers it
+exactly once. Node identity (device/inode) distinguishes a replug from the
+same still-open node, so an unchanged rescan never duplicates fds or events.
+
+For hardware-free lifecycle tests, `--device-dir DIR` accepts `eventN` FIFOs
+instead of character devices. A FIFO with no writer is treated as gone; keep
+the writer fd open while the device is present. Capabilities come from
+`DIR/eventN.meta`:
+
+```ini
+# all fields optional except that a FIFO needs at least one capability
+name=Fake Gamepad
+vendor=0xbeef
+product=0x0001
+keys=BTN_SOUTH,BTN_EAST,BTN_MODE
+abs=ABS_HAT0X,ABS_HAT0Y
+sw=SW_HEADPHONE_INSERT
+# deny simulates EVIOCGRAB returning EBUSY; allow (default) succeeds
+grab=allow
+```
+
+The writer sends binary `struct input_event` records. This path is test-only:
+it never creates a uinput node and is not used for `/dev/input` character
+devices.
 
 ## 4. Replay files
 
@@ -199,8 +261,11 @@ executes `session.return_home` when an app owns the screen.
 - `scope=app:`/`mode:` is parsed and conflict-checked but inputd activates
   global scope only; there is no session context yet.
 - `uinput` is not created by inputd. Any uinput-created device that appears in
-  `/dev/input` is read like a normal device; `--replay` covers host testing.
-- Hotplug/suspend-resume is not handled; if an fd dies, restart inputd.
+  `/dev/input` is read like a normal device; `--replay` and the FIFO backend
+  cover host testing.
+- Hotplug and fd-loss recovery are implemented in the daemon, but real USB
+  removal/reinsert, `udev` timing, suspend/resume fd invalidation and
+  `EVIOCGRAB` against a running game still need hardware confirmation.
 - Real key codes, whether SDL's mali driver grabs devices, and the
   `EVIOCGRAB` effect on running games must be confirmed on hardware with
   `bd-input --list/--learn` and the checklist in

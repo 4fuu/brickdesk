@@ -361,7 +361,9 @@ NextUI 的 suspend 脚本在写 `mem` 失败时重试 5 次，并在“实际睡
 ### 6.1 构建目标
 
 - 库：`brickdesk_power`（`src/device/power.c`、`src/device/power_linux.c`）。
-- CLI：`bd-power`（`src/device/power_probe_main.c`）。
+- CLI：`bd-power`（`src/device/power_probe_main.c`）；target 构建进入
+  `dist/bin/bd-power`，发布包安装到 `bin/bd-power`，并附带
+  `docs/device-power.md`。默认只读，危险动作需要显式参数。
 - 测试：`bd_device_power_test`（CTest 名称 `device_power`）。
 
 库不链接 SDL/GLES/ALSA；target 构建和 host 构建使用同一份源码。
@@ -547,8 +549,22 @@ Debian 交叉链接的 `__libc_start_main` 显示 `GLIBC_2.34` 是 Debian 12 启
 - target：<https://github.com/4fuu/brickdesk/actions/runs/43379408364>，
   `success`；日志显示官方工具链构建了 `libbrickdesk_power.a`、`bd-power` 和
   `tests/bd_device_power_test`（aarch64）。
-- `bd-power` 仍未加入 `scripts/build-target.sh` 的 `dist/bin` 列表；target
-  构建产物在 `build-target/bd-power`，需要手动推送。
+- 早期 `m4/power` 的 CI 只构建了 `bd-power`；本打包跟进分支已把它加入
+  `scripts/build-target.sh` 的 `dist/bin`、`scripts/package-target.sh` 的
+  `payload/bin`、离线包检查以及 target workflow 的 `GLIBC <= 2.23` 检查。
+
+本打包跟进分支（`m4/power-package`，提交 `c5d07f1`，2026-11-13）的验证：
+
+- host：<https://github.com/4fuu/brickdesk/actions/runs/43381263331>，
+  `success`；全量 33/33 CTest 通过。
+- target：<https://github.com/4fuu/brickdesk/actions/runs/43381263343>，
+  `success`；日志显示 `build-target/bd-power` 为 aarch64，`max GLIBC 2.17
+  (limit 2.23) OK`，并进入 `build-target/dist/bin/`。
+- 发布包：CI 产物 `brickdesk-0.1.0-aarch64.zip` 含
+  `payload/bin/bd-power` 和 `docs/device-power.md`；包 SHA256 为
+  `d367cc10a3b7c59162b22f0fccd2bd897d2180477c9063f22468907649b7532a`。
+- `bd-power` 仍默认只读；无 `--allow-state-changes` 的 `--deep-sleep` 退出 2，
+  poweroff/reboot 另需 `--yes`。
 
 ### 7.3 探测 CLI
 
@@ -598,10 +614,8 @@ adb shell /mnt/SDCARD/brickdesk/bin/bd-power \
 `--deep-sleep` 是后端诊断，不是生产休眠序列；它不调用 input/app/display
 hook，也不停止服务。生产路径必须由 shell 通过 `bd_power` 状态机执行。
 
-`bd-power` 当前由 target CMake 构建为 `build-target/bd-power`，但
-`scripts/build-target.sh` 还没有把它加入 `dist/bin`。真机使用前需要手动
-`adb push build-target/bd-power /mnt/SDCARD/brickdesk/bin/`，或由后续打包
-改动加入；这属于集成点，不在本分支的脚本范围内。
+`bd-power` 随 target 构建进入 `build-target/dist/bin/bd-power`，并随发布包安装到
+`/mnt/SDCARD/brickdesk/bin/bd-power`；包内同时附带 `docs/device-power.md`。
 
 ## 8. 真机验收矩阵
 
@@ -752,8 +766,9 @@ done
   `app_pause`/`resource_prepare` 中保存并 flush 自己的状态。
 - **CLI 诊断**：`bd-power --deep-sleep` 绕过 shell hook，只测内核路径，不能
   作为生产恢复证据。
-- **构建**：`bd-power` 已在 target CMake 中构建，但尚未加入
-  `scripts/build-target.sh` 的 `dist/bin` 列表；这是后续打包集成点。
+- **构建**：`bd-power` 已加入 target `dist/bin`、发布包 `payload/bin`、离线包
+  结构和安装检查，以及 target workflow 的 GLIBC 检查；默认只读和危险动作开关
+  没有改变。
 
 ## 10. 文件与集成点
 
@@ -766,7 +781,7 @@ done
 | `tests/device_power_test.c` | 宿主状态机/故障注入/probe 测试 |
 | `tests/fixtures/power/` | full/limited sysfs fixture |
 | `brickdesk_power` | CMake 静态库 |
-| `bd-power` | CMake 可执行文件；target 构建为 `build-target/bd-power` |
+| `bd-power` | CMake 可执行文件；target 构建为 `build-target/dist/bin/bd-power`，发布包安装到 `bin/bd-power` |
 | `bd_device_power_test` | 测试可执行文件；CTest 名称 `device_power` |
 
 后续 shell 接线需要：

@@ -26,6 +26,7 @@ brickdesk-0.1.0-aarch64/
   install.sh
   uninstall.sh
   docs/install.md
+  docs/device-power.md
   payload/
     bin/
       brickdesk
@@ -33,6 +34,7 @@ brickdesk-0.1.0-aarch64/
       brickdesk-perfd
       bd-input
       brickdesk-config
+      bd-power
       display_probe
       bench_render
       brickdesk-demo

@@ -48,6 +48,7 @@ build-target/brickdesk-inputd
 build-target/brickdesk-perfd
 build-target/bd-input
 build-target/brickdesk-config
+build-target/bd-power
 build-target/brickdesk-demo
 build-target/display_probe
 build-target/bench/bench_render
@@ -472,8 +473,9 @@ cat build-target/package/SHA256SUMS
 ```text
 brickdesk-<version>-aarch64/install.sh
 brickdesk-<version>-aarch64/uninstall.sh
+brickdesk-<version>-aarch64/docs/device-power.md
 brickdesk-<version>-aarch64/payload/bin/{brickdesk,brickdesk-inputd,brickdesk-perfd,
-  bd-input,brickdesk-config,display_probe,bench_render,brickdesk-demo}
+  bd-input,brickdesk-config,bd-power,display_probe,bench_render,brickdesk-demo}
 brickdesk-<version>-aarch64/payload/lib/{libSDL2-2.0.so.0,libbrickdesk-menu.so}
 brickdesk-<version>-aarch64/payload/assets/fonts/*
 brickdesk-<version>-aarch64/payload/assets/covers/*
@@ -484,7 +486,7 @@ brickdesk-<version>-aarch64/payload/boot-hook.sh
 ```
 
 确认 `libSDL2-2.0.so.0` 是真实文件而不是符号链接：FAT32 不能保留符号链接。
-`bench_render` 必须出现在 target workflow 的 `GLIBC <= 2.23` 检查里。
+`bench_render` 和 `bd-power` 必须出现在 target workflow 的 `GLIBC <= 2.23` 检查里。
 
 #### 5.2.3 安装与首次启动
 

@@ -491,34 +491,26 @@ static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
   }
   if (focused) {
     bd_gfx_stroke_round_rect(
-        gfx, bd_rect_make(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 1), 2,
+        gfx, bd_rect_make(rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4), 2,
         2, settings->accent.accent);
   }
   bd_gfx_pop_clip(gfx);
 }
 
 static void draw_scrollbar(const bd_settings *settings, bd_gfx *gfx) {
-  int total = 0;
-  for (int i = 0; i < settings->row_count; ++i) {
-    total += BD_SETTINGS_ROW_MIN;
-    if (settings->rows[i].description[0] != '\0') {
-      total += BD_SETTINGS_ROW_TALL - BD_SETTINGS_ROW_MIN;
-    }
-  }
   bd_rect table = bd_settings_table_rect(settings);
-  int limit = total - table.h;
+  int limit = bd_settings_max_scroll(settings);
   if (limit <= 0) {
     return;
   }
+  int total = table.h + limit;
   int track_h = table.h - 16;
   int thumb_h = track_h * table.h / total;
   if (thumb_h < 28) {
     thumb_h = 28;
   }
   int thumb_y = table.y + 8;
-  if (limit > 0) {
-    thumb_y += (track_h - thumb_h) * settings->scroll / limit;
-  }
+  thumb_y += (track_h - thumb_h) * settings->scroll / limit;
   bd_gfx_fill_round_rect(
       gfx, bd_rect_make(table.x + table.w - 6, table.y + 8, 2, track_h), 1,
       settings->palette.line);
@@ -552,6 +544,7 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
                  ? settings->plugin_nodes[settings->plugin_node_focus]
                  : -1;
   bd_plugin_ui_draw(ui, gfx, table, &style, node, settings->scroll);
+  draw_scrollbar(settings, gfx);
 }
 
 static void draw_empty(const bd_settings *settings, bd_gfx *gfx) {

@@ -291,6 +291,9 @@ static int max_scroll(const bd_settings *settings) {
     int content = plugin_tree_height(settings);
     bd_rect table = bd_settings_table_rect(settings);
     int limit = content + 2 - table.h;
+    if (limit > 0) {
+      limit += BD_SETTINGS_SCROLL_PAD;
+    }
     return limit > 0 ? limit : 0;
   }
   int total = 0;
@@ -300,6 +303,10 @@ static int max_scroll(const bd_settings *settings) {
   bd_rect table = bd_settings_table_rect(settings);
   int limit = total - table.h;
   return limit > 0 ? limit : 0;
+}
+
+int bd_settings_max_scroll(const bd_settings *settings) {
+  return max_scroll(settings);
 }
 
 static void clamp_scroll(bd_settings *settings) {
@@ -1847,10 +1854,11 @@ static bool focus_move(bd_settings *settings, int direction) {
           bd_plugin_ui_node_rect(ui, node, table.w, &node_rect)) {
         int top = table.y + node_rect.y - settings->scroll;
         int bottom = top + node_rect.h;
+        int bottom_limit = table.y + table.h - BD_SETTINGS_SCROLL_PAD;
         if (top < table.y) {
           settings->scroll -= table.y - top;
-        } else if (bottom > table.y + table.h) {
-          settings->scroll += bottom - (table.y + table.h);
+        } else if (bottom > bottom_limit) {
+          settings->scroll += bottom - bottom_limit;
         }
         clamp_scroll(settings);
       }

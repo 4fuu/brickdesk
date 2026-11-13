@@ -27,6 +27,7 @@
 #define BD_SETTINGS_MAX_PLUGIN_NODES 32
 #define BD_SETTINGS_ROW_MIN 62
 #define BD_SETTINGS_ROW_TALL 74
+#define BD_SETTINGS_SCROLL_PAD 12
 
 typedef struct bd_settings_palette {
   bd_color bg;
@@ -181,6 +182,7 @@ bd_rect bd_settings_table_rect(const bd_settings *settings);
 bd_rect bd_settings_row_rect(const bd_settings *settings, int index);
 int bd_settings_row_at_point(const bd_settings *settings, int y);
 int bd_settings_visible_rows(const bd_settings *settings);
+int bd_settings_max_scroll(const bd_settings *settings);
 
 void bd_settings_draw_all(bd_settings *settings, bd_gfx *gfx);
 void bd_settings_draw_hint(bd_settings *settings, bd_gfx *gfx);

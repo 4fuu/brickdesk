@@ -148,8 +148,9 @@ static inline bool sf_path_join(char *out, size_t out_size, const char *dir,
   return true;
 }
 
-static inline bool sf_make_fixture_plugin(char *out, size_t out_size,
-                                          const char *mode) {
+static inline bool sf_make_named_fixture_plugin(char *out, size_t out_size,
+                                                const char *mode,
+                                                const char *name) {
   char pattern[] = "/tmp/bd-settings-plugin-XXXXXX";
   char *root = mkdtemp(pattern);
   if (root == NULL) {
@@ -179,12 +180,13 @@ static inline bool sf_make_fixture_plugin(char *out, size_t out_size,
     out[0] = '\0';
     return false;
   }
-  fputs("{\"schema\":1,\"id\":\"com.test.long\",\"name\":\"Long Settings\","
-        "\"version\":\"0.1.0\",\"api\":1,\"runtime\":\"shell\","
-        "\"entry\":[\"run.sh\"],\"capabilities\":[\"tile\",\"settings\"],"
-        "\"tile\":{\"w\":1,\"h\":1,\"refresh_hz\":15},"
-        "\"limits\":{\"memory_mb\":64,\"nofile\":32}}",
-        manifest);
+  fprintf(manifest,
+          "{\"schema\":1,\"id\":\"com.test.long\",\"name\":\"%s\","
+          "\"version\":\"0.1.0\",\"api\":1,\"runtime\":\"shell\","
+          "\"entry\":[\"run.sh\"],\"capabilities\":[\"tile\",\"settings\"],"
+          "\"tile\":{\"w\":1,\"h\":1,\"refresh_hz\":15},"
+          "\"limits\":{\"memory_mb\":64,\"nofile\":32}}",
+          name);
   fclose(manifest);
   if (!sf_path_join(path, sizeof(path), dir, "/run.sh")) {
     sf_remove_tree(out);
@@ -202,6 +204,11 @@ static inline bool sf_make_fixture_plugin(char *out, size_t out_size,
   fclose(script);
   chmod(path, 0755);
   return true;
+}
+
+static inline bool sf_make_fixture_plugin(char *out, size_t out_size,
+                                          const char *mode) {
+  return sf_make_named_fixture_plugin(out, out_size, mode, "Long Settings");
 }
 
 static inline bool sf_file_contains(const char *path, const char *needle) {

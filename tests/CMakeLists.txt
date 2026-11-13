@@ -53,6 +53,9 @@ target_compile_definitions(bd_gfx_capture PRIVATE
 add_executable(bd_hotkey_test hotkey_test.c)
 target_link_libraries(bd_hotkey_test PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
 
+add_executable(bd_inputd_test inputd_test.c)
+target_link_libraries(bd_inputd_test PRIVATE brickdesk_input brickdesk_warnings)
+
 add_executable(bd_perf_policy_test perf_policy_test.c)
 target_link_libraries(bd_perf_policy_test PRIVATE brickdesk_perf brickdesk_warnings)
 target_compile_definitions(bd_perf_policy_test PRIVATE
@@ -179,6 +182,10 @@ add_test(NAME config_check
   COMMAND brickdesk-config check --config-dir "${PROJECT_SOURCE_DIR}/config")
 add_test(NAME input_check
   COMMAND bd-input --check --config-dir "${PROJECT_SOURCE_DIR}/config")
+add_test(NAME inputd_hotplug
+  COMMAND bd_inputd_test --inputd "$<TARGET_FILE:brickdesk-inputd>"
+          --config-dir "${PROJECT_SOURCE_DIR}/config")
+set_tests_properties(inputd_hotplug PROPERTIES TIMEOUT 120)
 
 add_test(NAME theme COMMAND bd_theme_test)
 

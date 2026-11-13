@@ -296,6 +296,20 @@ typedef struct bd_evdev {
   bool has_abs;
   bool has_sw;
   bool is_gamepad; /* has BTN_SOUTH/BTN_GAMEPAD or a D-pad HAT */
+  /*
+   * Test backend: a FIFO event* node under --device-dir is read like evdev
+   * and described by <path>.meta. `fake_grab_allowed` simulates EVIOCGRAB
+   * success/failure without uinput or hardware. Real evdev nodes leave both
+   * fields false.
+   */
+  bool is_fake;
+  bool fake_grab_allowed;
+  /*
+   * Readiness probes may consume bytes from a pending event. bd_evdev_read()
+   * prepends them so the first record is delivered intact.
+   */
+  unsigned char pending_bytes[32];
+  size_t pending_length;
   unsigned char key_bits[(BD_EVDEV_KEY_MAX + 8) / 8];
   unsigned char abs_bits[(BD_EVDEV_ABS_MAX + 8) / 8];
   unsigned char sw_bits[(BD_EVDEV_SW_MAX + 8) / 8];
@@ -320,7 +334,13 @@ typedef struct bd_evdev_event {
  * Scans `dir` (NULL means /dev/input) for event* nodes and opens the ones
  * that expose keys, axes or switches. The returned fds are O_NONBLOCK and
  * close-on-exec. Returns the device count, or -1 with `error` filled in.
+ *
+ * `bd_evdev_scan_ex` additionally sets `incomplete` when an event* node could
+ * not be opened or processed, so a daemon can retry it with backoff even when
+ * no directory change follows (for example a transient permission error).
  */
+int bd_evdev_scan_ex(const char *dir, bd_evdev *out, size_t max,
+                     bool *incomplete, char *error, size_t error_size);
 int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
                   size_t error_size);
 void bd_evdev_close(bd_evdev *device);
@@ -329,8 +349,17 @@ bool bd_evdev_has_key(const bd_evdev *device, unsigned code);
 bool bd_evdev_has_abs(const bd_evdev *device, unsigned code);
 bool bd_evdev_has_sw(const bd_evdev *device, unsigned code);
 
+/*
+ * Checks whether an opened device can currently produce input. Real evdev
+ * nodes use poll(). The FIFO test backend additionally distinguishes "writer
+ * open but no data" (EAGAIN) from "no writer" (read returns 0), because poll
+ * may report neither POLLIN nor POLLHUP for a writerless FIFO. If the probe
+ * consumes a byte of a pending event, bd_evdev_read() replays it.
+ */
+bool bd_evdev_ready(bd_evdev *device);
+
 /* Reads one event. Returns 1 on an event, 0 when nothing is pending, -1 on error. */
-int bd_evdev_read(const bd_evdev *device, bd_evdev_event *out);
+int bd_evdev_read(bd_evdev *device, bd_evdev_event *out);
 
 /* Reads the current key bitmap; used after SYN_DROPPED. */
 bool bd_evdev_key_bits(const bd_evdev *device, unsigned char *bits,
@@ -432,9 +461,20 @@ bool bd_device_map_parse_value(const char *text, bd_device_map_type *type,
  *   {"type":"switch","switch":"headphone","value":1,"time_ms":1236}
  *   {"type":"grab","active":true,"pending":false,"forced":false}
  *   {"type":"release_all","time_ms":1237}
+ *   {"type":"device","action":"added","device":"TrimUI Gamepad",
+ *    "path":"/dev/input/event2","grabbed":false,"time_ms":1238}
+ *   {"type":"device","action":"removed","device":"TrimUI Gamepad",
+ *    "path":"/dev/input/event2","reason":"hangup","time_ms":1239}
  *   {"type":"pong","time_ms":1238}
  *   {"type":"error","cmd":"grab","error":"EBUSY","device":"..."}
- *   {"type":"warning","message":"syn_dropped","device":"..."}
+ *   {"type":"warning","message":"syn_dropped","device":"...",
+ *    "time_ms":1239}
+ *   {"type":"warning","message":"hotplug_grab_failed",
+ *    "device":"/dev/input/event5","error":"Device or resource busy",
+ *    "time_ms":1240}
+ *
+ * `hello` still lists registered device names. Device add/remove lines are
+ * additive diagnostics; clients that do not know them can ignore the type.
  *
  * A line is at most 4096 bytes. A client that cannot keep up is disconnected;
  * the daemon never blocks on a subscriber.

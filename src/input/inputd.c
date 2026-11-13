@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
@@ -27,6 +28,11 @@
 
 #define BD_INPUTD_MAX_CLIENTS 8
 #define BD_INPUTD_MAX_DEVICES BD_EVDEV_MAX_DEVICES
+#define BD_INPUTD_SCAN_RETRY_MIN_MS 250
+#define BD_INPUTD_SCAN_RETRY_MAX_MS 5000
+#define BD_INPUTD_WATCH_MASK                                                  \
+  (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_ATTRIB |          \
+   IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR)
 
 typedef struct inputd_client {
   int fd;
@@ -41,6 +47,9 @@ typedef struct inputd_device {
   bd_device_mapping mapping;
   bd_input_state state;
   bool replay;
+  bool grabbed;
+  dev_t node_dev;
+  ino_t node_ino;
 } inputd_device;
 
 typedef enum replay_kind {
@@ -66,6 +75,16 @@ typedef struct inputd {
 
   inputd_device devices[BD_INPUTD_MAX_DEVICES];
   size_t device_count;
+  char device_dir[BD_EVDEV_PATH_MAX];
+  int watch_fd;
+  int watch_wd;
+  bool scan_pending;
+  bool scan_error_logged;
+  bool watch_error_logged;
+  uint64_t scan_deadline_ms;
+  unsigned scan_backoff_ms;
+  char grab_rejected[BD_INPUTD_MAX_DEVICES][BD_EVDEV_PATH_MAX];
+  size_t grab_rejected_count;
 
   inputd_client clients[BD_INPUTD_MAX_CLIENTS];
   size_t client_count;
@@ -362,8 +381,10 @@ static bool any_keys_pressed(const inputd *daemon) {
 
 static void ungrab_devices(inputd *daemon) {
   for (size_t i = 0; i < daemon->device_count; ++i) {
-    if (daemon->devices[i].evdev.fd >= 0) {
-      bd_evdev_grab(&daemon->devices[i].evdev, false);
+    inputd_device *device = &daemon->devices[i];
+    if (device->evdev.fd >= 0 && device->grabbed) {
+      bd_evdev_grab(&device->evdev, false);
+      device->grabbed = false;
     }
   }
 }
@@ -378,6 +399,11 @@ static void finish_ungrab(inputd *daemon, bool forced, uint64_t now_ms) {
   daemon->grab_forced = false;
   broadcast_release_all(daemon, now_ms);
   broadcast_grab(daemon, false, false, forced);
+  daemon->grab_rejected_count = 0;
+  /* Devices rejected while the grab was active are retried now. */
+  if (!daemon->replay_mode) {
+    daemon->scan_pending = true;
+  }
   if (daemon->verbose) {
     log_message(daemon, "ungrab%s", forced ? " (forced after 500 ms)" : "");
   }
@@ -421,6 +447,7 @@ static bool request_grab(inputd *daemon, inputd_client *client,
       continue;
     }
     if (!bd_evdev_grab(&device->evdev, true)) {
+      int grab_errno = errno;
       char path[BD_EVDEV_PATH_MAX * 2];
       json_escape(path, sizeof(path), device->evdev.path);
       char message[512];
@@ -428,17 +455,20 @@ static bool request_grab(inputd *daemon, inputd_client *client,
           message, sizeof(message),
           "{\"type\":\"error\",\"cmd\":\"grab\",\"error\":\"%s\","
           "\"device\":\"%s\"}",
-          strerror(errno), path);
+          strerror(grab_errno), path);
       if (written > 0 && (size_t)written < sizeof(message)) {
         client_send_line(client, message);
       }
-      for (size_t rollback = 0; rollback < i; ++rollback) {
-        if (daemon->devices[rollback].evdev.fd >= 0) {
-          bd_evdev_grab(&daemon->devices[rollback].evdev, false);
+      for (size_t rollback = 0; rollback < daemon->device_count; ++rollback) {
+        inputd_device *previous = &daemon->devices[rollback];
+        if (previous->evdev.fd >= 0 && previous->grabbed) {
+          bd_evdev_grab(&previous->evdev, false);
+          previous->grabbed = false;
         }
       }
       return false;
     }
+    device->grabbed = true;
   }
 
   daemon->grab_active = true;
@@ -976,16 +1006,22 @@ static void client_accept(inputd *daemon) {
 
   char devices[1024] = "";
   size_t used = 0;
+  bool first_device = true;
   for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].evdev.fd < 0 && !daemon->devices[i].replay) {
+      continue;
+    }
     char escaped[BD_EVDEV_NAME_MAX * 2];
     json_escape(escaped, sizeof(escaped), daemon->devices[i].evdev.name);
-    int needed = snprintf(NULL, 0, "%s\"%s\"", i == 0 ? "" : ",", escaped);
+    int needed = snprintf(NULL, 0, "%s\"%s\"",
+                          first_device ? "" : ",", escaped);
     if (needed < 0 || (size_t)needed >= sizeof(devices) - used) {
       break;
     }
     snprintf(devices + used, sizeof(devices) - used, "%s\"%s\"",
-             i == 0 ? "" : ",", escaped);
+             first_device ? "" : ",", escaped);
     used += (size_t)needed;
+    first_device = false;
   }
   client_sendf(client,
                "{\"type\":\"hello\",\"version\":%d,\"pid\":%ld,"
@@ -1094,20 +1130,446 @@ static int compute_timeout(inputd *daemon, uint64_t now_ms) {
       timeout = remaining;
     }
   }
+  if (!daemon->replay_mode) {
+    if (daemon->scan_pending) {
+      timeout = 0;
+    } else if (daemon->scan_deadline_ms != 0) {
+      int remaining = daemon->scan_deadline_ms <= now_ms
+                          ? 0
+                          : (int)(daemon->scan_deadline_ms - now_ms);
+      if (remaining < timeout) {
+        timeout = remaining;
+      }
+    }
+  }
   return timeout;
 }
 
-static void device_add(inputd *daemon, const bd_evdev *evdev, bool replay) {
-  if (daemon->device_count >= BD_INPUTD_MAX_DEVICES) {
-    return;
+static void broadcast_device(inputd *daemon, const char *action,
+                             const inputd_device *device, const char *reason,
+                             uint64_t now_ms) {
+  char name[BD_EVDEV_NAME_MAX * 2];
+  char path[BD_EVDEV_PATH_MAX * 2];
+  char reason_text[64];
+  json_escape(name, sizeof(name), device->evdev.name);
+  json_escape(path, sizeof(path), device->evdev.path);
+  json_escape(reason_text, sizeof(reason_text), reason != NULL ? reason : "");
+
+  char message[768];
+  int written;
+  if (strcmp(action, "added") == 0) {
+    written = snprintf(
+        message, sizeof(message),
+        "{\"type\":\"device\",\"action\":\"added\",\"device\":\"%s\","
+        "\"path\":\"%s\",\"grabbed\":%s,\"time_ms\":%llu}",
+        name, path, device->grabbed ? "true" : "false",
+        (unsigned long long)now_ms);
+  } else {
+    written = snprintf(
+        message, sizeof(message),
+        "{\"type\":\"device\",\"action\":\"removed\",\"device\":\"%s\","
+        "\"path\":\"%s\",\"reason\":\"%s\",\"time_ms\":%llu}",
+        name, path, reason_text, (unsigned long long)now_ms);
   }
-  inputd_device *device = &daemon->devices[daemon->device_count++];
+  if (written > 0 && (size_t)written < sizeof(message)) {
+    broadcast_line(daemon, message);
+  }
+}
+
+static void broadcast_hotplug_grab_failure(inputd *daemon, const bd_evdev *evdev,
+                                           int grab_errno, uint64_t now_ms) {
+  char path[BD_EVDEV_PATH_MAX * 2];
+  char error[128];
+  json_escape(path, sizeof(path), evdev->path);
+  json_escape(error, sizeof(error), strerror(grab_errno));
+  char message[512];
+  int written = snprintf(
+      message, sizeof(message),
+      "{\"type\":\"warning\",\"message\":\"hotplug_grab_failed\","
+      "\"device\":\"%s\",\"error\":\"%s\",\"time_ms\":%llu}",
+      path, error, (unsigned long long)now_ms);
+  if (written > 0 && (size_t)written < sizeof(message)) {
+    broadcast_line(daemon, message);
+  }
+}
+
+static bool device_identity(const bd_evdev *evdev, dev_t *node_dev,
+                            ino_t *node_ino) {
+  struct stat node;
+  if (evdev->fd < 0 || fstat(evdev->fd, &node) != 0) {
+    return false;
+  }
+  *node_dev = node.st_dev;
+  *node_ino = node.st_ino;
+  return true;
+}
+
+static bool device_add(inputd *daemon, const bd_evdev *evdev, bool replay,
+                       bool grabbed, uint64_t now_ms) {
+  size_t slot = daemon->device_count;
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].evdev.fd < 0 && !daemon->devices[i].replay) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot == daemon->device_count) {
+    if (daemon->device_count >= BD_INPUTD_MAX_DEVICES) {
+      return false;
+    }
+    daemon->device_count++;
+  }
+
+  inputd_device *device = &daemon->devices[slot];
   memset(device, 0, sizeof(*device));
   device->evdev = *evdev;
   device->replay = replay;
+  device->grabbed = grabbed;
+  device_identity(&device->evdev, &device->node_dev, &device->node_ino);
   bd_device_map_match(&daemon->map, &device->evdev, &device->mapping);
   bd_input_state_init(&device->state, &daemon->hotkeys, "global",
                       daemon->double_tap_ms);
+
+  if (!replay) {
+    broadcast_device(daemon, "added", device, NULL, now_ms);
+  }
+  if (daemon->verbose) {
+    log_message(daemon,
+                "device %s \"%s\" %04x:%04x keys=%s abs=%s sw=%s%s%s",
+                device->evdev.path, device->evdev.name, device->evdev.vendor,
+                device->evdev.product, device->evdev.has_key ? "yes" : "no",
+                device->evdev.has_abs ? "yes" : "no",
+                device->evdev.has_sw ? "yes" : "no",
+                device->evdev.is_gamepad ? " gamepad" : "",
+                device->evdev.is_fake ? " fake" : "");
+  }
+  return true;
+}
+
+static void device_retry_schedule(inputd *daemon, uint64_t now_ms);
+
+static void device_remove(inputd *daemon, inputd_device *device, uint64_t now_ms,
+                          const char *reason, bool schedule_retry) {
+  if (device->evdev.fd < 0) {
+    return;
+  }
+  if (device->grabbed) {
+    bd_evdev_grab(&device->evdev, false);
+    device->grabbed = false;
+  }
+
+  /*
+   * Release only this device's logical state. Other devices may still have
+   * keys held, so this deliberately does not send the global release_all
+   * notification used by ungrab.
+   */
+  if (daemon->grab_active) {
+    for (int key = 1; key < (int)BD_KEY_COUNT; ++key) {
+      if (bd_input_state_is_pressed(&device->state, (bd_key)key)) {
+        broadcast_key(daemon, device, (bd_key)key, false, now_ms);
+      }
+    }
+  }
+  output_context context;
+  context.daemon = daemon;
+  context.device = device;
+  bd_input_state_release_all(&device->state, now_ms, dispatch_output, &context);
+
+  if (daemon->verbose) {
+    log_message(daemon, "device %s \"%s\" removed (%s)", device->evdev.path,
+                device->evdev.name, reason != NULL ? reason : "");
+  }
+  bd_evdev_close(&device->evdev);
+  broadcast_device(daemon, "removed", device, reason, now_ms);
+  if (schedule_retry) {
+    device_retry_schedule(daemon, now_ms);
+  }
+}
+
+static void device_compact(inputd *daemon) {
+  size_t write_index = 0;
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    if (daemon->devices[i].evdev.fd < 0 && !daemon->devices[i].replay) {
+      continue;
+    }
+    if (write_index != i) {
+      daemon->devices[write_index] = daemon->devices[i];
+    }
+    ++write_index;
+  }
+  daemon->device_count = write_index;
+}
+
+static bool grab_rejected_contains(const inputd *daemon, const char *path) {
+  for (size_t i = 0; i < daemon->grab_rejected_count; ++i) {
+    if (strcmp(daemon->grab_rejected[i], path) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void grab_rejected_forget(inputd *daemon, const char *path) {
+  size_t write_index = 0;
+  for (size_t i = 0; i < daemon->grab_rejected_count; ++i) {
+    if (strcmp(daemon->grab_rejected[i], path) == 0) {
+      continue;
+    }
+    if (write_index != i) {
+      snprintf(daemon->grab_rejected[write_index],
+               sizeof(daemon->grab_rejected[write_index]), "%s",
+               daemon->grab_rejected[i]);
+    }
+    ++write_index;
+  }
+  daemon->grab_rejected_count = write_index;
+}
+
+static void device_attach(inputd *daemon, bd_evdev *evdev, uint64_t now_ms) {
+  bool grabbed = false;
+  if (daemon->grab_active) {
+    if (!bd_evdev_grab(evdev, true)) {
+      int grab_errno = errno;
+      if (!grab_rejected_contains(daemon, evdev->path)) {
+        broadcast_hotplug_grab_failure(daemon, evdev, grab_errno, now_ms);
+        if (daemon->verbose) {
+          log_message(daemon, "device %s not added: grab: %s", evdev->path,
+                      strerror(grab_errno));
+        }
+        if (daemon->grab_rejected_count < BD_INPUTD_MAX_DEVICES) {
+          snprintf(daemon->grab_rejected[daemon->grab_rejected_count],
+                   sizeof(daemon->grab_rejected[0]), "%s", evdev->path);
+          daemon->grab_rejected_count++;
+        }
+      }
+      bd_evdev_close(evdev);
+      return;
+    }
+    grabbed = true;
+  }
+  grab_rejected_forget(daemon, evdev->path);
+  if (!device_add(daemon, evdev, false, grabbed, now_ms)) {
+    log_message(daemon, "device %s dropped: device table full", evdev->path);
+    if (grabbed) {
+      bd_evdev_grab(evdev, false);
+    }
+    bd_evdev_close(evdev);
+  }
+}
+
+static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
+                             size_t error_size, bool *retry_needed) {
+  if (retry_needed != NULL) {
+    *retry_needed = false;
+  }
+  if (daemon->replay_mode) {
+    return true;
+  }
+  bd_evdev found[BD_INPUTD_MAX_DEVICES];
+  bool incomplete = false;
+  errno = 0;
+  int found_count =
+      bd_evdev_scan_ex(daemon->device_dir, found, BD_INPUTD_MAX_DEVICES,
+                       &incomplete, error, error_size);
+  if (found_count < 0) {
+    return false;
+  }
+  if (incomplete && retry_needed != NULL) {
+    *retry_needed = true;
+  }
+
+  bool matched[BD_INPUTD_MAX_DEVICES] = {false};
+  for (int f = 0; f < found_count; ++f) {
+    bool existing_path = false;
+    for (size_t i = 0; i < daemon->device_count; ++i) {
+      inputd_device *device = &daemon->devices[i];
+      if (device->evdev.fd < 0 ||
+          strcmp(device->evdev.path, found[f].path) != 0) {
+        continue;
+      }
+      existing_path = true;
+      matched[i] = true;
+
+      dev_t node_dev = 0;
+      ino_t node_ino = 0;
+      bool same_node = device_identity(&found[f], &node_dev, &node_ino) &&
+                       node_dev == device->node_dev &&
+                       node_ino == device->node_ino;
+      if (same_node) {
+        /*
+         * The device is already open. Do not readiness-probe this second fd:
+         * a probe byte read from a FIFO would otherwise be discarded with
+         * the candidate.
+         */
+        bd_evdev_close(&found[f]);
+      } else {
+        device_remove(daemon, device, now_ms, "replaced", false);
+        if (!bd_evdev_ready(&found[f])) {
+          /*
+           * The replacement node exists but has no readable peer yet. Keep
+           * the directory watch and retry with backoff instead of
+           * registering and immediately HUPing it.
+           */
+          bd_evdev_close(&found[f]);
+          if (retry_needed != NULL) {
+            *retry_needed = true;
+          }
+        } else {
+          device_attach(daemon, &found[f], now_ms);
+        }
+      }
+      break;
+    }
+    if (existing_path) {
+      continue;
+    }
+    if (!bd_evdev_ready(&found[f])) {
+      /*
+       * A node can exist but be immediately dead (a FIFO without a writer,
+       * or a device invalidated by resume). Keep the directory watch, close
+       * the probe fd and retry with backoff; do not register and then
+       * immediately HUP the same node.
+       */
+      bd_evdev_close(&found[f]);
+      if (retry_needed != NULL) {
+        *retry_needed = true;
+      }
+      continue;
+    }
+    device_attach(daemon, &found[f], now_ms);
+  }
+
+  for (size_t i = 0; i < daemon->device_count; ++i) {
+    inputd_device *device = &daemon->devices[i];
+    if (device->evdev.fd < 0 || device->replay || matched[i]) {
+      continue;
+    }
+    struct stat node;
+    if (stat(device->evdev.path, &node) != 0 ||
+        node.st_dev != device->node_dev || node.st_ino != device->node_ino) {
+      device_remove(daemon, device, now_ms, "gone", false);
+    }
+  }
+  return true;
+}
+
+static void device_retry_schedule(inputd *daemon, uint64_t now_ms) {
+  if (daemon->scan_deadline_ms != 0) {
+    return;
+  }
+  unsigned delay = daemon->scan_backoff_ms;
+  if (delay < BD_INPUTD_SCAN_RETRY_MIN_MS) {
+    delay = BD_INPUTD_SCAN_RETRY_MIN_MS;
+  }
+  daemon->scan_deadline_ms = now_ms + delay;
+  daemon->scan_backoff_ms =
+      delay >= BD_INPUTD_SCAN_RETRY_MAX_MS / 2 ? BD_INPUTD_SCAN_RETRY_MAX_MS
+                                               : delay * 2;
+}
+
+static void device_watch_update(inputd *daemon, uint64_t now_ms) {
+  if (daemon->replay_mode) {
+    return;
+  }
+  if (daemon->watch_fd < 0) {
+    daemon->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (daemon->watch_fd < 0) {
+      if (!daemon->watch_error_logged) {
+        log_message(daemon, "inotify: %s; falling back to polling",
+                    strerror(errno));
+        daemon->watch_error_logged = true;
+      }
+      device_retry_schedule(daemon, now_ms);
+      return;
+    }
+  }
+  if (daemon->watch_wd < 0) {
+    daemon->watch_wd =
+        inotify_add_watch(daemon->watch_fd, daemon->device_dir,
+                          BD_INPUTD_WATCH_MASK);
+    if (daemon->watch_wd < 0) {
+      if (!daemon->watch_error_logged) {
+        log_message(daemon, "watch %s: %s; retrying", daemon->device_dir,
+                    strerror(errno));
+        daemon->watch_error_logged = true;
+      }
+      device_retry_schedule(daemon, now_ms);
+      return;
+    }
+    if (daemon->verbose) {
+      log_message(daemon, "watching %s", daemon->device_dir);
+    }
+  }
+  daemon->watch_error_logged = false;
+  daemon->scan_deadline_ms = 0;
+}
+
+static void device_drain_watch(inputd *daemon, uint64_t now_ms) {
+  if (daemon->watch_fd < 0) {
+    return;
+  }
+  for (;;) {
+    char buffer[4096]
+        __attribute__((aligned(__alignof__(struct inotify_event))));
+    ssize_t bytes = read(daemon->watch_fd, buffer, sizeof(buffer));
+    if (bytes < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return;
+      }
+      log_message(daemon, "inotify read: %s; falling back", strerror(errno));
+      close(daemon->watch_fd);
+      daemon->watch_fd = -1;
+      daemon->watch_wd = -1;
+      daemon->scan_pending = true;
+      device_retry_schedule(daemon, now_ms);
+      return;
+    }
+    if (bytes == 0) {
+      return;
+    }
+    for (char *cursor = buffer; cursor < buffer + bytes;) {
+      const struct inotify_event *event =
+          (const struct inotify_event *)cursor;
+      if ((event->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) != 0) {
+        daemon->watch_wd = -1;
+      }
+      daemon->scan_pending = true;
+      cursor += sizeof(struct inotify_event) + event->len;
+    }
+  }
+}
+
+static void device_service(inputd *daemon, uint64_t now_ms) {
+  if (daemon->replay_mode) {
+    return;
+  }
+  device_compact(daemon);
+  bool due = daemon->scan_pending ||
+             (daemon->scan_deadline_ms != 0 &&
+              now_ms >= daemon->scan_deadline_ms);
+  if (!due) {
+    return;
+  }
+  daemon->scan_pending = false;
+  daemon->scan_deadline_ms = 0;
+
+  char error[512] = {0};
+  bool retry_needed = false;
+  if (device_reconcile(daemon, now_ms, error, sizeof(error), &retry_needed)) {
+    daemon->scan_error_logged = false;
+    device_watch_update(daemon, now_ms);
+    if (retry_needed) {
+      device_retry_schedule(daemon, now_ms);
+    } else if (daemon->watch_wd >= 0) {
+      daemon->scan_backoff_ms = 0;
+    }
+    return;
+  }
+  if (!daemon->scan_error_logged) {
+    log_message(daemon, "%s; retrying", error);
+    daemon->scan_error_logged = true;
+  }
+  device_retry_schedule(daemon, now_ms);
 }
 
 static bool setup_devices(inputd *daemon, char *error, size_t error_size) {
@@ -1118,35 +1580,35 @@ static bool setup_devices(inputd *daemon, char *error, size_t error_size) {
     snprintf(replay.path, sizeof(replay.path), "(replay)");
     snprintf(replay.name, sizeof(replay.name), "replay");
     replay.is_gamepad = true;
-    device_add(daemon, &replay, true);
+    device_add(daemon, &replay, true, false, monotonic_ms());
     return true;
   }
 
-  bd_evdev devices[BD_INPUTD_MAX_DEVICES];
-  errno = 0;
-  int count = bd_evdev_scan(NULL, devices, BD_INPUTD_MAX_DEVICES, error,
-                            error_size);
-  if (count < 0) {
+  if (daemon->device_dir[0] == '\0') {
+    snprintf(daemon->device_dir, sizeof(daemon->device_dir), "/dev/input");
+  }
+  uint64_t now_ms = monotonic_ms();
+  device_watch_update(daemon, now_ms);
+
+  bool retry_needed = false;
+  if (!device_reconcile(daemon, now_ms, error, error_size, &retry_needed)) {
     if (errno == ENOENT) {
-      log_message(daemon, "%s; socket stays open", error);
+      log_message(daemon, "%s; waiting for devices", error);
+      daemon->scan_error_logged = true;
       return true;
     }
     return false;
   }
-  for (int i = 0; i < count; ++i) {
-    device_add(daemon, &devices[i], false);
-    if (daemon->verbose) {
-      log_message(daemon,
-                  "device %s \"%s\" %04x:%04x keys=%s abs=%s sw=%s%s",
-                  devices[i].path, devices[i].name, devices[i].vendor,
-                  devices[i].product, devices[i].has_key ? "yes" : "no",
-                  devices[i].has_abs ? "yes" : "no",
-                  devices[i].has_sw ? "yes" : "no",
-                  devices[i].is_gamepad ? " gamepad" : "");
-    }
+  device_watch_update(daemon, now_ms);
+  if (daemon->watch_wd >= 0) {
+    daemon->scan_backoff_ms = 0;
   }
-  if (count == 0) {
-    log_message(daemon, "no /dev/input devices found; socket stays open");
+  if (retry_needed) {
+    device_retry_schedule(daemon, now_ms);
+  }
+  if (daemon->device_count == 0) {
+    log_message(daemon, "no devices under %s; socket stays open",
+                daemon->device_dir);
   }
   return true;
 }
@@ -1168,6 +1630,11 @@ static void daemon_cleanup(inputd *daemon) {
     }
   }
   daemon->device_count = 0;
+  if (daemon->watch_fd >= 0) {
+    close(daemon->watch_fd);
+    daemon->watch_fd = -1;
+    daemon->watch_wd = -1;
+  }
   if (daemon->listen_fd >= 0) {
     close(daemon->listen_fd);
     daemon->listen_fd = -1;
@@ -1193,6 +1660,7 @@ static void print_usage(FILE *stream) {
           "  --config-dir DIR       configuration directory\n"
           "  --socket PATH          Unix socket (default $BRICKDESK_INPUT_SOCKET\n"
           "                         or /run/brickdesk/inputd.sock)\n"
+          "  --device-dir DIR       evdev directory (default /dev/input)\n"
           "  --replay FILE          read timestamped events instead of evdev\n"
           "  --replay-fast          process the replay instantly (implies\n"
           "                         --exit-after-replay)\n"
@@ -1211,12 +1679,15 @@ int main(int argc, char **argv) {
   inputd daemon;
   memset(&daemon, 0, sizeof(daemon));
   daemon.listen_fd = -1;
+  daemon.watch_fd = -1;
+  daemon.watch_wd = -1;
   daemon.allow_grab = true;
   daemon.running = true;
   daemon.double_tap_ms = 300;
 
   const char *config_dir = NULL;
   const char *socket_path = NULL;
+  const char *device_dir = NULL;
   const char *replay_path = NULL;
 
   for (int i = 1; i < argc; ++i) {
@@ -1225,6 +1696,8 @@ int main(int argc, char **argv) {
       config_dir = argv[++i];
     } else if (strcmp(arg, "--socket") == 0 && i + 1 < argc) {
       socket_path = argv[++i];
+    } else if (strcmp(arg, "--device-dir") == 0 && i + 1 < argc) {
+      device_dir = argv[++i];
     } else if (strcmp(arg, "--replay") == 0 && i + 1 < argc) {
       replay_path = argv[++i];
     } else if (strcmp(arg, "--replay-fast") == 0) {
@@ -1309,6 +1782,17 @@ int main(int argc, char **argv) {
     daemon.replay_last_ms = 0;
   }
 
+  if (device_dir != NULL && *device_dir != '\0') {
+    int written =
+        snprintf(daemon.device_dir, sizeof(daemon.device_dir), "%s",
+                 device_dir);
+    if (written <= 0 || (size_t)written >= sizeof(daemon.device_dir)) {
+      fprintf(stderr, "brickdesk-inputd: device directory path too long\n");
+      daemon_cleanup(&daemon);
+      return 1;
+    }
+  }
+
   if (!setup_devices(&daemon, error, sizeof(error))) {
     fprintf(stderr, "brickdesk-inputd: %s\n", error);
     daemon_cleanup(&daemon);
@@ -1341,6 +1825,7 @@ int main(int argc, char **argv) {
     if (daemon.replay_mode && !daemon.replay_fast) {
       process_replay_due(&daemon, now_ms);
     }
+    device_service(&daemon, now_ms);
     for (size_t i = 0; i < daemon.device_count; ++i) {
       output_context context;
       context.daemon = &daemon;
@@ -1356,7 +1841,8 @@ int main(int argc, char **argv) {
     }
 
     client_compact(&daemon);
-    struct pollfd fds[1 + BD_INPUTD_MAX_CLIENTS + BD_INPUTD_MAX_DEVICES];
+    struct pollfd
+        fds[2 + BD_INPUTD_MAX_CLIENTS + BD_INPUTD_MAX_DEVICES];
     size_t count = 0;
     fds[count].fd = daemon.listen_fd;
     fds[count].events = POLLIN;
@@ -1376,6 +1862,13 @@ int main(int argc, char **argv) {
         continue;
       }
       fds[count].fd = daemon.devices[i].evdev.fd;
+      fds[count].events = POLLIN;
+      fds[count].revents = 0;
+      ++count;
+    }
+    size_t watch_index = count;
+    if (daemon.watch_fd >= 0) {
+      fds[count].fd = daemon.watch_fd;
       fds[count].events = POLLIN;
       fds[count].revents = 0;
       ++count;
@@ -1416,18 +1909,43 @@ int main(int argc, char **argv) {
       if (daemon.devices[i].evdev.fd < 0) {
         continue;
       }
-      if ((fds[fd_index].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+      short revents = fds[fd_index].revents;
+      bool lost = (revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+      int read_errno = 0;
+      if ((revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
         for (;;) {
           bd_evdev_event event;
+          errno = 0;
           int read_result = bd_evdev_read(&daemon.devices[i].evdev, &event);
-          if (read_result <= 0) {
-            break;
+          if (read_result > 0) {
+            apply_evdev_event(&daemon, &daemon.devices[i], &event,
+                              event.time_ms);
+            continue;
           }
-          apply_evdev_event(&daemon, &daemon.devices[i], &event,
-                            event.time_ms);
+          if (read_result < 0) {
+            read_errno = errno;
+            lost = true;
+          }
+          break;
         }
       }
+      if (lost) {
+        char reason[96];
+        if (read_errno != 0) {
+          snprintf(reason, sizeof(reason), "read: %s", strerror(read_errno));
+        } else if ((revents & POLLNVAL) != 0) {
+          snprintf(reason, sizeof(reason), "invalid fd");
+        } else {
+          snprintf(reason, sizeof(reason), "hangup");
+        }
+        device_remove(&daemon, &daemon.devices[i], now_ms, reason, true);
+      }
       ++fd_index;
+    }
+    if (watch_index < count &&
+        (fds[watch_index].revents &
+         (POLLIN | POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      device_drain_watch(&daemon, now_ms);
     }
     client_compact(&daemon);
   }

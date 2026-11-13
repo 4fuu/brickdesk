@@ -1023,7 +1023,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
     if (i == 0 || i == 1) {
       int value = i == 0 ? home->brightness : home->volume;
       draw_slider(home, gfx, row.x + row.w - 26 - 8 - 92, row.y + 23, value, 1.0f);
-      char number[8];
+      char number[16];
       snprintf(number, sizeof(number), "%d", value);
       bd_gfx_draw_text(gfx, home->fonts.badge11,
                        row.x + row.w - 10 -

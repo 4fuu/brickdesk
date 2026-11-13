@@ -18,7 +18,7 @@ REPO_ROOT=$(CDPATH="" cd -- "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=scripts/device/common.sh
 . "$SCRIPT_DIR/common.sh"
 
-DEST=${DEVICE_ROOT:-/mnt/SDCARD/Apps/brickdesk}
+DEST=${DEVICE_ROOT:-/mnt/SDCARD/brickdesk}
 FOREGROUND=0
 BINARY=$APP_NAME
 

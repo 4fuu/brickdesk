@@ -1,5 +1,5 @@
 #!/bin/sh
-# Offline tests for scripts/device/*.sh.
+# Offline tests for scripts/device/*.sh and the release package installer.
 #
 # Puts a fake `adb` first in PATH, seeds a fake build tree, then runs every
 # device script end to end. It also runs shellcheck when available.
@@ -27,7 +27,7 @@ die() {
     exit 1
 }
 
-scripts="$DEVICE_DIR/deploy.sh $DEVICE_DIR/run.sh $DEVICE_DIR/logs.sh $DEVICE_DIR/screenshot.sh $DEVICE_DIR/perf.sh $DEVICE_DIR/bench.sh $DEVICE_DIR/recover.sh $DEVICE_DIR/smoke.sh $DEVICE_DIR/common.sh $SCRIPT_DIR/fake-adb $SCRIPT_DIR/run-tests.sh $REPO_ROOT/scripts/build-target.sh $REPO_ROOT/scripts/build-sdl2.sh $REPO_ROOT/ci/check-glibc.sh"
+scripts="$DEVICE_DIR/deploy.sh $DEVICE_DIR/run.sh $DEVICE_DIR/logs.sh $DEVICE_DIR/screenshot.sh $DEVICE_DIR/perf.sh $DEVICE_DIR/bench.sh $DEVICE_DIR/recover.sh $DEVICE_DIR/smoke.sh $DEVICE_DIR/common.sh $SCRIPT_DIR/fake-adb $SCRIPT_DIR/run-tests.sh $SCRIPT_DIR/package-tests.sh $REPO_ROOT/scripts/package-target.sh $REPO_ROOT/scripts/package/install.sh $REPO_ROOT/scripts/package/uninstall.sh $REPO_ROOT/scripts/package/boot-hook.sh $REPO_ROOT/scripts/build-target.sh $REPO_ROOT/scripts/build-sdl2.sh $REPO_ROOT/ci/check-glibc.sh"
 
 printf '== syntax check ==\n'
 for script in $scripts; do
@@ -59,13 +59,13 @@ export PATH="$TMP/bin:$PATH"
 export FAKE_ADB_LOG="$TMP/adb.log"
 export FAKE_ADB_STATE="$TMP/state"
 export BUILD_DIR="$TMP/seed/build-target"
-export DEVICE_ROOT=/mnt/SDCARD/Apps/brickdesk
+export DEVICE_ROOT=/mnt/SDCARD/brickdesk
 export ALLOW_SYSTEM_DEST=0
 
 printf '== deploy ==\n'
 "$DEVICE_DIR/deploy.sh" >"$TMP/deploy.out"
 grep -q 'pushing display_probe' "$TMP/deploy.out" || die "deploy did not push display_probe"
-grep -q '/mnt/SDCARD/Apps/brickdesk/bin/display_probe' "$TMP/adb.log" || die "deploy destination missing"
+grep -q '/mnt/SDCARD/brickdesk/bin/display_probe' "$TMP/adb.log" || die "deploy destination missing"
 pass "deploy"
 
 printf '== foreground probe ==\n'
@@ -114,13 +114,16 @@ pass "smoke"
 printf '== write-scope check ==\n'
 awk '
     $1 == "push" {
-        if ($3 !~ /^\/mnt\/SDCARD\/Apps\/brickdesk\//) {
+        if ($3 !~ /^\/mnt\/SDCARD\/brickdesk\//) {
             printf "unexpected push destination: %s\n", $3
             bad = 1
         }
     }
     END { exit bad }
 ' "$TMP/adb.log" || die "a script pushed outside the SD-card app directory"
-pass "only /mnt/SDCARD/Apps/brickdesk was written"
+pass "only /mnt/SDCARD/brickdesk was written"
+
+printf '== package install/uninstall ==\n'
+"$SCRIPT_DIR/package-tests.sh"
 
 printf '== all device script tests passed ==\n'

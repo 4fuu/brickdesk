@@ -60,6 +60,40 @@ identical combos are errors and the later binding is rejected; prefix/subset
 and first-key overlap are warnings, and the runtime priority is completed
 chord > hold threshold > double > sequence > delayed tap.
 
+### 2.1 Global keys handled by the shell
+
+These are not hotkey bindings; the shell handles them even while an app owns
+the screen:
+
+| input | action |
+|---|---|
+| `VOLUME_UP` / `VOLUME_DOWN` | change `audio.volume` by 5 and show an OSD notice |
+| hold `MENU` + volume | change `display.brightness` by 5 |
+| hold `SELECT` + volume | change `display.color_temperature` by 10 |
+| `F1` / `F2` | `input.f1_action` / `input.f2_action`, or launch `input.f1_app` / `input.f2_app` when set |
+| `HOME` | `input.home_action` (default `recent`) |
+| FN switch `gpio243` | `input.fn_switch_action`: `mute`, `led_off`, `performance`, `powersave`, `turbo`, `dpad_joystick`, `none` |
+
+Volume/brightness changes go through the same `bd_settings_system` backend as
+the settings page and are persisted to `local.ini`.  The OSD is the shared
+notice layer; it queues while an app is foreground and appears when the desktop
+returns.  The FN switch is polled every 200 ms; the first read only records the
+current position, and each later change runs the configured action and a double
+haptic pulse.
+
+The `dpad_joystick` and `turbo` actions, and the matching `input.dpad_to_joystick`
+/ `input.turbo` settings, write the stock control files:
+
+```text
+/tmp/trimui_inputd/input_dpad_to_joystick
+/tmp/trimui_inputd/turbo_a ... turbo_r2
+```
+
+The file exists = enabled.  `BRICKDESK_INPUTD_CONTROL_DIR` overrides the
+directory for tests.  These are the same files NextUI's tg5040 backend touches;
+the vendor daemon is expected to watch them.  brickdesk does not run or replace
+`trimui_inputd`.
+
 ## 3. `brickdesk-inputd`
 
 ```sh

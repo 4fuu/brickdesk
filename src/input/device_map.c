@@ -471,6 +471,8 @@ static void builtin_mapping(bd_device_mapping *mapping) {
   add_entry(mapping, BD_KEY_START, BD_DEVICE_MAP_KEY, BTN_START, 0, NULL, 0);
   add_entry(mapping, BD_KEY_MENU, BD_DEVICE_MAP_KEY, BTN_MODE, 0, NULL, 0);
   add_entry(mapping, BD_KEY_HOME, BD_DEVICE_MAP_KEY, KEY_HOME, 0, NULL, 0);
+  add_entry(mapping, BD_KEY_F1, BD_DEVICE_MAP_KEY, KEY_F1, 0, NULL, 0);
+  add_entry(mapping, BD_KEY_F2, BD_DEVICE_MAP_KEY, KEY_F2, 0, NULL, 0);
   add_entry(mapping, BD_KEY_UP, BD_DEVICE_MAP_ABS, ABS_HAT0Y, -1, NULL, 0);
   add_entry(mapping, BD_KEY_DOWN, BD_DEVICE_MAP_ABS, ABS_HAT0Y, 1, NULL, 0);
   add_entry(mapping, BD_KEY_LEFT, BD_DEVICE_MAP_ABS, ABS_HAT0X, -1, NULL, 0);

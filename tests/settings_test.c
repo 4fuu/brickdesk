@@ -264,7 +264,7 @@ static void test_rows(bd_settings *settings) {
 
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
         "open display");
-  CHECK(bd_settings_row_count(settings) == 1, "display rows %d",
+  CHECK(bd_settings_row_count(settings) == 9, "display rows %d",
         bd_settings_row_count(settings));
   CHECK(strcmp(bd_settings_row_key(settings, 0), "display.brightness") == 0,
         "display row 0 %s", bd_settings_row_key(settings, 0));
@@ -428,8 +428,7 @@ static void test_pages(bd_settings *settings, bd_config *config) {
   bd_settings_stats stats = bd_settings_get_stats(settings);
   CHECK(stats.hotkeys == 5, "hotkeys %d", stats.hotkeys);
   CHECK(stats.conflicts >= 1, "conflicts %d", stats.conflicts);
-  CHECK(strcmp(bd_settings_row_key(settings, 0), "!conflict.0") == 0,
-        "first keys row %s", bd_settings_row_key(settings, 0));
+  CHECK(find_row(settings, "!conflict.0") >= 0, "keys conflict row");
   int menu = find_row(settings, "!hotkey.menu");
   CHECK(menu >= 0, "hotkey.menu row");
   CHECK(find_row(settings, "!hotkey.screenshot") >= 0,

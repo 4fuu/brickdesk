@@ -132,6 +132,14 @@ schema_version = 1
 | `height` | int | `768` | 240..4096 | 逻辑高度；Brick Pro 为 768 |
 | `refresh_hz` | int | `60` | 30..120 | 刷新率 |
 | `brightness` | int | `70` | 0..100 | 背光百分比 |
+| `color_temperature` | int | `0` | -200..200 | 厂商 `color_temperature`；负冷正暖 |
+| `contrast` | int | `50` | 10..100 | 厂商 `enhance_contrast` |
+| `saturation` | int | `50` | 0..100 | 厂商 `enhance_saturation` |
+| `exposure` | int | `50` | 10..100 | 厂商 `enhance_bright` |
+| `white_point` | bool | `true` | — | 是否启用 `/dev/disp` gamma 白点 |
+| `white_point_red` | int | `100` | 0..200 | 白点红增益，100 中性 |
+| `white_point_green` | int | `94` | 0..200 | 白点绿增益，Brick Pro 预设 |
+| `white_point_blue` | int | `54` | 0..200 | 白点蓝增益，Brick Pro 预设 |
 
 ### 4.4 `[audio]`
 
@@ -155,6 +163,12 @@ stub，M4 接入设备后端。
 | `haptics` | bool | `true` | — | 菜单/系统触觉总开关 |
 | `haptic_strength` | int | `60` | 0..100 | 菜单触觉强度（马达百分比） |
 | `haptic_duration_ms` | int | `35` | 5..500 | 单次菜单触觉时长 |
+| `fn_switch_action` | enum | `mute` | `none`/`mute`/`led_off`/`performance`/`powersave`/`turbo`/`dpad_joystick` | FN 拨动开关动作 |
+| `f1_action` / `f2_action` | enum | `none` | `none`/`screenshot`/`settings`/`quick`/`recent`/`return_home`/`menu` | F1/F2 动作 |
+| `f1_app` / `f2_app` | string | `""` | 应用 ID | 非空时优先启动该应用 |
+| `home_action` | enum | `recent` | 同 F1 动作表 | Home 键动作 |
+| `dpad_to_joystick` | bool | `false` | — | 写 `input_dpad_to_joystick` |
+| `turbo` | bool | `false` | — | 写 `turbo_*` 控制文件 |
 
 ### 4.6 `[led]`
 

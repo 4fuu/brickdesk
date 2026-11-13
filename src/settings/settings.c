@@ -135,10 +135,19 @@ static const char *const APPEARANCE_SKIP[] = {
     "ui.cover_cache_mb", NULL};
 static const char *const SOUND_KEYS[] = {"audio.volume", "audio.mute", NULL};
 static const char *const SOUND_SECTIONS[] = {"audio", NULL};
-static const char *const DISPLAY_KEYS[] = {"display.brightness", NULL};
+static const char *const DISPLAY_KEYS[] = {
+    "display.brightness",       "display.color_temperature",
+    "display.contrast",         "display.saturation",
+    "display.exposure",         "display.white_point",
+    "display.white_point_red",  "display.white_point_green",
+    "display.white_point_blue", NULL};
 static const char *const DISPLAY_SECTIONS[] = {"display", NULL};
 static const char *const DISPLAY_SKIP[] = {"display.width", "display.height",
                                            "display.refresh_hz", NULL};
+static const char *const INPUT_KEYS[] = {
+    "input.fn_switch_action", "input.home_action", "input.f1_action",
+    "input.f1_app", "input.f2_action", "input.f2_app",
+    "input.dpad_to_joystick", "input.turbo", NULL};
 static const char *const LIGHTS_KEYS[] = {
     "led.enabled",
     "led.m.brightness", "led.m.color", "led.m.effect",
@@ -161,8 +170,8 @@ const bd_settings_page_def BD_SETTINGS_PAGES[BD_SETTINGS_CATEGORY_COUNT] = {
      APPEARANCE_KEYS, APPEARANCE_SECTIONS, APPEARANCE_SKIP},
     {"声音", "音量与静音", "音量与静音通过系统接口生效。", SOUND_KEYS,
      SOUND_SECTIONS, NULL},
-    {"显示", "屏幕背光", "亮度通过系统接口应用到背光。", DISPLAY_KEYS,
-     DISPLAY_SECTIONS, DISPLAY_SKIP},
+    {"显示", "背光、色温与白点", "亮度走背光接口；其余写厂商 disp 节点。",
+     DISPLAY_KEYS, DISPLAY_SECTIONS, DISPLAY_SKIP},
     {"灯光", "分区颜色、效果与指示",
      "顶部灯条、摇杆环、F1/F2 与扳机分区独立设置；F2 与 F1 共用亮度。",
      LIGHTS_KEYS, LIGHTS_SECTIONS, NULL},
@@ -186,6 +195,14 @@ static const bd_settings_label LABELS[] = {
     {"audio.volume", "音量", "系统输出音量", NULL, 1},
     {"audio.mute", "静音", "关闭全部系统声音", NULL, 1},
     {"display.brightness", "亮度", "屏幕背光", NULL, 1},
+    {"display.color_temperature", "色温", "负值偏冷，正值偏暖", NULL, 10},
+    {"display.contrast", "对比度", "厂商 enhance_contrast", NULL, 5},
+    {"display.saturation", "饱和度", "厂商 enhance_saturation", NULL, 5},
+    {"display.exposure", "曝光", "厂商 enhance_bright", NULL, 5},
+    {"display.white_point", "白点校正", "按 sRGB 生成 gamma 表", NULL, 1},
+    {"display.white_point_red", "白点红增益", "100 为中性", NULL, 5},
+    {"display.white_point_green", "白点绿增益", "100 为中性", NULL, 5},
+    {"display.white_point_blue", "白点蓝增益", "100 为中性", NULL, 5},
     {"led.enabled", "启用灯光", "关闭后所有分区熄灭", NULL, 1},
     {"led.m.brightness", "顶栏亮度", "顶部灯条 / Logo 分区", NULL, 1},
     {"led.m.color", "顶栏颜色", "顶部灯条 / Logo 分区", NULL, 0},
@@ -204,6 +221,14 @@ static const bd_settings_label LABELS[] = {
     {"led.indicator_brightness", "指示亮度", "低电量、充电与睡眠指示", NULL, 1},
     {"led.ambient", "氛围灯", "按前台应用推送的颜色驱动灯光", NULL, 1},
     {"led.ambient_brightness", "氛围灯亮度", "氛围灯的最大亮度", NULL, 1},
+    {"input.fn_switch_action", "FN 开关", "拨动 FN 开关时执行的动作", NULL, 0},
+    {"input.home_action", "Home 键", "Home 键动作", NULL, 0},
+    {"input.f1_action", "F1 动作", "F1 键动作；优先使用 F1 应用", NULL, 0},
+    {"input.f1_app", "F1 应用", "启动指定应用 ID；留空使用动作", NULL, 0},
+    {"input.f2_action", "F2 动作", "F2 键动作；优先使用 F2 应用", NULL, 0},
+    {"input.f2_app", "F2 应用", "启动指定应用 ID；留空使用动作", NULL, 0},
+    {"input.dpad_to_joystick", "十字键模拟摇杆", "写 trimui_inputd 控制文件", NULL, 1},
+    {"input.turbo", "Turbo", "为 A/B/X/Y/L/R 写 turbo 控制文件", NULL, 1},
     {"session.max_background", "后台应用上限", "同时保留在后台的应用数量",
      " 个", 1},
     {"session.memory_budget_mb", "内存预算", "后台应用的内存软上限", " MB", 16},
@@ -516,6 +541,9 @@ static const char *hotkey_trigger_label(const bd_hotkey *hotkey, char *buffer,
 }
 
 static bool build_hotkey_page(bd_settings *settings) {
+  for (size_t i = 0; INPUT_KEYS[i] != NULL; ++i) {
+    add_config_row(settings, INPUT_KEYS[i]);
+  }
   if (!settings->hotkeys_loaded) {
     add_info_row(settings, "!hotkeys", "按键不可用",
                  "hotkeys.ini 加载失败，请检查文件", "");

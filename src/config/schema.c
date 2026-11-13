@@ -24,6 +24,12 @@ static const char *const g_accents[] = {"persimmon", "coral", "teal", "blue",
 static const char *const g_led_colors[] = {
     "white", "red", "orange", "yellow", "green",
     "cyan",  "blue", "violet", "magenta", "off", NULL};
+static const char *const g_fn_actions[] = {
+    "none", "mute", "led_off", "performance", "powersave", "turbo",
+    "dpad_joystick", NULL};
+static const char *const g_input_actions[] = {
+    "none", "screenshot", "settings", "quick", "recent", "return_home",
+    "menu", NULL};
 static const char *const g_led_effects[] = {
     "linear",  "breathe", "interval_breathe", "static", "blink1",
     "blink2",  "blink3",  "rainbow",          "twinkle", "fire",
@@ -49,6 +55,15 @@ const bd_config_spec bd_config_specs[] = {
     {"display", "height", BD_CONFIG_INT, "768", 240, 4096, NULL, 0, 0, 0},
     {"display", "refresh_hz", BD_CONFIG_INT, "60", 30, 120, NULL, 0, 0, 0},
     {"display", "brightness", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
+    {"display", "color_temperature", BD_CONFIG_INT, "0", -200, 200, NULL, 0, 0,
+     0},
+    {"display", "contrast", BD_CONFIG_INT, "50", 10, 100, NULL, 0, 0, 0},
+    {"display", "saturation", BD_CONFIG_INT, "50", 0, 100, NULL, 0, 0, 0},
+    {"display", "exposure", BD_CONFIG_INT, "50", 10, 100, NULL, 0, 0, 0},
+    {"display", "white_point", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"display", "white_point_red", BD_CONFIG_INT, "100", 0, 200, NULL, 0, 0, 0},
+    {"display", "white_point_green", BD_CONFIG_INT, "94", 0, 200, NULL, 0, 0, 0},
+    {"display", "white_point_blue", BD_CONFIG_INT, "54", 0, 200, NULL, 0, 0, 0},
 
     /* audio */
     {"audio", "volume", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
@@ -63,6 +78,18 @@ const bd_config_spec bd_config_specs[] = {
     {"input", "haptics", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
     {"input", "haptic_strength", BD_CONFIG_INT, "60", 0, 100, NULL, 0, 0, 0},
     {"input", "haptic_duration_ms", BD_CONFIG_INT, "35", 5, 500, NULL, 0, 0, 0},
+    {"input", "fn_switch_action", BD_CONFIG_ENUM, "mute", 0, 0, g_fn_actions, 0,
+     0, 0},
+    {"input", "f1_action", BD_CONFIG_ENUM, "none", 0, 0, g_input_actions, 0, 0,
+     0},
+    {"input", "f2_action", BD_CONFIG_ENUM, "none", 0, 0, g_input_actions, 0, 0,
+     0},
+    {"input", "home_action", BD_CONFIG_ENUM, "recent", 0, 0, g_input_actions, 0,
+     0, 0},
+    {"input", "f1_app", BD_CONFIG_STRING, "", 0, 0, NULL, 64, 0, 0},
+    {"input", "f2_app", BD_CONFIG_STRING, "", 0, 0, NULL, 64, 0, 0},
+    {"input", "dpad_to_joystick", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"input", "turbo", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
 
     /* led: Brick Pro vendor zones (m, lr, f1, f2, rear) */
     {"led", "enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
@@ -332,8 +359,8 @@ static bool normalize_accent(const bd_config_spec *spec, const char *value,
 static const char *const g_logical_keys[] = {
     "A",     "B",     "X",      "Y",     "L1",         "R1",
     "L2",    "R2",    "SELECT", "START", "MENU",       "HOME",
-    "UP",    "DOWN",  "LEFT",   "RIGHT", "POWER",      "VOLUME_UP",
-    "VOLUME_DOWN",
+    "UP",    "DOWN",  "LEFT",   "RIGHT", "F1",         "F2",
+    "POWER", "VOLUME_UP", "VOLUME_DOWN",
 };
 
 static bool combo_key_name(const char *name, char *out, size_t out_size) {

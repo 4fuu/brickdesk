@@ -126,6 +126,12 @@ target_compile_definitions(bd_settings_test PRIVATE
   BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
 add_dependencies(bd_settings_test bd_plugin_fixture)
 
+add_executable(bd_input_controls_test input_controls_test.c)
+target_link_libraries(bd_input_controls_test PRIVATE brickdesk_shell brickdesk_warnings)
+
+add_executable(bd_device_display_test device_display_test.c)
+target_link_libraries(bd_device_display_test PRIVATE brickdesk_device brickdesk_warnings)
+
 add_executable(bd_device_av_test device_av_test.c)
 target_include_directories(bd_device_av_test PRIVATE
   "${PROJECT_SOURCE_DIR}/src/device")
@@ -207,6 +213,8 @@ add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
 add_test(NAME device_power COMMAND bd_device_power_test)
+add_test(NAME input_controls COMMAND bd_input_controls_test)
+add_test(NAME device_display COMMAND bd_device_display_test)
 add_test(NAME device_battery COMMAND bd_device_battery_test)
 set_tests_properties(device_battery PROPERTIES TIMEOUT 120)
 add_test(NAME device_battery_cli

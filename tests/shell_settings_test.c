@@ -433,6 +433,38 @@ static void test_home_quick(test_runtime *runtime, uint64_t *now) {
         "B closes the quick panel");
 }
 
+static void test_global_keys(test_runtime *runtime, uint64_t *now) {
+  bd_shell_test_advance(runtime->shell, *now);
+  int volume = runtime->stub.volume;
+  key_press(runtime->shell, BD_KEY_VOLUME_UP, *now);
+  *now += 20;
+  CHECK(runtime->stub.volume == volume + 5,
+        "volume key: %d from %d", runtime->stub.volume, volume);
+  CHECK(bd_config_get_int(runtime->config, "audio.volume", -1) == volume + 5,
+        "volume key persisted: %ld",
+        bd_config_get_int(runtime->config, "audio.volume", -1));
+
+  int brightness = runtime->stub.brightness;
+  bd_shell_test_key(runtime->shell, BD_KEY_MENU, true, *now);
+  key_press(runtime->shell, BD_KEY_VOLUME_UP, *now);
+  bd_shell_test_key(runtime->shell, BD_KEY_MENU, false, *now + 10);
+  *now += 30;
+  CHECK(runtime->stub.brightness == brightness + 5,
+        "menu+volume brightness: %d from %d", runtime->stub.brightness,
+        brightness);
+
+  int temperature =
+      (int)bd_config_get_int(runtime->config, "display.color_temperature", 0);
+  bd_shell_test_key(runtime->shell, BD_KEY_SELECT, true, *now);
+  key_press(runtime->shell, BD_KEY_VOLUME_DOWN, *now);
+  bd_shell_test_key(runtime->shell, BD_KEY_SELECT, false, *now + 10);
+  *now += 30;
+  CHECK(bd_config_get_int(runtime->config, "display.color_temperature", 0) ==
+            temperature - 10,
+        "select+volume colour temperature: %ld",
+        bd_config_get_int(runtime->config, "display.color_temperature", 0));
+}
+
 static void test_select_hint(test_runtime *runtime, uint64_t *now) {
   bd_shell_test_advance(runtime->shell, *now);
   bd_shell_test_key(runtime->shell, BD_KEY_SELECT, true, *now);
@@ -575,6 +607,7 @@ int main(int argc, char **argv) {
   uint64_t now = 1000;
   bd_shell_test_advance(runtime.shell, now);
   test_home_quick(&runtime, &now);
+  test_global_keys(&runtime, &now);
   if (open_settings_from_home(&runtime, &now) == 0) {
     test_select_hint(&runtime, &now);
     test_slider_repeat(&runtime, &now);

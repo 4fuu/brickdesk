@@ -7,7 +7,8 @@ static const char *const g_key_names[] = {
     "UNKNOWN",   "A",      "B",      "X",          "Y",
     "L1",        "R1",     "L2",     "R2",         "SELECT",
     "START",     "MENU",   "HOME",   "UP",         "DOWN",
-    "LEFT",      "RIGHT",  "POWER",  "VOLUME_UP",  "VOLUME_DOWN",
+    "LEFT",      "RIGHT",  "F1",     "F2",         "POWER",
+    "VOLUME_UP", "VOLUME_DOWN",
 };
 
 static bool ascii_equal_ci(const char *a, const char *b) {

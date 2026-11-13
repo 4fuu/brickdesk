@@ -553,6 +553,19 @@ Debian 交叉链接的 `__libc_start_main` 显示 `GLIBC_2.34` 是 Debian 12 启
   `scripts/build-target.sh` 的 `dist/bin`、`scripts/package-target.sh` 的
   `payload/bin`、离线包检查以及 target workflow 的 `GLIBC <= 2.23` 检查。
 
+本打包跟进分支（`m4/power-package`，提交 `c5d07f1`，2026-11-13）的验证：
+
+- host：<https://github.com/4fuu/brickdesk/actions/runs/43381263331>，
+  `success`；全量 33/33 CTest 通过。
+- target：<https://github.com/4fuu/brickdesk/actions/runs/43381263343>，
+  `success`；日志显示 `build-target/bd-power` 为 aarch64，`max GLIBC 2.17
+  (limit 2.23) OK`，并进入 `build-target/dist/bin/`。
+- 发布包：CI 产物 `brickdesk-0.1.0-aarch64.zip` 含
+  `payload/bin/bd-power` 和 `docs/device-power.md`；包 SHA256 为
+  `d367cc10a3b7c59162b22f0fccd2bd897d2180477c9063f22468907649b7532a`。
+- `bd-power` 仍默认只读；无 `--allow-state-changes` 的 `--deep-sleep` 退出 2，
+  poweroff/reboot 另需 `--yes`。
+
 ### 7.3 探测 CLI
 
 宿主 fixture：

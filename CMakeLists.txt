@@ -189,6 +189,22 @@ target_link_libraries(brickdesk_perf
   PRIVATE brickdesk_warnings
 )
 
+# --- device power -------------------------------------------------------
+# The power state machine and Linux sleep/shutdown backend.  Free of SDL,
+# GLES, ALSA and backlight code: the shell supplies those as hooks.  The CLI
+# is a read-only capability probe unless state-changing flags are explicit.
+add_library(brickdesk_power STATIC
+  src/device/power.c
+  src/device/power_linux.c
+)
+target_include_directories(brickdesk_power
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_power PRIVATE brickdesk_warnings)
+
+add_executable(bd-power src/device/power_probe_main.c)
+target_link_libraries(bd-power PRIVATE brickdesk_power brickdesk_warnings)
+
 # --- input --------------------------------------------------------------
 # Keys, hotkey parsing/state machine, evdev and input.ini mapping. Kept free
 # of SDL so brickdesk-inputd and bd-input can run on the device without a

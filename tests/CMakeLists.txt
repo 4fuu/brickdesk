@@ -44,6 +44,11 @@ target_link_libraries(bd_perf_policy_test PRIVATE brickdesk_perf brickdesk_warni
 target_compile_definitions(bd_perf_policy_test PRIVATE
   BRICKDESK_PERF_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
+add_executable(bd_device_power_test device_power_test.c)
+target_link_libraries(bd_device_power_test PRIVATE brickdesk_power brickdesk_warnings)
+target_compile_definitions(bd_device_power_test PRIVATE
+  BRICKDESK_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/power")
+
 add_executable(bd_plugin_fixture plugin_fixture.c)
 target_include_directories(bd_plugin_fixture PRIVATE
   "${PROJECT_SOURCE_DIR}/src/plugin")
@@ -111,6 +116,7 @@ add_test(NAME key_names COMMAND bd_key_names_test)
 add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
+add_test(NAME device_power COMMAND bd_device_power_test)
 add_test(NAME plugin COMMAND bd_plugin_test)
 set_tests_properties(plugin PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"

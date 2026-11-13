@@ -641,6 +641,8 @@ adb shell 'readelf -d /mnt/SDCARD/brickdesk/bin/display_probe | grep NEEDED'
   中断，可能留下 `.new.<pid>`/`.old.<pid>` 目录，需要手动删除。
 - 安装包不包含厂商 `libEGL.so`/`libGLESv2.so`，运行时依赖设备的
   `/usr/trimui/lib` 或 `/usr/lib`。
+- 原厂 `keymon`/`trimui_inputd` 不会被安装器停止；它们与 brickdesk-inputd 同时
+  读 evdev 是否产生双份输入/冲突，必须在真机确认。
 
 ## 8. M1/M8-A 验收对应
 

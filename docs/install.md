@@ -270,6 +270,9 @@ sh /mnt/SDCARD/brickdesk-uninstall.sh --no-restart
 - `brickdesk-inputd`/`brickdesk-perfd` 是否能在原厂 `runtrimui.sh` 的环境里
   正常打开 evdev、写 sysfs，以及 socket 路径 `/run/brickdesk` 是否可写，需要
   真机确认。
+- 原厂 `keymon`/`trimui_inputd` 仍在运行；brickdesk 自己的 inputd 与它们同时读
+  同一批 evdev 是否会出现双份输入或按键冲突，需要真机确认。当前安装器不停止
+  原厂守护进程，只停 MainUI。
 - 停掉 MainUI 后，原厂 `runtrimui.sh` 是否会在钩子返回时可靠地重新启动
   MainUI，需要真机确认。
 - 崩溃计数依赖 `state/boot/attempts` 可写；如果 SD 卡只读或 FAT32 写入失败，

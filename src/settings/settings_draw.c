@@ -89,7 +89,7 @@ static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
   if (settings->clock[0] != '\0') {
     draw_text_right(gfx, settings->fonts.value, right, 73, palette->ink2,
                     settings->clock);
-    right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 16;
+    right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 12;
   }
   int battery_left = right - BD_UI_BATTERY_ICON_W;
   bd_ui_draw_battery(gfx, battery_left + (BD_UI_BATTERY_ICON_W - 1) / 2, 66,
@@ -240,8 +240,9 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
     }
     subtitle = "插件设置 · 由插件声明";
   }
-  bd_gfx_draw_text(gfx, settings->fonts.serif34, BD_SETTINGS_TABLE_X,
-                   title_baseline, palette->ink, title);
+  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.serif34,
+                              BD_SETTINGS_TABLE_X, title_baseline,
+                              BD_SETTINGS_TABLE_W, palette->ink, title);
   bd_gfx_draw_text(gfx, settings->fonts.body, BD_SETTINGS_TABLE_X, 156,
                    palette->ink2, subtitle);
   if (settings->subpage == BD_SETTINGS_SUBPAGE_ACCENT) {
@@ -600,10 +601,10 @@ void bd_settings_draw_hint(bd_settings *settings, bd_gfx *gfx) {
                         BD_GRADIENT_VERTICAL);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, top, settings->style.width, 1),
                    palette->line_strong);
-  int baseline = top + 25;
+  int baseline = top + 21;
   bd_gfx_draw_text(gfx, settings->fonts.caption, 34, baseline, palette->ink2,
                    "B 返回 · ←→ 调整 · A 选择");
-  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 48,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 44,
                    palette->ink3, "L1/R1 切换分类");
   bd_gfx_fill_round_rect(gfx, bd_rect_make(280, top + 30, 4, 4), 2,
                          settings->accent.accent);

@@ -128,7 +128,9 @@ absolute, symlink-checked path; `kind` tells the caller which visual to paint.
     "load_state": true,
     "screenshot": true,
     "background": false,
-    "display_release": true
+    "display_release": true,
+    "rumble": true,
+    "led_ambient": true
   },
   "hooks": {
     "pause":  { "type": "ipc", "method": "app.pause",   "timeout_ms": 300 },
@@ -143,7 +145,8 @@ absolute, symlink-checked path; `kind` tells the caller which visual to paint.
 
 A missing `type` is inferred from `method` (`ipc`) or `exec` (`command`). A
 missing method defaults to the names shown above. `timeout_ms = 0` uses the
-session default for that hook.
+session default for that hook. `rumble` and `led_ambient` default to true for
+compatibility; set them to false to reject the matching app notifications.
 
 The session uses capabilities and hooks as follows:
 
@@ -154,9 +157,17 @@ The session uses capabilities and hooks as follows:
 | terminate | save hook, then quit hook, then `SIGTERM`/`SIGKILL` | `SIGTERM`/`SIGKILL` |
 | explicit save/load | `state.save` / `state.load` | `BD_SESSION_UNSUPPORTED` |
 
-Command hooks are parsed and preserved in `bd_app`, but this milestone does not
-execute them; the session falls back to SIGSTOP/SIGTERM instead. This is the
-main deliberate gap relative to architecture.md 5.9.
+Command hooks run the manifest's `exec` argv directly (no shell parsing) in
+the app's `cwd`, in their own process group. They receive the app environment
+plus `BRICKDESK_APP_ID`, `BRICKDESK_HOOK`, `BRICKDESK_SESSION_ID`,
+`BRICKDESK_STATE_DIR`, `BRICKDESK_SESSION_SOCKET` and, for save/load,
+`BRICKDESK_SLOT`. Exit code 0
+means success; any other exit code, a signal, or the `timeout_ms` deadline
+(which sends `SIGKILL` to the group) is a failure and falls back exactly like a
+failed IPC hook. stdout and stderr are appended to
+`<state_root>/hooks.log` with the app, hook name, exit code, timeout flag,
+duration and the captured output (rotated at 512 KiB). `timeout_ms = 0` uses
+the session default; values are clamped to 50..600000 ms.
 
 `category=service` or `capabilities.background=true` marks an app as allowed to
 keep running; the session itself does not stop background audio/video. The
@@ -280,7 +291,9 @@ App → host:
 
 `led.*` and `rumble.*` are notifications: the session forwards them to the
 desktop, which owns the vendor LED/motor nodes.  They are accepted only while
-the sending app is foreground.  `led.ambient` requires `led.ambient=true` and
+the sending app is foreground and when `capabilities.rumble` /
+`capabilities.led_ambient` are true (both default true).  `led.ambient` requires
+`led.ambient=true` and
 the per-app `[led.app.<id>] ambient` key (default true); the desktop restores
 the user profile on app exit or switch.  When the app publishes a last frame,
 the desktop also samples its average colour every 500 ms and applies it as the
@@ -459,7 +472,8 @@ state and pixels after the menu closes. See `docs/menu-shim.md`.
   app stays in RAM and its process group is SIGSTOPed. It does not call
   `app.pause`/`state.save`, does not touch the PMIC or any power rail, and does
   not protect state across a power loss.
-- Command hooks are parsed but not executed in M1.
+- Command hooks execute asynchronously with a hard timeout, exit-code
+  reporting and output in `<state_root>/hooks.log`.
 - `app.perf.request` from an app is rejected for now; default perf apply/restore
   before launch/after exit is wired through `bd_session_perf_ops`.
 - Last frame is a snapshot for the return animation, not a live compositor; the

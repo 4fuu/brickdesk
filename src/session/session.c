@@ -115,6 +115,16 @@ typedef struct session_instance {
   int request_id;
   uint64_t op_deadline_ms;
   char request_hook[24];
+
+  /* Asynchronous command hook (hooks.<name>.type = "command"). */
+  pid_t hook_pid;
+  int hook_fd;
+  uint64_t hook_started_ms;
+  uint64_t hook_deadline_ms;
+  int hook_exit_code;
+  bool hook_timed_out;
+  char hook_output[1024];
+  size_t hook_output_length;
 } session_instance;
 
 struct bd_session {
@@ -144,6 +154,10 @@ static void menu_poll(bd_session *session, uint64_t now_ms);
 static void menu_shutdown(bd_session *session);
 static session_instance *find_instance(bd_session *session, const char *app_id);
 static session_child_status poll_child_status(session_instance *instance);
+static bool start_command_hook(bd_session *session, session_instance *instance,
+                               session_op op, const char *hook_name,
+                               int timeout_ms, int slot);
+static void command_hook_cancel(session_instance *instance);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -603,6 +617,14 @@ static bool begin_request(bd_session *session, session_instance *instance,
 }
 
 static void start_pause(bd_session *session, session_instance *instance) {
+  if (instance->app.hooks[BD_APP_HOOK_PAUSE].type == BD_APP_HOOK_COMMAND) {
+    int timeout = hook_timeout(session, instance, BD_APP_HOOK_PAUSE,
+                               session->timeouts.pause_ms);
+    if (start_command_hook(session, instance, OP_BG_PAUSE, "pause", timeout,
+                           -1)) {
+      return;
+    }
+  }
   if (instance->app.hooks[BD_APP_HOOK_PAUSE].type == BD_APP_HOOK_IPC &&
       instance->ipc_connected) {
     char params[64];
@@ -630,6 +652,14 @@ static void start_background(bd_session *session, session_instance *instance) {
 
 static void start_resume_hook(bd_session *session,
                               session_instance *instance) {
+  if (instance->app.hooks[BD_APP_HOOK_RESUME].type == BD_APP_HOOK_COMMAND) {
+    int timeout = hook_timeout(session, instance, BD_APP_HOOK_RESUME,
+                               session->timeouts.resume_ms);
+    if (start_command_hook(session, instance, OP_RS_RESUME, "resume", timeout,
+                           -1)) {
+      return;
+    }
+  }
   if (instance->app.hooks[BD_APP_HOOK_RESUME].type == BD_APP_HOOK_IPC &&
       instance->ipc_connected) {
     int timeout = hook_timeout(session, instance, BD_APP_HOOK_RESUME,
@@ -677,6 +707,14 @@ static void start_sigkill(bd_session *session, session_instance *instance) {
 }
 
 static void start_quit(bd_session *session, session_instance *instance) {
+  if (instance->app.hooks[BD_APP_HOOK_QUIT].type == BD_APP_HOOK_COMMAND) {
+    int timeout = hook_timeout(session, instance, BD_APP_HOOK_QUIT,
+                               session->timeouts.quit_ms);
+    if (start_command_hook(session, instance, OP_TERM_QUIT, "quit", timeout,
+                           -1)) {
+      return;
+    }
+  }
   if (instance->app.hooks[BD_APP_HOOK_QUIT].type == BD_APP_HOOK_IPC &&
       instance->ipc_connected) {
     int timeout = hook_timeout(session, instance, BD_APP_HOOK_QUIT,
@@ -703,6 +741,14 @@ static bd_session_result begin_terminate(bd_session *session,
   if (instance->stopped_by_session) {
     send_signal(instance, SIGCONT);
     instance->stopped_by_session = false;
+  }
+  if (instance->app.hooks[BD_APP_HOOK_SAVE].type == BD_APP_HOOK_COMMAND) {
+    int timeout = hook_timeout(session, instance, BD_APP_HOOK_SAVE,
+                               session->timeouts.save_ms);
+    if (start_command_hook(session, instance, OP_TERM_SAVE, "save", timeout,
+                           0)) {
+      return BD_SESSION_OK;
+    }
   }
   if (instance->app.hooks[BD_APP_HOOK_SAVE].type == BD_APP_HOOK_IPC &&
       instance->ipc_connected) {
@@ -743,6 +789,7 @@ static void do_finalize(bd_session *session, session_instance *instance,
   bool crashed = !terminating &&
                  (!exited_normally || instance->exit_code != 0);
 
+  command_hook_cancel(instance);
   if (instance->protocol != NULL) {
     bd_app_protocol_destroy(instance->protocol);
     instance->protocol = NULL;
@@ -833,17 +880,8 @@ static void check_child(bd_session *session, session_instance *instance) {
   }
 }
 
-static void complete_request(bd_session *session, session_instance *instance,
-                             bool ok) {
-  if (instance->request_id < 0) {
-    return;
-  }
-  session_op op = instance->op;
-  char hook[sizeof(instance->request_hook)];
-  snprintf(hook, sizeof(hook), "%s", instance->request_hook);
-  instance->request_id = -1;
-  instance->op = OP_NONE;
-
+static void complete_op(bd_session *session, session_instance *instance,
+                        session_op op, const char *hook, bool ok) {
   switch (op) {
     case OP_BG_DISPLAY:
       if (ok) {
@@ -892,6 +930,305 @@ static void complete_request(bd_session *session, session_instance *instance,
   }
 }
 
+static void complete_request(bd_session *session, session_instance *instance,
+                             bool ok) {
+  if (instance->request_id < 0) {
+    return;
+  }
+  session_op op = instance->op;
+  char hook[sizeof(instance->request_hook)];
+  snprintf(hook, sizeof(hook), "%s", instance->request_hook);
+  instance->request_id = -1;
+  instance->op = OP_NONE;
+  complete_op(session, instance, op, hook, ok);
+}
+
+static void command_hook_append(session_instance *instance, const char *data,
+                                size_t length) {
+  size_t room = sizeof(instance->hook_output) - instance->hook_output_length;
+  if (length >= room) {
+    length = room > 0 ? room - 1 : 0;
+  }
+  if (length > 0) {
+    memcpy(instance->hook_output + instance->hook_output_length, data, length);
+    instance->hook_output_length += length;
+  }
+  instance->hook_output[instance->hook_output_length] = '\0';
+}
+
+static void command_hook_log(bd_session *session, session_instance *instance,
+                             const char *hook_name, int exit_code,
+                             bool timed_out) {
+  char path[BD_APP_PATH_MAX];
+  int written = snprintf(path, sizeof(path), "%s/hooks.log",
+                         session->state_root);
+  if (written <= 0 || (size_t)written >= sizeof(path)) {
+    return;
+  }
+  struct stat status;
+  if (stat(path, &status) == 0 && status.st_size > 512 * 1024) {
+    char rotated[BD_APP_PATH_MAX + 8];
+    int rotated_written =
+        snprintf(rotated, sizeof(rotated), "%s.1", path);
+    if (rotated_written > 0 && (size_t)rotated_written < sizeof(rotated)) {
+      (void)rename(path, rotated);
+    }
+  }
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+  if (fd < 0) {
+    return;
+  }
+  char output[sizeof(instance->hook_output)];
+  size_t used = 0;
+  for (size_t i = 0; i < instance->hook_output_length &&
+                     used + 1 < sizeof(output);
+       ++i) {
+    char c = instance->hook_output[i];
+    if (c == '\n' || c == '\r' || c == '\t') {
+      c = ' ';
+    }
+    output[used++] = c;
+  }
+  output[used] = '\0';
+  time_t wall = time(NULL);
+  struct tm local;
+  char stamp[32] = "?";
+  if (wall != (time_t)-1 && localtime_r(&wall, &local) != NULL) {
+    strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &local);
+  }
+  uint64_t now = monotonic_ms();
+  uint64_t duration =
+      instance->hook_started_ms != 0 && now > instance->hook_started_ms
+          ? now - instance->hook_started_ms
+          : 0;
+  dprintf(fd, "%s app=%s hook=%s exit=%d timeout=%d duration_ms=%llu output=\"%s\"\n",
+          stamp, instance->app.id, hook_name != NULL ? hook_name : "?",
+          exit_code, timed_out ? 1 : 0, (unsigned long long)duration, output);
+  close(fd);
+}
+
+static bool start_command_hook(bd_session *session, session_instance *instance,
+                               session_op op, const char *hook_name,
+                               int timeout_ms, int slot) {
+  (void)session;
+  bd_app_hook_kind kind = BD_APP_HOOK_PAUSE;
+  bool found = false;
+  for (int i = 0; i < BD_APP_HOOK_COUNT; ++i) {
+    if (strcmp(bd_app_hook_name((bd_app_hook_kind)i), hook_name) == 0) {
+      kind = (bd_app_hook_kind)i;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    return false;
+  }
+  const bd_app_hook *hook = &instance->app.hooks[kind];
+  if (hook->type != BD_APP_HOOK_COMMAND || hook->exec == NULL ||
+      hook->exec_count == 0) {
+    return false;
+  }
+  if (instance->hook_pid > 0 || instance->op != OP_NONE ||
+      instance->request_id >= 0) {
+    return false;
+  }
+  if (timeout_ms < 50) {
+    timeout_ms = 50;
+  } else if (timeout_ms > 600000) {
+    timeout_ms = 600000;
+  }
+
+  int pipe_fds[2];
+  if (pipe(pipe_fds) != 0) {
+    return false;
+  }
+  fcntl(pipe_fds[0], F_SETFD, FD_CLOEXEC);
+  fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC);
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+    return false;
+  }
+  if (pid == 0) {
+    close(pipe_fds[0]);
+    setpgid(0, 0);
+#if defined(__linux__)
+    prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+    if (pipe_fds[1] != STDOUT_FILENO) {
+      dup2(pipe_fds[1], STDOUT_FILENO);
+    }
+    if (pipe_fds[1] != STDERR_FILENO) {
+      dup2(pipe_fds[1], STDERR_FILENO);
+    }
+    if (pipe_fds[1] > STDERR_FILENO) {
+      close(pipe_fds[1]);
+    }
+    for (size_t i = 0; i < instance->app.env_count; ++i) {
+      setenv(instance->app.env_keys[i], instance->app.env_values[i], 1);
+    }
+    setenv("BRICKDESK_APP_ID", instance->app.id, 1);
+    setenv("BRICKDESK_HOOK", hook_name != NULL ? hook_name : "", 1);
+    setenv("BRICKDESK_SESSION_ID", instance->session_id, 1);
+    setenv("BRICKDESK_STATE_DIR", instance->state_dir, 1);
+    if (instance->socket_path[0] != '\0') {
+      setenv("BRICKDESK_SESSION_SOCKET", instance->socket_path, 1);
+    }
+    char slot_text[16];
+    if (slot >= 0) {
+      snprintf(slot_text, sizeof(slot_text), "%d", slot);
+      setenv("BRICKDESK_SLOT", slot_text, 1);
+    }
+    if (chdir(instance->app.cwd) != 0) {
+      dprintf(STDERR_FILENO, "chdir %s: %s\n", instance->app.cwd,
+              strerror(errno));
+      _exit(126);
+    }
+    char **argv = (char **)calloc(hook->exec_count + 1, sizeof(char *));
+    if (argv == NULL) {
+      dprintf(STDERR_FILENO, "out of memory building hook argv\n");
+      _exit(126);
+    }
+    for (size_t i = 0; i < hook->exec_count; ++i) {
+      argv[i] = hook->exec[i];
+    }
+    argv[hook->exec_count] = NULL;
+    if (strchr(argv[0], '/') != NULL) {
+      execv(argv[0], argv);
+    } else {
+      execvp(argv[0], argv);
+    }
+    dprintf(STDERR_FILENO, "%s: %s\n", argv[0], strerror(errno));
+    _exit(127);
+  }
+
+  close(pipe_fds[1]);
+  (void)setpgid(pid, pid);
+  int flags = fcntl(pipe_fds[0], F_GETFL, 0);
+  if (flags >= 0) {
+    fcntl(pipe_fds[0], F_SETFL, flags | O_NONBLOCK);
+  }
+  instance->hook_pid = pid;
+  instance->hook_fd = pipe_fds[0];
+  instance->hook_started_ms = monotonic_ms();
+  instance->hook_deadline_ms =
+      instance->hook_started_ms + (uint64_t)timeout_ms;
+  instance->hook_exit_code = -1;
+  instance->hook_timed_out = false;
+  instance->hook_output_length = 0;
+  instance->hook_output[0] = '\0';
+  instance->request_id = -1;
+  instance->op = op;
+  snprintf(instance->request_hook, sizeof(instance->request_hook), "%s",
+           hook_name != NULL ? hook_name : "");
+  return true;
+}
+
+static void command_hook_drain(session_instance *instance) {
+  if (instance->hook_fd < 0) {
+    return;
+  }
+  char buffer[256];
+  for (;;) {
+    ssize_t amount = read(instance->hook_fd, buffer, sizeof(buffer));
+    if (amount > 0) {
+      command_hook_append(instance, buffer, (size_t)amount);
+      continue;
+    }
+    if (amount < 0 && errno == EINTR) {
+      continue;
+    }
+    break;
+  }
+}
+
+static void command_hook_complete(bd_session *session,
+                                  session_instance *instance) {
+  session_op op = instance->op;
+  char hook[sizeof(instance->request_hook)];
+  snprintf(hook, sizeof(hook), "%s", instance->request_hook);
+  bool ok = !instance->hook_timed_out && instance->hook_exit_code == 0;
+  instance->op = OP_NONE;
+  instance->request_id = -1;
+  instance->hook_pid = -1;
+  if (instance->hook_fd >= 0) {
+    close(instance->hook_fd);
+    instance->hook_fd = -1;
+  }
+  complete_op(session, instance, op, hook, ok);
+}
+
+static void command_hook_poll(bd_session *session, session_instance *instance,
+                              uint64_t now) {
+  if (instance->hook_pid <= 0) {
+    return;
+  }
+  command_hook_drain(instance);
+  int status = 0;
+  pid_t result = waitpid(instance->hook_pid, &status, WNOHANG);
+  if (result == 0 && now >= instance->hook_deadline_ms) {
+    instance->hook_timed_out = true;
+    (void)kill(-instance->hook_pid, SIGKILL);
+    (void)kill(instance->hook_pid, SIGKILL);
+    do {
+      result = waitpid(instance->hook_pid, &status, 0);
+    } while (result < 0 && errno == EINTR);
+  }
+  if (result == 0) {
+    return;
+  }
+  if (result < 0 && errno != ECHILD) {
+    return;
+  }
+  command_hook_drain(instance);
+  if (result == instance->hook_pid) {
+    if (WIFEXITED(status)) {
+      instance->hook_exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      instance->hook_exit_code = 128 + WTERMSIG(status);
+    } else {
+      instance->hook_exit_code = -1;
+    }
+  } else {
+    instance->hook_exit_code = -1;
+  }
+  command_hook_log(session, instance, instance->request_hook,
+                   instance->hook_exit_code, instance->hook_timed_out);
+  command_hook_complete(session, instance);
+}
+
+static void command_hook_cancel(session_instance *instance) {
+  if (instance == NULL || instance->hook_pid <= 0) {
+    return;
+  }
+  (void)kill(-instance->hook_pid, SIGKILL);
+  (void)kill(instance->hook_pid, SIGKILL);
+  int status = 0;
+  while (waitpid(instance->hook_pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  instance->hook_pid = -1;
+  if (instance->hook_fd >= 0) {
+    close(instance->hook_fd);
+    instance->hook_fd = -1;
+  }
+}
+
+static bool notification_allowed(const session_instance *instance,
+                                 const char *method) {
+  if (method == NULL) {
+    return true;
+  }
+  if (strncmp(method, "rumble.", 7) == 0) {
+    return instance->app.caps.rumble;
+  }
+  if (strncmp(method, "led.", 4) == 0) {
+    return instance->app.caps.led_ambient;
+  }
+  return true;
+}
+
 static void on_protocol_event(void *user,
                               const bd_app_protocol_event *event) {
   session_instance *instance = (session_instance *)user;
@@ -931,9 +1268,19 @@ static void on_protocol_event(void *user,
                                     BD_APP_PROTOCOL_ERROR_UNSUPPORTED,
                                     "method is not implemented by this session");
       }
+      if (!notification_allowed(instance, event->method)) {
+        emit_protocol_error(session, instance,
+                            "capability not declared for this method");
+        break;
+      }
       emit_notification(session, instance, event->method, event->params);
       break;
     case BD_APP_PROTOCOL_EVENT_NOTIFICATION:
+      if (!notification_allowed(instance, event->method)) {
+        emit_protocol_error(session, instance,
+                            "capability not declared for this method");
+        break;
+      }
       emit_notification(session, instance, event->method, event->params);
       break;
     case BD_APP_PROTOCOL_EVENT_ERROR:
@@ -1008,6 +1355,7 @@ static void free_instance(bd_session *session, session_instance *instance,
   if (instance == NULL) {
     return;
   }
+  command_hook_cancel(instance);
   if (instance->protocol != NULL) {
     bd_app_protocol_destroy(instance->protocol);
     instance->protocol = NULL;
@@ -1306,7 +1654,16 @@ int bd_session_fds(const bd_session *session, int *out, int max) {
   }
   for (size_t i = 0; i < session->count && count < max; ++i) {
     const session_instance *instance = session->items[i];
-    if (instance->reaped || instance->protocol == NULL) {
+    if (instance->reaped) {
+      continue;
+    }
+    if (instance->hook_fd >= 0) {
+      out[count++] = instance->hook_fd;
+      if (count >= max) {
+        break;
+      }
+    }
+    if (instance->protocol == NULL) {
       continue;
     }
     int remaining = max - count;
@@ -1347,6 +1704,12 @@ int bd_session_poll(bd_session *session) {
     check_child(session, instance);
     if (instance->reaped) {
       continue;
+    }
+    if (instance->hook_pid > 0) {
+      command_hook_poll(session, instance, now);
+      if (instance->reaped) {
+        continue;
+      }
     }
     if (instance->state == BD_SESSION_LAUNCHING &&
         instance->hello_deadline_ms != 0 &&
@@ -1393,6 +1756,10 @@ int bd_session_poll(bd_session *session) {
         instance->op == OP_TERM_SIGKILL) {
       update_next(&next, &has_next,
                   deadline_remaining(instance->op_deadline_ms, now));
+    }
+    if (instance->hook_pid > 0) {
+      update_next(&next, &has_next,
+                  deadline_remaining(instance->hook_deadline_ms, now));
     }
     if (instance->protocol != NULL) {
       int timeout = bd_app_protocol_next_timeout(instance->protocol, now);
@@ -1625,6 +1992,8 @@ bd_session_result bd_session_launch(bd_session *session, const bd_app *app,
   instance->session = session;
   instance->pid = -1;
   instance->pgid = -1;
+  instance->hook_pid = -1;
+  instance->hook_fd = -1;
   instance->state = BD_SESSION_IDLE;
   instance->request_id = -1;
   instance->op = OP_NONE;
@@ -1940,17 +2309,25 @@ static bd_session_result request_state_transfer(bd_session *session,
     return BD_SESSION_BUSY;
   }
   const bd_app_hook_kind kind = save ? BD_APP_HOOK_SAVE : BD_APP_HOOK_LOAD;
-  if (instance->app.hooks[kind].type != BD_APP_HOOK_IPC ||
-      !instance->ipc_connected) {
-    return BD_SESSION_UNSUPPORTED;
-  }
   if (slot < 0 || (instance->app.state.max_slots > 0 &&
                    slot >= instance->app.state.max_slots)) {
     return BD_SESSION_INVALID_STATE;
   }
+  int timeout = hook_timeout(session, instance, kind, session->timeouts.save_ms);
+  if (instance->app.hooks[kind].type == BD_APP_HOOK_COMMAND) {
+    if (!start_command_hook(session, instance,
+                            save ? OP_SAVE_STATE : OP_LOAD_STATE,
+                            save ? "save" : "load", timeout, slot)) {
+      return BD_SESSION_IO_ERROR;
+    }
+    return BD_SESSION_OK;
+  }
+  if (instance->app.hooks[kind].type != BD_APP_HOOK_IPC ||
+      !instance->ipc_connected) {
+    return BD_SESSION_UNSUPPORTED;
+  }
   char params[64];
   snprintf(params, sizeof(params), "{\"slot\":%d}", slot);
-  int timeout = hook_timeout(session, instance, kind, session->timeouts.save_ms);
   if (!begin_request(session, instance,
                      save ? OP_SAVE_STATE : OP_LOAD_STATE,
                      instance->app.hooks[kind].method, params, timeout,

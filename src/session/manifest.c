@@ -516,6 +516,10 @@ static bool parse_capabilities(const bd_json *doc, int token, const char *path,
                    "'capabilities' must be an object");
     return false;
   }
+  /* LED/rumble notifications predate capability declarations; keep them on
+   * unless an app explicitly opts out. */
+  app->caps.rumble = true;
+  app->caps.led_ambient = true;
   struct {
     const char *name;
     bool *field;
@@ -527,6 +531,8 @@ static bool parse_capabilities(const bd_json *doc, int token, const char *path,
       {"screenshot", &app->caps.screenshot},
       {"background", &app->caps.background},
       {"display_release", &app->caps.display_release},
+      {"rumble", &app->caps.rumble},
+      {"led_ambient", &app->caps.led_ambient},
   };
   for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
     int value = bd_json_object_get(doc, token, fields[i].name);
@@ -883,6 +889,10 @@ bool bd_app_parse_json(const char *json, size_t length, const char *dir,
     return false;
   }
   memset(out, 0, sizeof(*out));
+  /* LED/rumble notifications predate capability declarations; keep them on
+   * unless an app explicitly opts out. */
+  out->caps.rumble = true;
+  out->caps.led_ambient = true;
   const char *path = manifest_path != NULL ? manifest_path : "<memory>";
 
   if (!resolve_dir(dir, out->dir, sizeof(out->dir), error, error_size)) {

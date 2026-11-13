@@ -103,14 +103,17 @@ typedef struct bd_app_capabilities {
   bool screenshot;
   bool background;
   bool display_release;
+  /* Legacy default is true; an app may declare false to opt out. */
+  bool rumble;
+  bool led_ambient;
 } bd_app_capabilities;
 
 typedef struct bd_app_hook {
   bd_app_hook_type type;
   /* IPC method name; default depends on the hook kind. */
   char method[BD_APP_METHOD_MAX];
-  /* command hook argv.  Parsed and preserved, but M1 does not execute
-   * command hooks yet; see docs/app-protocol.md. */
+  /* command hook argv.  Executed asynchronously by the session with the
+   * hook's timeout; output is appended to <state_root>/hooks.log. */
   char **exec;
   size_t exec_count;
   /* 0 means "use the session default for this hook". */

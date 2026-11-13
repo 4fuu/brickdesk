@@ -937,6 +937,81 @@ static void test_background_limit(void) {
   bd_session_destroy(session);
 }
 
+static void test_command_hooks(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session_timeouts timeouts;
+  memset(&timeouts, 0, sizeof(timeouts));
+  timeouts.term_ms = 200;
+  timeouts.kill_ms = 300;
+  bd_session *session = create_session("commandhooks", 2, &log, timeouts,
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "command hook session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app(
+            "commandhooks", "dev.command.hooks", "CommandHooks", g_child_path,
+            "idle",
+            "\"pause\":{\"type\":\"command\",\"exec\":[\"/bin/sh\",\"-c\","
+            "\"echo pause-out\"],\"timeout_ms\":500},"
+            "\"resume\":{\"type\":\"command\",\"exec\":[\"/bin/sh\",\"-c\","
+            "\"echo resume-out\"],\"timeout_ms\":500},"
+            "\"save\":{\"type\":\"command\",\"exec\":[\"/bin/sh\",\"-c\","
+            "\"echo save-out\"],\"timeout_ms\":500},"
+            "\"quit\":{\"type\":\"command\",\"exec\":[\"/bin/sh\",\"-c\","
+            "\"echo quit-out\"],\"timeout_ms\":500}",
+            "\"pause\":true,\"resume\":true,\"save_state\":true", NULL, NULL,
+            &app),
+        "make command hook app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "command hook launch");
+  check(wait_for_state(session, "dev.command.hooks", BD_SESSION_FOREGROUND,
+                       2000),
+        "command hook foreground");
+
+  check(bd_session_background(session, "dev.command.hooks") == BD_SESSION_OK,
+        "command hook background request");
+  check(wait_for_state(session, "dev.command.hooks", BD_SESSION_BACKGROUND,
+                       2000),
+        "command hook background state");
+  check(find_hook_event(&log, "dev.command.hooks", "pause", NULL),
+        "command pause hook did not run");
+
+  check(bd_session_resume(session, "dev.command.hooks") == BD_SESSION_OK,
+        "command hook resume request");
+  check(wait_for_state(session, "dev.command.hooks", BD_SESSION_FOREGROUND,
+                       2000),
+        "command hook resume state");
+  check(find_hook_event(&log, "dev.command.hooks", "resume", NULL),
+        "command resume hook did not run");
+
+  check(bd_session_terminate(session, "dev.command.hooks") == BD_SESSION_OK,
+        "command hook terminate request");
+  check(wait_for_state(session, "dev.command.hooks", BD_SESSION_EXITED, 3000),
+        "command hook exited");
+  check(find_hook_event(&log, "dev.command.hooks", "save", NULL),
+        "command save hook did not run");
+  check(find_hook_event(&log, "dev.command.hooks", "quit", NULL),
+        "command quit hook did not run");
+
+  char log_path[TEST_PATH];
+  snprintf(log_path, sizeof(log_path), "%s/state-commandhooks/hooks.log",
+           g_root);
+  char *content = read_file(log_path);
+  check(content != NULL, "command hook log missing");
+  if (content != NULL) {
+    check(strstr(content, "hook=pause") != NULL &&
+              strstr(content, "pause-out") != NULL &&
+              strstr(content, "hook=quit") != NULL,
+          "command hook log content");
+    free(content);
+  }
+  bd_app_destroy(&app);
+  bd_session_destroy(session);
+}
+
 static void test_terminate_escalation(void) {
   event_log log;
   memset(&log, 0, sizeof(log));
@@ -1664,6 +1739,7 @@ int main(int argc, char **argv) {
   test_session_demo();
   test_crash();
   test_background_limit();
+  test_command_hooks();
   test_terminate_escalation();
   test_perf_calls();
   test_session_freeze();

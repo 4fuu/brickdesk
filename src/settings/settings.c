@@ -138,6 +138,17 @@ static const char *const DISPLAY_KEYS[] = {"display.brightness", NULL};
 static const char *const DISPLAY_SECTIONS[] = {"display", NULL};
 static const char *const DISPLAY_SKIP[] = {"display.width", "display.height",
                                            "display.refresh_hz", NULL};
+static const char *const LIGHTS_KEYS[] = {
+    "led.enabled",
+    "led.m.brightness", "led.m.color", "led.m.effect",
+    "led.lr.brightness", "led.lr.color", "led.lr.effect",
+    "led.f1.brightness", "led.f1.color", "led.f1.effect",
+    "led.f2.color", "led.f2.effect",
+    "led.rear.brightness", "led.rear.color", "led.rear.effect",
+    "led.indicator_brightness", "led.ambient", "led.ambient_brightness",
+    NULL};
+static const char *const LIGHTS_SECTIONS[] = {
+    "led", "led.m", "led.lr", "led.f1", "led.f2", "led.rear", NULL};
 static const char *const BACKGROUND_KEYS[] = {"session.max_background",
                                               "session.memory_budget_mb", NULL};
 static const char *const BACKGROUND_SECTIONS[] = {"session", NULL};
@@ -151,6 +162,9 @@ const bd_settings_page_def BD_SETTINGS_PAGES[BD_SETTINGS_CATEGORY_COUNT] = {
      SOUND_SECTIONS, NULL},
     {"显示", "屏幕背光", "亮度通过系统接口应用到背光。", DISPLAY_KEYS,
      DISPLAY_SECTIONS, DISPLAY_SKIP},
+    {"灯光", "分区颜色、效果与指示",
+     "顶部灯条、摇杆环、F1/F2 与扳机分区独立设置；F2 与 F1 共用亮度。",
+     LIGHTS_KEYS, LIGHTS_SECTIONS, NULL},
     {"按键", "组合键与冲突", "只读查看；冲突由输入层在加载 hotkeys.ini 时检测。",
      NULL, NULL, NULL},
     {"性能", "全局档位与按应用覆盖",
@@ -171,6 +185,24 @@ static const bd_settings_label LABELS[] = {
     {"audio.volume", "音量", "系统输出音量", NULL, 1},
     {"audio.mute", "静音", "关闭全部系统声音", NULL, 1},
     {"display.brightness", "亮度", "屏幕背光", NULL, 1},
+    {"led.enabled", "启用灯光", "关闭后所有分区熄灭", NULL, 1},
+    {"led.m.brightness", "顶栏亮度", "顶部灯条 / Logo 分区", NULL, 1},
+    {"led.m.color", "顶栏颜色", "顶部灯条 / Logo 分区", NULL, 0},
+    {"led.m.effect", "顶栏效果", "顶部灯条 / Logo 分区", NULL, 0},
+    {"led.lr.brightness", "摇杆环亮度", "左右摇杆环分区", NULL, 1},
+    {"led.lr.color", "摇杆环颜色", "左右摇杆环分区", NULL, 0},
+    {"led.lr.effect", "摇杆环效果", "左右摇杆环分区", NULL, 0},
+    {"led.f1.brightness", "F1/F2 亮度", "两个 FN 键共用亮度", NULL, 1},
+    {"led.f1.color", "F1 颜色", "FN 1 键分区", NULL, 0},
+    {"led.f1.effect", "F1 效果", "FN 1 键分区", NULL, 0},
+    {"led.f2.color", "F2 颜色", "FN 2 键分区", NULL, 0},
+    {"led.f2.effect", "F2 效果", "FN 2 键分区", NULL, 0},
+    {"led.rear.brightness", "扳机亮度", "L/R 扳机分区", NULL, 1},
+    {"led.rear.color", "扳机颜色", "L/R 扳机分区", NULL, 0},
+    {"led.rear.effect", "扳机效果", "L/R 扳机分区", NULL, 0},
+    {"led.indicator_brightness", "指示亮度", "低电量、充电与睡眠指示", NULL, 1},
+    {"led.ambient", "氛围灯", "按前台应用推送的颜色驱动灯光", NULL, 1},
+    {"led.ambient_brightness", "氛围灯亮度", "氛围灯的最大亮度", NULL, 1},
     {"session.max_background", "后台应用上限", "同时保留在后台的应用数量",
      " 个", 1},
     {"session.memory_budget_mb", "内存预算", "后台应用的内存软上限", " MB", 16},
@@ -763,6 +795,7 @@ bool bd_settings_rebuild_rows(bd_settings *settings) {
     case BD_SETTINGS_CATEGORY_APPEARANCE:
     case BD_SETTINGS_CATEGORY_SOUND:
     case BD_SETTINGS_CATEGORY_DISPLAY:
+    case BD_SETTINGS_CATEGORY_LIGHTS:
     case BD_SETTINGS_CATEGORY_BACKGROUND:
       return build_config_page(settings, &BD_SETTINGS_PAGES[settings->category]);
     case BD_SETTINGS_CATEGORY_KEYS:

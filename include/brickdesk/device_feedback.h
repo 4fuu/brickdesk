@@ -35,6 +35,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -164,6 +165,97 @@ bd_feedback_result bd_feedback_led_set(bd_feedback_led *led, int percent,
                                        bd_feedback_error *error);
 
 /* ---------------------------------------------------------------------- */
+/* TG4040 vendor LED animation (/sys/class/led_anim)                       */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * Brick Pro exposes five addressable LED zones.  NextUI's tg5040 backend
+ * (fixed commit b6ec1343) writes:
+ *
+ *   max_scale          zone m (top bar)
+ *   max_scale_lr       zone lr (stick rings)
+ *   max_scale_f1f2     zones f1 and f2 (shared brightness)
+ *   max_scale_rear     zone rear (triggers)
+ *   effect_<zone>      vendor effect id; written last, applies the state
+ *   effect_rgb_hex_<zone>   RRGGBB
+ *   effect_cycles_<zone>    -1 for unlimited
+ *   effect_duration_<zone>  milliseconds
+ *
+ * Brightness is 0..100.  The vendor effect id space is shared across zones:
+ * 1 linear, 2 breathe, 3 blink, 4 static, then the trimui animations.  This
+ * module does not guess further ids; callers pass the id they want and the
+ * probe only checks that the nodes exist.
+ */
+typedef enum bd_feedback_led_zone {
+  BD_FEEDBACK_LED_ZONE_M = 0,
+  BD_FEEDBACK_LED_ZONE_LR,
+  BD_FEEDBACK_LED_ZONE_F1,
+  BD_FEEDBACK_LED_ZONE_F2,
+  BD_FEEDBACK_LED_ZONE_REAR,
+  BD_FEEDBACK_LED_ZONE_COUNT
+} bd_feedback_led_zone;
+
+const char *bd_feedback_led_zone_name(bd_feedback_led_zone zone);
+/* Node suffix: "m", "lr", "f1", "f2", "rear". */
+const char *bd_feedback_led_zone_suffix(bd_feedback_led_zone zone);
+
+typedef struct bd_feedback_led_anim_config {
+  /* Prefix before /sys.  NULL or "" means the real /sys. */
+  const char *sysfs_root;
+  /* 0 means the default, 100. */
+  int max_brightness;
+} bd_feedback_led_anim_config;
+
+typedef struct bd_feedback_led_anim_settings {
+  int brightness;   /* 0..max_brightness */
+  int effect;       /* vendor effect id, 0..255 */
+  int cycles;       /* -1 unlimited, otherwise 0..65535 */
+  int duration_ms;  /* 1..60000 */
+  uint32_t rgb;     /* 0x00RRGGBB */
+} bd_feedback_led_anim_settings;
+
+typedef struct bd_feedback_led_anim {
+  bool available;
+  char root[BD_FEEDBACK_PATH_MAX];
+  int max_brightness;
+  bool zone_present[BD_FEEDBACK_LED_ZONE_COUNT];
+  /* f1 and f2 share max_scale_f1f2; writing f1 covers both. */
+  bool f1f2_shared;
+} bd_feedback_led_anim;
+
+/*
+ * Probes /sys/class/led_anim without writing.  A zone is present when its
+ * effect_<zone> node exists.  Returns UNSUPPORTED when the directory or every
+ * zone is missing.
+ */
+bd_feedback_result bd_feedback_led_anim_probe(
+    bd_feedback_led_anim *led, const bd_feedback_led_anim_config *config,
+    bd_feedback_error *error);
+
+bool bd_feedback_led_anim_has_zone(const bd_feedback_led_anim *led,
+                                   bd_feedback_led_zone zone);
+
+/*
+ * Applies one zone in NextUI's order: brightness, cycles, duration, colour,
+ * then effect (which applies the state).  Values outside the documented range
+ * are rejected with RANGE and nothing is written.  A missing zone returns
+ * UNSUPPORTED.  f2 skips the brightness write because f1/f2 share one node.
+ */
+bd_feedback_result bd_feedback_led_anim_apply(
+    bd_feedback_led_anim *led, bd_feedback_led_zone zone,
+    const bd_feedback_led_anim_settings *settings, bd_feedback_error *error);
+
+/* Applies every present zone; settings must hold BD_FEEDBACK_LED_ZONE_COUNT. */
+bd_feedback_result bd_feedback_led_anim_apply_all(
+    bd_feedback_led_anim *led,
+    const bd_feedback_led_anim_settings settings[BD_FEEDBACK_LED_ZONE_COUNT],
+    bd_feedback_error *error);
+
+/* Writes brightness 0 for every present zone; effects are left in place. */
+bd_feedback_result bd_feedback_led_anim_off(bd_feedback_led_anim *led,
+                                            bd_feedback_error *error);
+
+/* ---------------------------------------------------------------------- */
 /* Rumble                                                                 */
 /* ---------------------------------------------------------------------- */
 
@@ -274,6 +366,64 @@ bd_feedback_result bd_feedback_rumble_stop(bd_feedback_rumble *rumble,
  */
 bd_feedback_result bd_feedback_rumble_close(bd_feedback_rumble *rumble,
                                             bd_feedback_error *error);
+
+/* ---------------------------------------------------------------------- */
+/* TG4040 vendor motor (/sys/class/motor/voltage + GPIO227)                 */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * NextUI's tg5040 backend maps strength 0..0xFFFF to
+ *   voltage = 500000 + strength * (2500000 - 500000) / 0xFFFF
+ * on Brick Pro (2.5 V ceiling; Brick/Smart Pro use 3.3 V), writes the voltage
+ * to /sys/class/motor/voltage, then writes 1/0 to gpio227/value.  This module
+ * exposes the same path with a 0..100 percent input.  The motor is a
+ * short-pulse device: callers set it, then stop it from their own deadline.
+ */
+typedef struct bd_feedback_motor_config {
+  const char *sysfs_root;   /* NULL or "" for the real /sys */
+  int min_voltage_uv;       /* 0 => 500000 */
+  int max_voltage_uv;       /* 0 => 2500000 (Brick Pro) */
+  int max_percent;          /* 0 => 100 */
+  int gpio;                 /* 0 => 227 */
+} bd_feedback_motor_config;
+
+typedef struct bd_feedback_motor {
+  bool available;
+  bool active;
+  bool exported_by_us;
+  char voltage[BD_FEEDBACK_PATH_MAX];
+  char value[BD_FEEDBACK_PATH_MAX];
+  char direction[BD_FEEDBACK_PATH_MAX];
+  int min_voltage_uv;
+  int max_voltage_uv;
+  int max_percent;
+  int gpio;
+} bd_feedback_motor;
+
+/*
+ * Opens the vendor motor path.  If gpio227/value is absent but the GPIO export
+ * node exists, the GPIO is exported and switched to output.  Returns
+ * UNSUPPORTED when the voltage node or the GPIO path is unavailable.
+ */
+bd_feedback_result bd_feedback_motor_open(bd_feedback_motor *motor,
+                                          const bd_feedback_motor_config *config,
+                                          bd_feedback_error *error);
+
+/*
+ * Sets the motor to percent 0..100.  0 stops it.  Voltage is mapped linearly
+ * between min and max; 100 uses the maximum.  The voltage is written before
+ * the GPIO so the first pulse never runs at the previous level.
+ */
+bd_feedback_result bd_feedback_motor_set(bd_feedback_motor *motor, int percent,
+                                         bd_feedback_error *error);
+
+/* Writes GPIO227=0.  Idempotent while the motor is open. */
+bd_feedback_result bd_feedback_motor_stop(bd_feedback_motor *motor,
+                                          bd_feedback_error *error);
+
+/* Stops and releases the handle.  Safe to call twice. */
+bd_feedback_result bd_feedback_motor_close(bd_feedback_motor *motor,
+                                           bd_feedback_error *error);
 
 #ifdef __cplusplus
 }

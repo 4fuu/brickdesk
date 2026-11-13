@@ -127,6 +127,13 @@ static void draw_icon_sun(bd_gfx *gfx, int x, int cy, bd_color color) {
   bd_gfx_fill_rect(gfx, bd_rect_make(x + 14, cy + 5, 2, 2), color);
 }
 
+static void draw_icon_bulb(bd_gfx *gfx, int x, int cy, bd_color color) {
+  bd_gfx_stroke_round_rect(gfx, bd_rect_make(x + 3, cy - 8, 12, 12), 6, 2,
+                           color);
+  bd_gfx_fill_rect(gfx, bd_rect_make(x + 6, cy + 4, 6, 2), color);
+  bd_gfx_fill_rect(gfx, bd_rect_make(x + 7, cy + 7, 4, 2), color);
+}
+
 static void draw_icon_gamepad(bd_gfx *gfx, int x, int cy, bd_color color) {
   bd_gfx_stroke_round_rect(gfx, bd_rect_make(x + 1, cy - 6, 16, 12), 4, 2,
                            color);
@@ -180,6 +187,9 @@ static void draw_category_icon(bd_gfx *gfx, int category, int x, int cy,
       break;
     case BD_SETTINGS_CATEGORY_DISPLAY:
       draw_icon_sun(gfx, x, cy, color);
+      break;
+    case BD_SETTINGS_CATEGORY_LIGHTS:
+      draw_icon_bulb(gfx, x, cy, color);
       break;
     case BD_SETTINGS_CATEGORY_KEYS:
       draw_icon_gamepad(gfx, x, cy, color);

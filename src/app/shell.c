@@ -24,6 +24,8 @@
 #include "brickdesk/device_av.h"
 #include "brickdesk/device_battery.h"
 #include "brickdesk/battery_history.h"
+#include "brickdesk/haptics.h"
+#include "brickdesk/led.h"
 #include "brickdesk/notice.h"
 #include "brickdesk/perf_client.h"
 #include "brickdesk/sysinfo.h"
@@ -62,7 +64,8 @@ typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
   SHELL_PENDING_EXIT,
   SHELL_PENDING_MENU_ACTION,
-  SHELL_PENDING_ATTENTION
+  SHELL_PENDING_ATTENTION,
+  SHELL_PENDING_NOTIFICATION
 } shell_pending_kind;
 
 typedef enum shell_power_request {
@@ -84,7 +87,8 @@ typedef struct shell_pending {
   shell_pending_kind kind;
   bd_session_state state;
   char app_id[BD_APP_ID_MAX];
-  char method[16];
+  char method[32];
+  char params[512];
 } shell_pending;
 
 typedef struct shell_app_runtime {
@@ -125,6 +129,19 @@ struct bd_shell {
   bool shutdown_on_low_battery;
   uint64_t low_battery_shutdown_ms;
   bool low_battery_shutdown_armed;
+  bool battery_charging_known;
+
+  bd_led *led;
+  bd_haptics *haptics;
+  bd_led_profile led_profile;
+  bool led_profile_valid;
+  bool led_pulse_active;
+  uint64_t led_pulse_off_ms;
+  bool led_ambient_known;
+  bool led_ambient_dirty;
+  uint32_t led_ambient_rgb;
+  uint64_t led_ambient_next_ms;
+  char led_app_id[BD_APP_ID_MAX];
 
   bd_app_list *apps;
   shell_app_runtime *runtime;
@@ -217,6 +234,8 @@ struct bd_shell {
   bool test_clock;
   uint64_t test_now_ms;
 };
+
+static void shell_led_refresh_internal(bd_shell *shell);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -554,6 +573,11 @@ static void shell_config_changed(void *user, const char *key) {
     shell_home_quick_refresh(shell);
   } else if (strcmp(key, "session.max_background") == 0) {
     shell_publish_status(shell, true);
+  } else if (strncmp(key, "led.", 4) == 0 ||
+             strncmp(key, "input.haptic", 12) == 0) {
+    shell->led_profile_valid = false;
+    shell->led_ambient_dirty = true;
+    shell_led_refresh_internal(shell);
   } else if (strcmp(key, "power.sleep_after") == 0 ||
              strcmp(key, "power.deep_sleep_after") == 0) {
     long sleep_after =
@@ -652,7 +676,15 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
       charging = true;
     }
   }
-  shell->battery_charging = charging;
+  bool charging_known =
+      read == BD_BATTERY_OK &&
+      (status.external_power_known || status.status_known);
+  if (charging_known != shell->battery_charging_known ||
+      charging != shell->battery_charging) {
+    shell->battery_charging_known = charging_known;
+    shell->battery_charging = charging;
+    shell->led_profile_valid = false;
+  }
   if (percent >= 0 && shell->battery_history != NULL &&
       getenv("BRICKDESK_HEADLESS") == NULL) {
     /* Headless tests use the repository config dir; never write samples there. */
@@ -722,6 +754,122 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
     /* Explicit degraded cadence; never a silent fast polling loop. */
     shell->battery_next_ms = now + BD_SHELL_BATTERY_RETRY_MS;
   }
+}
+
+/* ------------------------------------------------------------ LED/haptics */
+
+static int shell_low_battery_percent(bd_shell *shell) {
+  long value =
+      bd_config_get_int(shell->settings, "power.low_battery_percent", 5);
+  if (value < 0) {
+    value = 0;
+  }
+  if (value > 99) {
+    value = 99;
+  }
+  return (int)value;
+}
+
+static bool shell_app_ambient_enabled(bd_shell *shell, const char *app_id) {
+  if (app_id == NULL || app_id[0] == '\0') {
+    return false;
+  }
+  if (!bd_config_get_bool(shell->settings, "led.ambient", false)) {
+    return false;
+  }
+  char key[160];
+  snprintf(key, sizeof(key), "led.app.%s.ambient", app_id);
+  return bd_config_get_bool(shell->settings, key, true);
+}
+
+static void shell_led_apply(bd_shell *shell, bd_led_profile profile,
+                            uint32_t ambient_rgb) {
+  if (shell->led == NULL) {
+    return;
+  }
+  char error[192] = {0};
+  bool ok = profile == BD_LED_PROFILE_AMBIENT
+                ? bd_led_apply_ambient(shell->led, ambient_rgb, error,
+                                       sizeof(error))
+                : bd_led_apply_profile(shell->led, profile, error,
+                                       sizeof(error));
+  if (!ok && shell->verbose) {
+    fprintf(stderr, "brickdesk: led: %s\n",
+            error[0] != '\0' ? error : "apply failed");
+  }
+  shell->led_profile = profile;
+  shell->led_profile_valid = true;
+}
+
+static void shell_led_refresh_internal(bd_shell *shell) {
+  if (shell == NULL || shell->led == NULL) {
+    return;
+  }
+  uint64_t now = shell_now(shell);
+  if (shell->led_pulse_active) {
+    if (now < shell->led_pulse_off_ms) {
+      return;
+    }
+    shell->led_pulse_active = false;
+    char error[192] = {0};
+    bd_led_off(shell->led, error, sizeof(error));
+    shell->led_profile = BD_LED_PROFILE_OFF;
+    shell->led_profile_valid = true;
+    return;
+  }
+  if (!bd_led_available(shell->led)) {
+    return;
+  }
+
+  int critical = shell_low_battery_percent(shell);
+  bd_led_profile profile = BD_LED_PROFILE_DEFAULT;
+  if (shell->battery_charging_known && shell->battery_charging) {
+    profile = BD_LED_PROFILE_CHARGING;
+  } else if (shell->status_battery >= 0 &&
+             shell->status_battery <= critical) {
+    profile = BD_LED_PROFILE_CRITICAL_BATTERY;
+  } else if (shell->status_battery >= 0 &&
+             shell->status_battery < critical + 10) {
+    profile = BD_LED_PROFILE_LOW_BATTERY;
+  } else if (shell->led_ambient_known &&
+             shell_app_ambient_enabled(shell, shell->led_app_id)) {
+    profile = BD_LED_PROFILE_AMBIENT;
+  }
+  if (shell->led_profile_valid && shell->led_profile == profile) {
+    if (profile != BD_LED_PROFILE_AMBIENT || !shell->led_ambient_dirty) {
+      return;
+    }
+  }
+  shell_led_apply(shell, profile, shell->led_ambient_rgb);
+  shell->led_ambient_dirty = false;
+}
+
+static void shell_haptic_nav(bd_shell *shell) {
+  if (shell == NULL || shell->haptics == NULL) {
+    return;
+  }
+  if (!bd_config_get_bool(shell->settings, "input.haptics", true)) {
+    return;
+  }
+  int strength = (int)bd_config_get_int(shell->settings, "input.haptic_strength",
+                                        60);
+  int duration = (int)bd_config_get_int(
+      shell->settings, "input.haptic_duration_ms", 35);
+  bd_haptics_set_strength(shell->haptics, strength);
+  bd_haptics_play(shell->haptics, strength, duration, shell_now(shell));
+}
+
+static void shell_haptic_boot(bd_shell *shell) {
+  if (shell == NULL || shell->haptics == NULL) {
+    return;
+  }
+  if (!bd_config_get_bool(shell->settings, "input.haptics", true)) {
+    return;
+  }
+  static const int strengths[] = {55, 0, 70};
+  static const int durations[] = {45, 55, 70};
+  bd_haptics_play_pattern(shell->haptics, strengths, durations, 3,
+                          shell_now(shell));
 }
 
 /* --------------------------------------------------------------- JSON bits */
@@ -845,6 +993,157 @@ static bool json_u64(const char *json, const char *key, uint64_t *out) {
   }
   *out = (uint64_t)number;
   return true;
+}
+
+static bool parse_hex_color(const char *text, uint32_t *rgb) {
+  if (text == NULL || rgb == NULL) {
+    return false;
+  }
+  if (*text == '#') {
+    ++text;
+  }
+  size_t length = strlen(text);
+  if (length != 6) {
+    return false;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    if (!((text[i] >= '0' && text[i] <= '9') ||
+          (text[i] >= 'a' && text[i] <= 'f') ||
+          (text[i] >= 'A' && text[i] <= 'F'))) {
+      return false;
+    }
+  }
+  *rgb = (uint32_t)strtoul(text, NULL, 16) & 0xFFFFFFu;
+  return true;
+}
+
+static void shell_handle_app_notification(bd_shell *shell,
+                                          const char *app_id,
+                                          const char *method,
+                                          const char *params) {
+  if (shell == NULL || method == NULL) {
+    return;
+  }
+  if (params == NULL) {
+    params = "";
+  }
+  if (strcmp(method, "led.ambient") == 0 || strcmp(method, "led.set") == 0) {
+    if (app_id != NULL && app_id[0] != '\0' && shell->led_app_id[0] == '\0') {
+      copy_text(shell->led_app_id, sizeof(shell->led_app_id), app_id);
+    }
+    if (!shell_app_ambient_enabled(shell, app_id)) {
+      return;
+    }
+    char color[16];
+    int rgb_value = 0;
+    bool off = false;
+    uint32_t rgb = 0;
+    if (json_string(params, "color", color, sizeof(color)) &&
+        parse_hex_color(color, &rgb)) {
+      shell->led_ambient_rgb = rgb;
+    } else if (json_int(params, "rgb", &rgb_value) && rgb_value >= 0) {
+      shell->led_ambient_rgb = (uint32_t)rgb_value & 0xFFFFFFu;
+    } else if (json_bool(params, "off", &off) && off) {
+      shell->led_ambient_known = false;
+      shell->led_ambient_dirty = false;
+      shell->led_profile_valid = false;
+      shell_led_refresh_internal(shell);
+      return;
+    } else {
+      return;
+    }
+    shell->led_ambient_known = true;
+    shell->led_ambient_dirty = true;
+    shell_led_refresh_internal(shell);
+    return;
+  }
+  if (strcmp(method, "rumble.play") == 0) {
+    int strength = 60;
+    int duration = 60;
+    json_int(params, "strength", &strength);
+    json_int(params, "duration_ms", &duration);
+    bd_haptics_play(shell->haptics, strength, duration, shell_now(shell));
+    return;
+  }
+  if (strcmp(method, "rumble.stop") == 0) {
+    bd_haptics_stop(shell->haptics);
+  }
+}
+
+static void shell_led_ambient_sample(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || shell->led == NULL || shell->session == NULL) {
+    return;
+  }
+  if (now < shell->led_ambient_next_ms) {
+    return;
+  }
+  shell->led_ambient_next_ms = now + 500;
+  if (!shell_app_ambient_enabled(shell, shell->led_app_id)) {
+    return;
+  }
+  const char *path =
+      bd_session_last_frame_path(shell->session, shell->led_app_id);
+  if (path == NULL || path[0] == '\0') {
+    return;
+  }
+  bd_app_last_frame frame;
+  char error[128] = {0};
+  if (!bd_app_last_frame_open(path, &frame, error, sizeof(error))) {
+    return;
+  }
+  size_t size = bd_app_last_frame_pixel_size(
+      frame.header.format, frame.header.width, frame.header.height);
+  if (size == 0 || size > 4u * 1024u * 1024u) {
+    bd_app_last_frame_close(&frame);
+    return;
+  }
+  uint8_t *pixels = malloc(size);
+  if (pixels == NULL) {
+    bd_app_last_frame_close(&frame);
+    return;
+  }
+  bd_app_last_frame_header header;
+  bool copied = bd_app_last_frame_copy(&frame, pixels, size, &header, error,
+                                       sizeof(error));
+  bd_app_last_frame_close(&frame);
+  if (!copied) {
+    free(pixels);
+    return;
+  }
+  uint64_t sum_r = 0;
+  uint64_t sum_g = 0;
+  uint64_t sum_b = 0;
+  uint64_t count = 0;
+  for (uint32_t y = 0; y < header.height; y += 8) {
+    for (uint32_t x = 0; x < header.width; x += 8) {
+      if (header.format == BD_APP_PIXEL_RGBA8888) {
+        const uint8_t *pixel = pixels + (size_t)y * header.stride + (size_t)x * 4;
+        sum_r += pixel[0];
+        sum_g += pixel[1];
+        sum_b += pixel[2];
+        ++count;
+      } else if (header.format == BD_APP_PIXEL_RGB565) {
+        const uint8_t *row = pixels + (size_t)y * header.stride;
+        uint16_t pixel = (uint16_t)(row[(size_t)x * 2] |
+                                    (row[(size_t)x * 2 + 1] << 8));
+        sum_r += (uint64_t)((pixel >> 11) & 0x1F) << 3;
+        sum_g += (uint64_t)((pixel >> 5) & 0x3F) << 2;
+        sum_b += (uint64_t)(pixel & 0x1F) << 3;
+        ++count;
+      }
+    }
+  }
+  free(pixels);
+  if (count == 0) {
+    return;
+  }
+  uint32_t r = (uint32_t)(sum_r / count);
+  uint32_t g = (uint32_t)(sum_g / count);
+  uint32_t b = (uint32_t)(sum_b / count);
+  shell->led_ambient_rgb = (r << 16) | (g << 8) | b;
+  shell->led_ambient_known = true;
+  shell->led_ambient_dirty = true;
+  shell_led_refresh_internal(shell);
 }
 
 /* ----------------------------------------------------------- input source */
@@ -1465,11 +1764,15 @@ static void on_session_event(void *user, const bd_session_event *event) {
       bd_shell_notice(shell, BD_NOTICE_WARNING,
                       "应用协议错误，已忽略该消息", 0);
       return;
+    case BD_SESSION_EVENT_NOTIFICATION:
+      pending->kind = SHELL_PENDING_NOTIFICATION;
+      break;
     default:
       return;
   }
   copy_text(pending->app_id, sizeof(pending->app_id), event->app_id);
   copy_text(pending->method, sizeof(pending->method), event->method);
+  copy_text(pending->params, sizeof(pending->params), event->params);
 }
 
 static bool session_active_state(bd_session_state state) {
@@ -1680,12 +1983,26 @@ static void shell_process_pending(bd_shell *shell) {
       shell_pending *pending = &batch[i];
       switch (pending->kind) {
         case SHELL_PENDING_STATE:
+          if (pending->state == BD_SESSION_FOREGROUND) {
+            copy_text(shell->led_app_id, sizeof(shell->led_app_id),
+                      pending->app_id);
+            shell->led_profile_valid = false;
+            shell->led_ambient_next_ms = 0;
+            shell_led_refresh_internal(shell);
+          }
           if (pending->state == BD_SESSION_BACKGROUND) {
             shell_refresh_running(shell);
             shell_request_return(shell, pending->app_id);
           }
           break;
         case SHELL_PENDING_EXIT: {
+          if (strcmp(shell->led_app_id, pending->app_id) == 0) {
+            shell->led_app_id[0] = '\0';
+            shell->led_ambient_known = false;
+            shell->led_ambient_dirty = false;
+            shell->led_profile_valid = false;
+            shell_led_refresh_internal(shell);
+          }
           shell_refresh_running(shell);
           const char *launching = bd_home_launch_target(shell->home);
           bool launch_owner = launching != NULL &&
@@ -1731,6 +2048,10 @@ static void shell_process_pending(bd_shell *shell) {
           }
           shell->dirty = true;
           break;
+        case SHELL_PENDING_NOTIFICATION:
+          shell_handle_app_notification(shell, pending->app_id,
+                                        pending->method, pending->params);
+          break;
         case SHELL_PENDING_ATTENTION:
           if (shell->verbose) {
             fprintf(stderr, "brickdesk: background limit reached\n");
@@ -1772,6 +2093,7 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
   bool asleep = shell_power_asleep(shell);
+  bd_haptics_update(shell->haptics, now);
   inputd_service(shell, monotonic_ms());
   shell_battery_deadline_check(shell, now);
   shell_auto_sleep_check(shell, now);
@@ -1780,6 +2102,7 @@ static void shell_service(bd_shell *shell) {
     shell_update_home(shell, now);
     shell_refresh_status(shell, false);
     shell_battery_sample(shell, now);
+    shell_led_ambient_sample(shell, now);
     if (shell->notice != NULL && shell->visible &&
         bd_notice_update(shell->notice, now)) {
       shell->dirty = true;
@@ -1796,6 +2119,7 @@ static void shell_service(bd_shell *shell) {
       bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
     }
   }
+  shell_led_refresh_internal(shell);
   shell->session_next_ms = -1;
   if (shell->session != NULL) {
     int next = bd_session_poll(shell->session);
@@ -2054,6 +2378,14 @@ static void shell_power_enter_ui(bd_shell *shell) {
     /* Custom tile callbacks receive visible=false without closing settings. */
     bd_home_set_surface_visible(shell->home, false);
   }
+  bd_shell_led_sleep_pulse(shell);
+  if (shell->haptics != NULL &&
+      bd_config_get_bool(shell->settings, "input.haptics", true)) {
+    static const int strengths[] = {40, 0, 50};
+    static const int durations[] = {40, 60, 60};
+    bd_haptics_play_pattern(shell->haptics, strengths, durations, 3,
+                            shell_now(shell));
+  }
   shell->dirty = false;
 }
 
@@ -2065,6 +2397,7 @@ static void shell_power_leave_ui(bd_shell *shell) {
     bd_home_set_surface_visible(shell->home,
                                 shell->visible && !settings_open);
   }
+  bd_shell_led_wake(shell);
   shell->dirty = true;
 }
 
@@ -2809,6 +3142,11 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
     }
     shell->dirty = true;
     return;
+  }
+  if (pressed && (key == BD_KEY_UP || key == BD_KEY_DOWN ||
+                  key == BD_KEY_LEFT || key == BD_KEY_RIGHT ||
+                  key == BD_KEY_L1 || key == BD_KEY_R1)) {
+    shell_haptic_nav(shell);
   }
   if (shell->settings_page != NULL &&
       bd_settings_is_open(shell->settings_page)) {
@@ -3559,6 +3897,24 @@ static int shell_poll_timeout(bd_shell *shell) {
     }
     best = merge_timeout(best, (int)remaining);
   }
+  uint64_t pulse_deadline = 0;
+  if (bd_haptics_next_deadline(shell->haptics, &pulse_deadline)) {
+    uint64_t now = monotonic_ms();
+    uint64_t remaining = pulse_deadline > now ? pulse_deadline - now : 0;
+    if (remaining > 60000) {
+      remaining = 60000;
+    }
+    best = merge_timeout(best, (int)remaining);
+  }
+  if (shell->led_pulse_active) {
+    uint64_t now = monotonic_ms();
+    uint64_t remaining =
+        shell->led_pulse_off_ms > now ? shell->led_pulse_off_ms - now : 0;
+    if (remaining > 60000) {
+      remaining = 60000;
+    }
+    best = merge_timeout(best, (int)remaining);
+  }
   if (asleep) {
     /*
      * No input tap/hold, battery, home or settings deadline may wake the loop
@@ -3887,6 +4243,26 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
 
   shell_open_devices(shell, config);
+  {
+    char device_error[192] = {0};
+    shell->led = bd_led_create(config->settings, config->av_sysfs_root,
+                               device_error, sizeof(device_error));
+    if (shell->led != NULL && !bd_led_available(shell->led) &&
+        shell->verbose) {
+      fprintf(stderr, "brickdesk: led: %s\n",
+              bd_led_unavailable_reason(shell->led));
+    }
+    device_error[0] = '\0';
+    shell->haptics = bd_haptics_create(config->av_sysfs_root, device_error,
+                                       sizeof(device_error));
+    if (shell->haptics != NULL && !bd_haptics_available(shell->haptics) &&
+        shell->verbose) {
+      fprintf(stderr, "brickdesk: haptics: %s\n",
+              bd_haptics_unavailable_reason(shell->haptics));
+    }
+    shell_led_refresh_internal(shell);
+    shell_haptic_boot(shell);
+  }
   shell->power_input_suspended = false;
   shell->power_request = SHELL_POWER_REQUEST_NONE;
   shell->power_brightness_known = false;
@@ -4065,6 +4441,10 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_session_destroy(shell->session);
   }
   inputd_disconnect(shell, "shutdown");
+  bd_haptics_destroy(shell->haptics);
+  shell->haptics = NULL;
+  bd_led_destroy(shell->led);
+  shell->led = NULL;
   if (shell->settings_page != NULL) {
     bd_config_set_change_callback(shell->settings, NULL, NULL);
     bd_settings_destroy(shell->settings_page);
@@ -4249,4 +4629,55 @@ bd_session *bd_shell_test_session(bd_shell *shell) {
 
 bool bd_shell_test_launch(bd_shell *shell, const char *app_id) {
   return shell != NULL ? shell_launch_app(shell, app_id) : false;
+}
+
+bool bd_shell_led_refresh(bd_shell *shell) {
+  if (shell == NULL || shell->led == NULL) {
+    return false;
+  }
+  shell->led_profile_valid = false;
+  shell_led_refresh_internal(shell);
+  return bd_led_available(shell->led);
+}
+
+bool bd_shell_led_sleep_pulse(bd_shell *shell) {
+  if (shell == NULL || shell->led == NULL) {
+    return false;
+  }
+  char error[192] = {0};
+  if (!bd_led_apply_profile(shell->led, BD_LED_PROFILE_SLEEP, error,
+                            sizeof(error))) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: led sleep: %s\n",
+              error[0] != '\0' ? error : "apply failed");
+    }
+    return false;
+  }
+  shell->led_profile = BD_LED_PROFILE_SLEEP;
+  shell->led_profile_valid = true;
+  shell->led_pulse_active = true;
+  shell->led_pulse_off_ms =
+      shell_now(shell) + bd_led_sleep_pulse_ms(shell->led);
+  return true;
+}
+
+void bd_shell_led_wake(bd_shell *shell) {
+  if (shell == NULL) {
+    return;
+  }
+  shell->led_pulse_active = false;
+  shell->led_pulse_off_ms = 0;
+  shell->led_profile_valid = false;
+  shell_led_refresh_internal(shell);
+}
+
+bool bd_shell_haptic(bd_shell *shell, int strength, int duration_ms) {
+  if (shell == NULL || shell->haptics == NULL) {
+    return false;
+  }
+  if (!bd_config_get_bool(shell->settings, "input.haptics", true)) {
+    return false;
+  }
+  return bd_haptics_play(shell->haptics, strength, duration_ms,
+                         shell_now(shell));
 }

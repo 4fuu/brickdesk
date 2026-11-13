@@ -648,7 +648,7 @@ static void shell_refresh_running(bd_shell *shell) {
     if (shell->session != NULL &&
         bd_session_find(shell->session, app->id, &info)) {
       running = session_running_state(info.state);
-      if (running) {
+      if (info.state == BD_SESSION_BACKGROUND) {
         frame = bd_session_last_frame_path(shell->session, app->id);
       }
     }

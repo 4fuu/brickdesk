@@ -125,6 +125,16 @@ PKG=$TMP/extracted/brickdesk-0.1.0-aarch64
 ( cd "$PKG" && sha256sum -c SHA256SUMS >/dev/null ) || die "package SHA256SUMS does not verify"
 pass "package zip layout and checksums"
 
+printf '== package with a relative output directory ==\n'
+( cd "$TMP" && \
+  BRICKDESK_HELLO_BIN=$TMP/hello/bin/hello \
+  BRICKDESK_HELLO_MANIFEST=$TMP/hello/plugin.json \
+    "$REPO_ROOT/scripts/package-target.sh" \
+    --build-dir "$FAKE_BUILD" --out-dir relative-out --version 0.1.0 >/dev/null )
+[ -f "$TMP/relative-out/brickdesk-0.1.0-aarch64.zip" ] || die "relative out-dir did not produce a zip"
+[ -f "$TMP/relative-out/SHA256SUMS" ] || die "relative out-dir did not produce SHA256SUMS"
+pass "relative --out-dir"
+
 printf '== first install ==\n'
 mkdir -p "$SD/System/starts"
 printf '#!/bin/sh\n# stock hook\nexit 0\n' >"$SD/System/starts/zz_brickdesk.sh"

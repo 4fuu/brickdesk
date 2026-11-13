@@ -58,6 +58,8 @@ PKG_NAME=brickdesk-$VERSION-aarch64
 if [ -z "$OUT_DIR" ]; then
     OUT_DIR=$BUILD_DIR/package
 fi
+mkdir -p "$OUT_DIR" || die "cannot create output directory: $OUT_DIR"
+OUT_DIR=$(CDPATH='' cd "$OUT_DIR" && pwd) || die "cannot resolve output directory: $OUT_DIR"
 STAGE=$OUT_DIR/$PKG_NAME
 ZIP=$OUT_DIR/$PKG_NAME.zip
 

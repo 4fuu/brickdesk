@@ -462,7 +462,7 @@ typedef struct bd_session_app_info {
   bd_session_state state;
   bool ipc_connected;
   bool stopped_by_session; /* stopped with SIGSTOP (fast-resume slot) */
-  bool frozen;             /* stopped by bd_session_freeze() for light sleep */
+  bool frozen;             /* light-sleep stop held (confirmed or thaw-retry) */
   bool display_released;
   bool background;         /* state == BD_SESSION_BACKGROUND */
   bool exited;
@@ -520,16 +520,21 @@ bd_session_result bd_session_resume(bd_session *session, const char *app_id);
  * bd_session_thaw() sends SIGCONT only for an instance this session froze.  It
  * never resumes an instance stopped externally, by the background path or by
  * another lifecycle action.  Thawing a running foreground instance returns
- * BD_SESSION_OK without signalling.
+ * BD_SESSION_OK without signalling.  If SIGCONT is rejected, the freeze
+ * ownership is retained and the call returns an error; a later thaw retries
+ * it.  Ownership is cleared only after SIGCONT is delivered or the instance
+ * has exited.
  *
  * Both calls return BD_SESSION_INVALID_STATE when the app is not a running
  * foreground instance (including one stopped externally).  freeze() returns
  * BD_SESSION_BUSY while the app is launching, suspending, resuming or
  * terminating, and thaw() returns BD_SESSION_BUSY if a hook/state transfer is
  * pending.  background() and terminate() continue a frozen instance before
- * their normal hooks; destroy() kills it, and poll() keeps reaping exits while
- * it is frozen.  A failed freeze resumes the process before returning an
- * error.
+ * their normal hooks; if that continuation is rejected they return an error
+ * without changing the lifecycle state, so the call can be retried.  A failed
+ * freeze whose rollback SIGCONT is rejected leaves the instance frozen for a
+ * thaw() retry instead of claiming it resumed.  destroy() kills a frozen
+ * instance, and poll() keeps reaping exits while it is frozen.
  */
 bd_session_result bd_session_freeze(bd_session *session, const char *app_id);
 bd_session_result bd_session_thaw(bd_session *session, const char *app_id);

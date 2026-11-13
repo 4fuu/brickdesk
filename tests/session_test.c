@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 
@@ -14,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -43,6 +45,36 @@ static int g_failures;
 static char g_root[128];
 static char g_child_path[PATH_MAX];
 static char g_demo_path[PATH_MAX];
+
+/*
+ * Test-side signal interposition.  The session library calls kill() directly;
+ * defining it in this executable lets the regression reject exactly one
+ * SIGCONT for a real child, without adding a test hook to production code.
+ */
+static int g_deny_sigcont_pid;
+static unsigned g_deny_sigcont_count;
+
+int kill(pid_t pid, int signal_number) {
+  if (signal_number == SIGCONT && g_deny_sigcont_count > 0 &&
+      g_deny_sigcont_pid != 0 &&
+      (pid == (pid_t)g_deny_sigcont_pid ||
+       pid == -(pid_t)g_deny_sigcont_pid)) {
+    --g_deny_sigcont_count;
+    errno = EPERM;
+    return -1;
+  }
+  return (int)syscall(SYS_kill, (long)pid, (long)signal_number);
+}
+
+static void deny_next_sigcont(int pid) {
+  g_deny_sigcont_pid = pid;
+  g_deny_sigcont_count = 1;
+}
+
+static void allow_sigcont(void) {
+  g_deny_sigcont_pid = 0;
+  g_deny_sigcont_count = 0;
+}
 
 static void check(bool condition, const char *format, ...) {
   if (condition) {
@@ -1088,8 +1120,8 @@ static void test_session_freeze(void) {
   check(bd_session_find(session, "dev.freeze.bg", &background_info),
         "freeze background info");
   int background_pid = background_info.pid;
-  check(background_pid > 0 && proc_state(background_pid) == 'T',
-        "background app was not stopped");
+  check(background_pid > 0 && wait_proc_state(background_pid, 'T', 1000),
+        "background app was not stopped: %c", proc_state(background_pid));
 
   check(bd_session_launch(session, &frozen_app, NULL, 0) == BD_SESSION_OK,
         "freeze launch foreground app");
@@ -1430,6 +1462,181 @@ static void test_session_freeze_destroy(void) {
   bd_app_destroy(&app);
 }
 
+static void test_session_freeze_thaw_retry(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session *session = create_session("freeze-retry", 2, &log,
+                                       (bd_session_timeouts){0},
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "freeze retry session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("freeze-retry", "dev.freeze.retry", "FreezeRetry",
+                 g_child_path, "tick", "", "", NULL, NULL, &app),
+        "make freeze retry app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "freeze retry launch");
+  check(wait_for_state(session, "dev.freeze.retry", BD_SESSION_FOREGROUND,
+                       2000),
+        "freeze retry foreground");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.retry", &info),
+        "freeze retry info");
+  int pid = info.pid;
+  char tick_path[TEST_PATH];
+  snprintf(tick_path, sizeof(tick_path), "%s/apps/freeze-retry/child.log",
+           g_root);
+  int waited = 0;
+  while (count_occurrences(tick_path, "tick") == 0 && waited < 2000) {
+    bd_session_poll(session);
+    sleep_ms(5);
+    waited += 5;
+  }
+  check(bd_session_freeze(session, "dev.freeze.retry") == BD_SESSION_OK,
+        "freeze retry freeze");
+  check(bd_session_find(session, "dev.freeze.retry", &info) && info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "freeze retry not held");
+  check(proc_state(pid) == 'T', "freeze retry child state %c",
+        proc_state(pid));
+  size_t ticks_stopped = count_occurrences(tick_path, "tick");
+
+  deny_next_sigcont(pid);
+  bd_session_result result = bd_session_thaw(session, "dev.freeze.retry");
+  check(result == BD_SESSION_IO_ERROR, "rejected thaw returned %s",
+        bd_session_result_name(result));
+  check(bd_session_find(session, "dev.freeze.retry", &info) && info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "rejected thaw cleared freeze ownership");
+  check(proc_state(pid) == 'T', "rejected thaw child state %c",
+        proc_state(pid));
+  sleep_ms(30);
+  check(count_occurrences(tick_path, "tick") == ticks_stopped,
+        "rejected thaw resumed child execution");
+
+  allow_sigcont();
+  check(bd_session_thaw(session, "dev.freeze.retry") == BD_SESSION_OK,
+        "thaw retry");
+  check(bd_session_find(session, "dev.freeze.retry", &info) && !info.frozen &&
+            info.state == BD_SESSION_FOREGROUND,
+        "thaw retry still frozen");
+  check(wait_proc_not_stopped(pid, 1000), "thaw retry child stayed stopped");
+  size_t ticks_resumed = ticks_stopped;
+  waited = 0;
+  while (waited < 2000) {
+    bd_session_poll(session);
+    ticks_resumed = count_occurrences(tick_path, "tick");
+    if (ticks_resumed > ticks_stopped) {
+      break;
+    }
+    sleep_ms(5);
+    waited += 5;
+  }
+  check(ticks_resumed > ticks_stopped, "thaw retry did not resume execution");
+  check(bd_session_terminate(session, "dev.freeze.retry") == BD_SESSION_OK,
+        "freeze retry terminate");
+  check(wait_for_state(session, "dev.freeze.retry", BD_SESSION_EXITED, 3000),
+        "freeze retry did not exit");
+  check(bd_session_find(session, "dev.freeze.retry", &info) && info.exited &&
+            !info.frozen,
+        "freeze retry final state");
+  allow_sigcont();
+  bd_app_destroy(&app);
+  bd_session_destroy(session);
+}
+
+static void test_session_freeze_transition_retry(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session *session = create_session("freeze-transition", 2, &log,
+                                       (bd_session_timeouts){0},
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "freeze transition session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("freeze-transition", "dev.freeze.transition",
+                 "FreezeTransition", g_child_path, "idle", "", "", NULL, NULL,
+                 &app),
+        "make freeze transition app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "freeze transition launch");
+  check(wait_for_state(session, "dev.freeze.transition",
+                       BD_SESSION_FOREGROUND, 2000),
+        "freeze transition foreground");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.freeze.transition", &info),
+        "freeze transition info");
+  int pid = info.pid;
+
+  check(bd_session_freeze(session, "dev.freeze.transition") == BD_SESSION_OK,
+        "freeze before rejected background");
+  deny_next_sigcont(pid);
+  bd_session_result result =
+      bd_session_background(session, "dev.freeze.transition");
+  check(result == BD_SESSION_IO_ERROR,
+        "rejected background continuation returned %s",
+        bd_session_result_name(result));
+  check(bd_session_find(session, "dev.freeze.transition", &info) &&
+            info.frozen && info.state == BD_SESSION_FOREGROUND &&
+            !info.background,
+        "rejected background changed lifecycle state");
+  check(proc_state(pid) == 'T', "rejected background child state %c",
+        proc_state(pid));
+  check(bd_session_background_count(session) == 0,
+        "rejected background consumed quota");
+
+  allow_sigcont();
+  check(bd_session_background(session, "dev.freeze.transition") ==
+            BD_SESSION_OK,
+        "background retry");
+  check(wait_for_state(session, "dev.freeze.transition",
+                       BD_SESSION_BACKGROUND, 3000),
+        "background retry state");
+  check(bd_session_find(session, "dev.freeze.transition", &info) &&
+            !info.frozen && info.background,
+        "background retry still frozen");
+  check(wait_proc_state(pid, 'T', 1000),
+        "background retry child not stopped");
+  check(bd_session_resume(session, "dev.freeze.transition") == BD_SESSION_OK,
+        "resume after background retry");
+  check(wait_for_state(session, "dev.freeze.transition",
+                       BD_SESSION_FOREGROUND, 3000),
+        "foreground after background retry");
+  check(bd_session_find(session, "dev.freeze.transition", &info) &&
+            !info.frozen && info.state == BD_SESSION_FOREGROUND,
+        "foreground after background retry state");
+
+  check(bd_session_freeze(session, "dev.freeze.transition") == BD_SESSION_OK,
+        "freeze before rejected terminate");
+  deny_next_sigcont(pid);
+  result = bd_session_terminate(session, "dev.freeze.transition");
+  check(result == BD_SESSION_IO_ERROR,
+        "rejected terminate continuation returned %s",
+        bd_session_result_name(result));
+  check(bd_session_find(session, "dev.freeze.transition", &info) &&
+            info.frozen && info.state == BD_SESSION_FOREGROUND,
+        "rejected terminate changed lifecycle state");
+  check(proc_state(pid) == 'T', "rejected terminate child state %c",
+        proc_state(pid));
+
+  allow_sigcont();
+  check(bd_session_terminate(session, "dev.freeze.transition") == BD_SESSION_OK,
+        "terminate retry");
+  check(wait_for_state(session, "dev.freeze.transition", BD_SESSION_EXITED,
+                       3000),
+        "terminate retry did not exit");
+  check(bd_session_find(session, "dev.freeze.transition", &info) &&
+            info.exited && !info.frozen,
+        "terminate retry final state");
+  allow_sigcont();
+  bd_app_destroy(&app);
+  bd_session_destroy(session);
+}
+
 int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr, "usage: %s <demo> <child>\n", argv[0]);
@@ -1463,6 +1670,8 @@ int main(int argc, char **argv) {
   test_session_freeze_busy();
   test_session_freeze_external();
   test_session_freeze_destroy();
+  test_session_freeze_thaw_retry();
+  test_session_freeze_transition_retry();
 
   if (g_failures != 0) {
     fprintf(stderr, "session_test: %d failure(s), artifacts in %s\n", g_failures,

@@ -345,7 +345,10 @@ Thaw sends `SIGCONT` only for the instance this session froze. An instance
 stopped by someone else, or by the background path, is never continued by
 thaw; it returns `BD_SESSION_INVALID_STATE`. Both operations are idempotent:
 freezing a frozen app and thawing a running foreground app return
-`BD_SESSION_OK`.
+`BD_SESSION_OK`. If `SIGCONT` is rejected, thaw keeps the freeze ownership,
+returns `BD_SESSION_IO_ERROR` with `frozen` still true, and a later thaw
+retries it. Ownership clears only after `SIGCONT` is delivered or the instance
+exits.
 
 Freezing while the app is launching, suspending, resuming or terminating
 returns `BD_SESSION_BUSY`; thawing a non-foreground instance returns
@@ -353,10 +356,13 @@ returns `BD_SESSION_BUSY`; thawing a non-foreground instance returns
 returns `BD_SESSION_BUSY` and leaves the state unchanged. A state transfer on a
 frozen app also returns `BD_SESSION_BUSY` so it cannot wait on a stopped
 process. `background()` and `terminate()` continue a frozen app before their
-normal hooks; `bd_session_destroy()` kills it; `bd_session_poll()` keeps
+normal hooks; if that continuation is rejected they return
+`BD_SESSION_IO_ERROR` without changing the lifecycle state, so the call can be
+retried. `bd_session_destroy()` kills a frozen app; `bd_session_poll()` keeps
 reaping exits while it is frozen. If stop confirmation times out or the child
-exits during freeze, the session sends `SIGCONT` as needed and returns an error
-instead of claiming success.
+exits during freeze, the session tries to roll back with `SIGCONT`. If that
+rollback is also rejected, the instance stays marked `frozen` and the call
+returns an error so `thaw()` can retry instead of claiming the app resumed.
 
 Default timeouts: hello 2000, pause 300, resume 2000, save 5000, quit 3000,
 SIGTERM grace 1000, SIGKILL grace 1000, display 500, freeze 1000 ms. The
@@ -417,7 +423,9 @@ fallback and last-frame validation. It also covers light-sleep freeze with a
 real ticking child: execution stops and resumes, foreground identity and the
 background quota stay unchanged at a full quota, polling stays live, duplicate
 freeze/thaw calls are idempotent, pending hooks report busy, an externally
-stopped app is never thawed, and termination works while frozen.
+stopped app is never thawed, a rejected SIGCONT keeps ownership for a
+successful retry, and background/terminate retries work after rejected
+continuations. It also covers termination and destroy while frozen.
 
 `tests/menu_test.c` covers the menu shim end to end: a real
 `brickdesk-inputd --replay` stream opens the overlay, the menu control socket

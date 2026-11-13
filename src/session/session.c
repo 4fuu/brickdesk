@@ -63,6 +63,23 @@ typedef enum session_child_status {
   SESSION_CHILD_UNKNOWN
 } session_child_status;
 
+/*
+ * Light-sleep stop ownership.  HELD means a confirmed SIGSTOP this session
+ * sent; RECOVERY means a failed freeze rollback whose SIGCONT was rejected, so
+ * thaw() must retry it.  Both states are reported as `frozen` publicly.
+ */
+typedef enum session_freeze_state {
+  SESSION_FREEZE_NONE = 0,
+  SESSION_FREEZE_HELD,
+  SESSION_FREEZE_RECOVERY
+} session_freeze_state;
+
+typedef enum session_continue_result {
+  SESSION_CONTINUE_OK = 0,
+  SESSION_CONTINUE_EXITED,
+  SESSION_CONTINUE_FAILED
+} session_continue_result;
+
 typedef struct session_instance {
   bd_session *session;
   bd_app app;
@@ -80,7 +97,7 @@ typedef struct session_instance {
   bool hello_received;
   unsigned hello_capabilities;
   bool stopped_by_session;
-  bool frozen_for_sleep;
+  session_freeze_state freeze;
   bool display_released;
   bool perf_applied;
   bool reaped;
@@ -123,6 +140,7 @@ struct bd_session {
 static void menu_poll(bd_session *session, uint64_t now_ms);
 static void menu_shutdown(bd_session *session);
 static session_instance *find_instance(bd_session *session, const char *app_id);
+static session_child_status poll_child_status(session_instance *instance);
 
 static uint64_t monotonic_ms(void) {
   struct timespec now;
@@ -473,12 +491,23 @@ static void start_sigstop(bd_session *session, session_instance *instance) {
 }
 
 /* Continues a light-sleep-frozen foreground app before a normal transition. */
-static void continue_frozen(session_instance *instance) {
-  if (!instance->frozen_for_sleep) {
-    return;
+static session_continue_result continue_frozen(session_instance *instance) {
+  if (instance->freeze == SESSION_FREEZE_NONE) {
+    return SESSION_CONTINUE_OK;
   }
-  send_signal(instance, SIGCONT);
-  instance->frozen_for_sleep = false;
+  if (!send_signal(instance, SIGCONT)) {
+    int saved = errno;
+    if (saved == ESRCH) {
+      poll_child_status(instance);
+      if (instance->reaped) {
+        return SESSION_CONTINUE_EXITED;
+      }
+    }
+    /* Keep ownership: a later thaw/transition may deliver the SIGCONT. */
+    return SESSION_CONTINUE_FAILED;
+  }
+  instance->freeze = SESSION_FREEZE_NONE;
+  return SESSION_CONTINUE_OK;
 }
 
 static bool begin_request(bd_session *session, session_instance *instance,
@@ -588,9 +617,16 @@ static void start_quit(bd_session *session, session_instance *instance) {
   start_sigterm(session, instance);
 }
 
-static void begin_terminate(bd_session *session, session_instance *instance) {
+static bd_session_result begin_terminate(bd_session *session,
+                                         session_instance *instance) {
+  session_continue_result resumed = continue_frozen(instance);
+  if (resumed == SESSION_CONTINUE_FAILED) {
+    return BD_SESSION_IO_ERROR;
+  }
+  if (resumed == SESSION_CONTINUE_EXITED) {
+    return BD_SESSION_OK;
+  }
   set_state(session, instance, BD_SESSION_TERMINATING);
-  continue_frozen(instance);
   if (instance->stopped_by_session) {
     send_signal(instance, SIGCONT);
     instance->stopped_by_session = false;
@@ -602,10 +638,11 @@ static void begin_terminate(bd_session *session, session_instance *instance) {
     if (begin_request(session, instance, OP_TERM_SAVE,
                       instance->app.hooks[BD_APP_HOOK_SAVE].method,
                       "{\"slot\":0}", timeout, "save")) {
-      return;
+      return BD_SESSION_OK;
     }
   }
   start_quit(session, instance);
+  return BD_SESSION_OK;
 }
 
 static void do_finalize(bd_session *session, session_instance *instance,
@@ -616,7 +653,7 @@ static void do_finalize(bd_session *session, session_instance *instance,
   instance->reaped = true;
   instance->exit_code = -1;
   instance->term_signal = 0;
-  instance->frozen_for_sleep = false;
+  instance->freeze = SESSION_FREEZE_NONE;
   bool exited_normally = false;
   if (status_valid) {
     if (WIFEXITED(status)) {
@@ -880,7 +917,7 @@ static void fill_info(const session_instance *instance,
   out->state = instance->state;
   out->ipc_connected = instance->ipc_connected;
   out->stopped_by_session = instance->stopped_by_session;
-  out->frozen = instance->frozen_for_sleep;
+  out->frozen = instance->freeze != SESSION_FREEZE_NONE;
   out->display_released = instance->display_released;
   out->background = instance->state == BD_SESSION_BACKGROUND;
   out->exited = instance->state == BD_SESSION_EXITED ||
@@ -1650,7 +1687,13 @@ bd_session_result bd_session_background(bd_session *session,
     }
     return BD_SESSION_NEEDS_CONFIRM;
   }
-  continue_frozen(instance);
+  session_continue_result resumed = continue_frozen(instance);
+  if (resumed == SESSION_CONTINUE_FAILED) {
+    return BD_SESSION_IO_ERROR;
+  }
+  if (resumed == SESSION_CONTINUE_EXITED) {
+    return BD_SESSION_INVALID_STATE;
+  }
   set_state(session, instance, BD_SESSION_SUSPENDING);
   start_background(session, instance);
   return BD_SESSION_OK;
@@ -1690,8 +1733,12 @@ bd_session_result bd_session_freeze(bd_session *session, const char *app_id) {
     default:
       return BD_SESSION_INVALID_STATE;
   }
-  if (instance->frozen_for_sleep) {
+  if (instance->freeze == SESSION_FREEZE_HELD) {
     return BD_SESSION_OK;
+  }
+  if (instance->freeze == SESSION_FREEZE_RECOVERY) {
+    /* A previous freeze rollback still needs a successful thaw. */
+    return BD_SESSION_IO_ERROR;
   }
   if (instance->stopped_by_session) {
     return BD_SESSION_INVALID_STATE;
@@ -1721,19 +1768,24 @@ bd_session_result bd_session_freeze(bd_session *session, const char *app_id) {
   uint64_t deadline = monotonic_ms() + (uint64_t)session->timeouts.freeze_ms;
   session_child_status status = wait_child_status(instance, deadline);
   if (status == SESSION_CHILD_STOPPED) {
-    instance->frozen_for_sleep = true;
+    instance->freeze = SESSION_FREEZE_HELD;
     return BD_SESSION_OK;
   }
 
-  /* Failed confirmation: undo our SIGSTOP so the app is never left stopped. */
+  /*
+   * Failed confirmation: undo our SIGSTOP.  If SIGCONT is rejected, keep a
+   * recovery marker so thaw() can retry instead of claiming the app resumed.
+   */
   if (!instance->reaped) {
-    send_signal(instance, SIGCONT);
-    if (poll_child_status(instance) == SESSION_CHILD_STOPPED) {
-      send_signal(instance, SIGCONT);
+    instance->freeze = SESSION_FREEZE_RECOVERY;
+    (void)continue_frozen(instance);
+    if (!instance->reaped &&
+        poll_child_status(instance) == SESSION_CHILD_STOPPED) {
+      instance->freeze = SESSION_FREEZE_RECOVERY;
+      (void)continue_frozen(instance);
     }
   }
-  return status == SESSION_CHILD_EXITED ? BD_SESSION_INVALID_STATE
-                                        : BD_SESSION_IO_ERROR;
+  return instance->reaped ? BD_SESSION_INVALID_STATE : BD_SESSION_IO_ERROR;
 }
 
 bd_session_result bd_session_thaw(bd_session *session, const char *app_id) {
@@ -1742,23 +1794,23 @@ bd_session_result bd_session_thaw(bd_session *session, const char *app_id) {
     return BD_SESSION_NOT_FOUND;
   }
   if (instance->state != BD_SESSION_FOREGROUND) {
-    instance->frozen_for_sleep = false;
+    instance->freeze = SESSION_FREEZE_NONE;
     return BD_SESSION_INVALID_STATE;
   }
-  if (!instance->frozen_for_sleep) {
+  if (instance->freeze == SESSION_FREEZE_NONE) {
     return instance->stopped_by_session ? BD_SESSION_INVALID_STATE
                                         : BD_SESSION_OK;
   }
   if (instance->op != OP_NONE || instance->request_id >= 0) {
     return BD_SESSION_BUSY;
   }
-  if (!send_signal(instance, SIGCONT)) {
-    int saved = errno;
-    instance->frozen_for_sleep = false;
-    poll_child_status(instance);
-    return saved == ESRCH ? BD_SESSION_INVALID_STATE : BD_SESSION_IO_ERROR;
+  session_continue_result resumed = continue_frozen(instance);
+  if (resumed == SESSION_CONTINUE_FAILED) {
+    return BD_SESSION_IO_ERROR;
   }
-  instance->frozen_for_sleep = false;
+  if (resumed == SESSION_CONTINUE_EXITED) {
+    return BD_SESSION_INVALID_STATE;
+  }
   if (poll_child_status(instance) == SESSION_CHILD_EXITED) {
     return BD_SESSION_INVALID_STATE;
   }
@@ -1780,8 +1832,7 @@ bd_session_result bd_session_terminate(bd_session *session,
       instance->state == BD_SESSION_RESUMING) {
     return BD_SESSION_BUSY;
   }
-  begin_terminate(session, instance);
-  return BD_SESSION_OK;
+  return begin_terminate(session, instance);
 }
 
 static bd_session_result request_state_transfer(bd_session *session,
@@ -1799,7 +1850,7 @@ static bd_session_result request_state_transfer(bd_session *session,
   if (instance->op != OP_NONE) {
     return BD_SESSION_BUSY;
   }
-  if (instance->frozen_for_sleep) {
+  if (instance->freeze != SESSION_FREEZE_NONE) {
     return BD_SESSION_BUSY;
   }
   const bd_app_hook_kind kind = save ? BD_APP_HOOK_SAVE : BD_APP_HOOK_LOAD;

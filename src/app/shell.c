@@ -23,6 +23,7 @@
 
 #include "brickdesk/device_av.h"
 #include "brickdesk/device_battery.h"
+#include "brickdesk/app_history.h"
 #include "brickdesk/battery_history.h"
 #include "brickdesk/haptics.h"
 #include "brickdesk/led.h"
@@ -126,6 +127,8 @@ struct bd_shell {
   uint64_t battery_next_ms;
   bd_battery_history *battery_history;
   char battery_history_path[BD_SHELL_PATH_MAX];
+  bd_app_history *app_history;
+  char app_history_path[BD_SHELL_PATH_MAX];
   bool shutdown_on_low_battery;
   uint64_t low_battery_shutdown_ms;
   bool low_battery_shutdown_armed;
@@ -555,6 +558,10 @@ static void shell_config_changed(void *user, const char *key) {
       }
       shell->dirty = true;
     }
+  } else if (strcmp(key, "ui.animations") == 0) {
+    bd_home_set_animations(
+        shell->home, bd_config_get_bool(shell->settings, "ui.animations", true));
+    shell->dirty = true;
   } else if (strcmp(key, "ui.blur") == 0) {
     bool blur = bd_config_get_bool(shell->settings, "ui.blur", true);
     shell->home_style.blur_enabled = blur;
@@ -1162,6 +1169,7 @@ static void shell_auto_sleep_check(bd_shell *shell, uint64_t now);
 static void shell_battery_deadline_check(bd_shell *shell, uint64_t now);
 static void shell_memory_budget_check(bd_shell *shell, uint64_t now);
 static void shell_crash_retry_confirm(void *user, bool confirmed);
+static void shell_toggle_favorite(bd_shell *shell);
 static void shell_mark_activity(bd_shell *shell);
 static bool shell_power_asleep(const bd_shell *shell);
 static void shell_power_cancel_gesture(bd_shell *shell);
@@ -3189,7 +3197,20 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
     case BD_KEY_R1:
       shell_home_input(shell, BD_HOME_ACTION_TAB_NEXT);
       break;
+    case BD_KEY_Y:
+      shell_toggle_favorite(shell);
+      break;
     case BD_KEY_HOME:
+      if (shell->app_history != NULL) {
+        const char *recent = bd_app_history_most_recent(shell->app_history);
+        int index =
+            recent != NULL ? bd_home_find_item(shell->home, recent) : -1;
+        if (index >= 0) {
+          bd_home_set_focus(shell->home, index);
+          shell->dirty = true;
+          break;
+        }
+      }
       shell_home_input(shell, BD_HOME_ACTION_RECENT);
       break;
     default:
@@ -3289,6 +3310,42 @@ static bool shell_capture_framebuffer(bd_image *out) {
   out->height = (int)var.yres;
   out->pixels = pixels;
   return true;
+}
+
+static void shell_app_history_save(bd_shell *shell) {
+  if (shell == NULL || shell->app_history == NULL ||
+      shell->app_history_path[0] == '\0' ||
+      getenv("BRICKDESK_HEADLESS") != NULL) {
+    return;
+  }
+  bd_app_history_save(shell->app_history, shell->app_history_path);
+}
+
+static void shell_record_app_use(bd_shell *shell, const char *app_id) {
+  if (shell == NULL || shell->app_history == NULL || app_id == NULL) {
+    return;
+  }
+  if (bd_app_history_record(shell->app_history, app_id, (int64_t)time(NULL))) {
+    shell_app_history_save(shell);
+  }
+}
+
+static void shell_toggle_favorite(bd_shell *shell) {
+  if (shell == NULL || shell->home == NULL || shell->app_history == NULL) {
+    return;
+  }
+  const char *id = bd_home_selected_id(shell->home);
+  if (id == NULL || strcmp(id, BD_SHELL_SETTINGS_ITEM_ID) == 0 ||
+      strcmp(id, BD_SHELL_PLUGIN_ITEM_ID) == 0) {
+    return;
+  }
+  bool favorite = !bd_home_favorite(shell->home, id);
+  bd_home_set_favorite(shell->home, id, favorite);
+  bd_app_history_set_favorite(shell->app_history, id, favorite);
+  shell_app_history_save(shell);
+  bd_shell_notice(shell, BD_NOTICE_SUCCESS,
+                  favorite ? "已加入收藏" : "已取消收藏", 1600);
+  shell->dirty = true;
 }
 
 static void shell_screenshot(bd_shell *shell) {
@@ -3441,6 +3498,7 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
     if (info.state == BD_SESSION_BACKGROUND) {
       bd_session_result result = bd_session_resume(shell->session, app_id);
       if (result == BD_SESSION_OK) {
+        shell_record_app_use(shell, app_id);
         return shell_home_begin_launch(shell, app_id);
       }
       if (shell->verbose) {
@@ -3511,6 +3569,7 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
   if (!shell_home_begin_launch(shell, app_id)) {
     return false;
   }
+  shell_record_app_use(shell, app_id);
   if (shell->verbose) {
     const char *shim = menu_shim_path(shell, NULL);
     fprintf(stderr, "brickdesk: launched %s%s%s\n", app_id,
@@ -4234,6 +4293,8 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     free(shell);
     return NULL;
   }
+  bd_home_set_animations(
+      shell->home, bd_config_get_bool(config->settings, "ui.animations", true));
   if (config->attach_plugin_tile) {
     shell_find_plugin_tile(shell, config->gfx);
   }
@@ -4335,6 +4396,25 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   if (shell->settings_page != NULL) {
     bd_settings_set_battery_history(shell->settings_page,
                                     shell->battery_history);
+  }
+  shell->app_history = bd_app_history_create();
+  if (shell->app_history != NULL && data_dir != NULL && data_dir[0] != '\0') {
+    int written = snprintf(shell->app_history_path,
+                           sizeof(shell->app_history_path), "%s/app-history.txt",
+                           data_dir);
+    if (written <= 0 ||
+        (size_t)written >= sizeof(shell->app_history_path)) {
+      shell->app_history_path[0] = '\0';
+    } else {
+      bd_app_history_load(shell->app_history, shell->app_history_path);
+      for (size_t i = 0; i < bd_app_history_count(shell->app_history); ++i) {
+        const bd_app_history_entry *entry =
+            bd_app_history_at(shell->app_history, i);
+        if (entry != NULL && entry->favorite) {
+          bd_home_set_favorite(shell->home, entry->id, true);
+        }
+      }
+    }
   }
   if (!shell->battery_policy_ready) {
     fprintf(stderr, "brickdesk: battery policy unavailable: %s\n",
@@ -4461,6 +4541,11 @@ void bd_shell_destroy(bd_shell *shell) {
     }
     bd_battery_history_destroy(shell->battery_history);
     shell->battery_history = NULL;
+  }
+  if (shell->app_history != NULL) {
+    shell_app_history_save(shell);
+    bd_app_history_destroy(shell->app_history);
+    shell->app_history = NULL;
   }
   if (shell->home != NULL) {
     bd_home_set_surface_visible(shell->home, false);

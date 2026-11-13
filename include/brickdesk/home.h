@@ -169,6 +169,9 @@ int bd_home_tab(const bd_home *home);
 void bd_home_set_tab(bd_home *home, int tab);
 
 void bd_home_set_blur_enabled(bd_home *home, bool enabled);
+/* Favourite bit used by the 收藏 tab; repaints the wall when it changes. */
+bool bd_home_set_favorite(bd_home *home, const char *id, bool favorite);
+bool bd_home_favorite(const bd_home *home, const char *id);
 /* theme.ambient: solid uses a flat backdrop; baked keeps the gradient. */
 void bd_home_set_ambient_solid(bd_home *home, bool solid);
 bool bd_home_ambient_solid(const bd_home *home);
@@ -265,7 +268,14 @@ bool bd_home_quick_open(const bd_home *home);
 void bd_home_set_hint_visible(bd_home *home, bool visible);
 bool bd_home_hint_visible(const bd_home *home);
 
-/* End-process dialog: 180 ms; confirm starts the 180 ms tile close animation. */
+/* Enables or disables home transitions.  Disabling jumps active pan, launch,
+ * panel, hint and dialog animations to their end state; the next update
+ * finishes them without producing transition frames. */
+void bd_home_set_animations(bd_home *home, bool enabled);
+
+/*
+ * End-process dialog: 180 ms; confirm starts the 180 ms tile close animation.
+ */
 bool bd_home_open_end_dialog(bd_home *home, const char *id);
 /*
  * "Background full" choice: the session refused a launch because the

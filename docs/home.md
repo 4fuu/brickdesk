@@ -108,6 +108,19 @@ failure is showing. `bd_home_open_background_full()` owns the dialog,
 `bd_home_set_dialog_error()` reports the failure, and
 `bd_home_take_dialog_result()` reports the choice.
 
+## Recent apps and favourites
+
+- Every successful cold launch or resume records the app id in
+  `<config_dir>/app-history.txt` (capped at 32 ids). `HOME` first focuses the
+  most recently used installed app; if it is no longer installed it falls back
+  to the most recent background app.
+- `Y` on a focused tile toggles its favourite bit and saves immediately. The
+  existing 收藏 tab filters on that bit, so no new library or filter path is
+  introduced.
+- Favourites for apps that are no longer installed stay in the file but are
+  ignored until the app returns. The file uses the same temp+rename pattern as
+  the battery history; headless test runs do not write it.
+
 ## Memory budget and state quota
 
 - `session.memory_budget_mb` (default 560 MB): every 5 seconds the shell samples
@@ -143,6 +156,11 @@ appear when the desktop returns (`docs/notices.md`).
 
 All start functions use the timestamp from the last `bd_home_update()`, so call
 update once before starting an animation.
+
+`ui.animations=false` wires `bd_home_set_animations(home, false)`. The next
+update jumps any in-flight wall pan, launch/return, quick panel, hint bar or
+dialog to its end state; no transition frames are produced, and an idle home
+keeps its zero-present state. Settings rows and the config hotkey are unchanged.
 
 ## Theme and config
 

@@ -161,6 +161,7 @@ struct bd_home {
 
   bd_home_status status;
   char clock[16];
+  bool animations;
   bd_home_live live;
   char live_title[128];
   char live_artist[128];

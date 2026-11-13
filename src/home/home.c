@@ -688,6 +688,7 @@ bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style) {
   home->height = style->height > 0 ? style->height : bd_gfx_height(gfx);
   home->focus = -1;
   home->pan = 0;
+  home->animations = true;
   home->custom_count = 0;
   home->surface_visible = true;
   home->quick_last_x = home->width;
@@ -1348,6 +1349,37 @@ void bd_home_refresh_quick(bd_home *home) {
   if (old_brightness != home->brightness || old_volume != home->volume) {
     damage_quick_panel(home);
   }
+}
+
+bool bd_home_set_favorite(bd_home *home, const char *id, bool favorite) {
+  if (home == NULL || id == NULL) {
+    return false;
+  }
+  int index = bd_home_find_item(home, id);
+  if (index < 0) {
+    return false;
+  }
+  uint32_t flags = home->entries[index].item.flags;
+  bool was = (flags & BD_HOME_ITEM_FAVORITE) != 0;
+  if (was == favorite) {
+    return true;
+  }
+  if (favorite) {
+    home->entries[index].item.flags |= BD_HOME_ITEM_FAVORITE;
+  } else {
+    home->entries[index].item.flags &= ~BD_HOME_ITEM_FAVORITE;
+  }
+  bd_home_damage_all(home);
+  return true;
+}
+
+bool bd_home_favorite(const bd_home *home, const char *id) {
+  if (home == NULL || id == NULL) {
+    return false;
+  }
+  int index = bd_home_find_item(home, id);
+  return index >= 0 &&
+         (home->entries[index].item.flags & BD_HOME_ITEM_FAVORITE) != 0;
 }
 
 void bd_home_set_blur_enabled(bd_home *home, bool enabled) {
@@ -2171,11 +2203,46 @@ bool bd_home_input(bd_home *home, bd_home_action action) {
   }
 }
 
+void bd_home_set_animations(bd_home *home, bool enabled) {
+  if (home == NULL || home->animations == enabled) {
+    return;
+  }
+  home->animations = enabled;
+  if (!enabled) {
+    bd_home_damage_all(home);
+  }
+}
+
 void bd_home_update(bd_home *home, uint64_t now_ms) {
   if (home == NULL) {
     return;
   }
   home->now_ms = now_ms;
+
+  if (!home->animations) {
+    if (home->pan_anim.active) {
+      home->pan = home->pan_anim.to;
+      home->pan_anim.active = false;
+      bd_home_damage_all(home);
+    }
+    if (home->quick_anim) {
+      home->quick_start = now_ms >= BD_HOME_PANEL_MS
+                              ? now_ms - BD_HOME_PANEL_MS
+                              : 0;
+    }
+    if (home->hint_anim) {
+      home->hint_start =
+          now_ms >= BD_HOME_PANEL_MS ? now_ms - BD_HOME_PANEL_MS : 0;
+    }
+    if (home->dialog_anim) {
+      home->dialog_start =
+          now_ms >= BD_HOME_DIALOG_MS ? now_ms - BD_HOME_DIALOG_MS : 0;
+    }
+    if (home->launch != BD_HOME_LAUNCH_NONE) {
+      home->launch_start =
+          now_ms >= BD_HOME_LAUNCH_MS ? now_ms - BD_HOME_LAUNCH_MS : 0;
+    }
+  }
 
   if (home->pan_anim.active) {
     float t = (float)(now_ms - home->pan_anim.start_ms) / (float)BD_HOME_PAN_MS;

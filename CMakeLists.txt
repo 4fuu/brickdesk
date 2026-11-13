@@ -314,6 +314,7 @@ target_link_libraries(brickdesk_home
 # both brickdesk_core (renderer/UI) and brickdesk_home so neither has to know
 # about the other's callers.
 add_library(brickdesk_shell STATIC
+  src/app/app_history.c
   src/app/shell.c
   src/app/notice.c
   src/app/perf_client.c

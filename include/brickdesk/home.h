@@ -62,8 +62,9 @@ typedef struct bd_home_style {
 
 typedef struct bd_home_status {
   const char *clock;         /* "22:26"; NULL keeps the default */
-  bool wifi;
-  int battery_percent;       /* 0..100 */
+  bool wifi_known;           /* false: wireless state is unknown */
+  bool wifi;                 /* valid only when wifi_known */
+  int battery_percent;       /* 0..100, or -1 when unknown */
   int max_background;        /* quick panel "N / M"; 0 means 3 */
 } bd_home_status;
 
@@ -112,6 +113,23 @@ typedef enum bd_home_action {
   BD_HOME_ACTION_RECENT      /* HOME: focus the most recent background app */
 } bd_home_action;
 
+typedef enum bd_home_dialog_kind {
+  BD_HOME_DIALOG_NONE = 0,
+  BD_HOME_DIALOG_END_APP,     /* end the running app on the focused tile */
+  BD_HOME_DIALOG_BACKGROUND_FULL /* end the LRU app and launch another */
+} bd_home_dialog_kind;
+
+/*
+ * A dialog result is reported once, after the user confirms or cancels, so the
+ * event loop can act on the session (end a process or evict the LRU entry).
+ * Take it after bd_home_input() or bd_home_take_dialog_result().
+ */
+typedef enum bd_home_dialog_result {
+  BD_HOME_DIALOG_RESULT_NONE = 0,
+  BD_HOME_DIALOG_RESULT_CANCEL,
+  BD_HOME_DIALOG_RESULT_CONFIRM
+} bd_home_dialog_result;
+
 bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style);
 void bd_home_destroy(bd_home *home);
 
@@ -121,8 +139,29 @@ int bd_home_item_count(const bd_home *home);
 /* Wall coordinates of one item; false when index is out of range. */
 bool bd_home_item_rect(const bd_home *home, int index, bd_rect *out);
 
+/*
+ * Optional custom draw entry for a home item.  The callback is invoked with
+ * visible=true only while the tile intersects the viewport; with
+ * visible=false when it leaves the viewport or the home surface is hidden, so
+ * a plugin-backed tile can start on demand and stop drawing off-screen.  The
+ * callback owns the tile's content; the home still owns its focus ring and
+ * damage.  It must be called after bd_home_set_items().
+ */
+typedef void (*bd_home_custom_draw_fn)(void *user, bd_home *home, bd_gfx *gfx,
+                                       bd_rect rect, bool visible);
+bool bd_home_set_custom_draw(bd_home *home, const char *id,
+                             bd_home_custom_draw_fn draw, void *user);
+/* Tells custom tiles whether the home surface itself is on screen. */
+void bd_home_set_surface_visible(bd_home *home, bool visible);
+
 int bd_home_focus(const bd_home *home);
 void bd_home_set_focus(bd_home *home, int index);
+/*
+ * Item id A would act on right now: the selected running row while the quick
+ * panel is open, otherwise the focused wall tile.  Returns NULL for quick
+ * panel control rows and while the dialog or a transition owns input.
+ */
+const char *bd_home_selected_id(const bd_home *home);
 int bd_home_tab(const bd_home *home);
 void bd_home_set_tab(bd_home *home, int tab);
 
@@ -134,13 +173,19 @@ void bd_home_set_live(bd_home *home, const bd_home_live *live);
 /*
  * Marks an app as running and loads its last frame through the M1-06
  * bd_app_last_frame API.  last_frame_path may be NULL or unreadable; the tile
- * then keeps its cover and still shows the running badge.  memory_mb is the
- * session estimate used by the quick panel.  Re-setting an existing id updates
- * it and moves it to the most-recent end of the quick list.
+ * then keeps its cover and still shows the running badge.  memory_mb is a
+ * sampled process-tree RSS in MiB, or -1 when the sample is unavailable.  A
+ * value of -1 is rendered as "unknown" and is never used for eviction.
+ * Re-setting an existing id updates it and moves it to the most-recent end of
+ * the quick list.
  */
 bool bd_home_set_running(bd_home *home, const char *id,
                          const char *last_frame_path,
                          bool paused, int memory_mb);
+/* Updates the memory reading without changing quick-list order. */
+bool bd_home_set_running_memory(bd_home *home, const char *id, int memory_mb);
+/* Sampled process-tree RSS in MiB, or -1 when unknown / not running. */
+int bd_home_running_memory(const bd_home *home, const char *id);
 void bd_home_clear_running(bd_home *home, const char *id);
 int bd_home_running_count(const bd_home *home);
 
@@ -186,8 +231,20 @@ bool bd_home_hint_visible(const bd_home *home);
 
 /* End-process dialog: 180 ms; confirm starts the 180 ms tile close animation. */
 bool bd_home_open_end_dialog(bd_home *home, const char *id);
+/*
+ * "Background full" choice: the session refused a launch because the
+ * max_background slots are taken.  Shows the LRU app and the app that would
+ * start; confirm means "end the LRU app and start", cancel leaves both alone.
+ * The loop remains responsible for terminating the process and retrying.
+ */
+bool bd_home_open_background_full(bd_home *home, const char *pending_id,
+                                  const char *victim_id, int max_background);
+/* Keeps the current dialog open and shows a non-fatal action error. */
+void bd_home_set_dialog_error(bd_home *home, const char *message);
+const char *bd_home_dialog_error(const bd_home *home);
 void bd_home_cancel_dialog(bd_home *home);
 bool bd_home_confirm_dialog(bd_home *home);
 bool bd_home_dialog_open(const bd_home *home);
+bd_home_dialog_result bd_home_take_dialog_result(bd_home *home);
 
 #endif /* BRICKDESK_HOME_H */

@@ -569,6 +569,8 @@ bd_image_cache_stats bd_gfx_image_cache_get_stats(const bd_gfx *gfx) {
       ++stats.failed;
     }
   }
+  /* Decoded results still need one begin_frame to upload their texture. */
+  stats.pending += gfx->image_result_count;
   if (mutable_gfx->image_mutex != NULL) {
     SDL_UnlockMutex((SDL_mutex *)mutable_gfx->image_mutex);
   }

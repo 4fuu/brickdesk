@@ -38,8 +38,8 @@ for target in "$@"; do
 done
 
 cmake --build "$BUILD_DIR" --target bd_harness bd_gfx_capture bd_plugin_capture \
-  bd_home_capture bd_settings_capture bd_menu_test bd_menu_state_app \
-  brickdesk-inputd brickdesk-demo brickdesk-menu
+  bd_home_capture bd_home_plugin_capture bd_settings_capture bd_menu_test \
+  bd_menu_state_app brickdesk-inputd brickdesk-demo brickdesk-menu
 mkdir -p "$BASELINE_DIR"
 
 SCRATCH="$BUILD_DIR/tests/baselines-scratch"
@@ -77,19 +77,26 @@ if [ "$launch_menu" -eq 1 ]; then
   out_dir="$SCRATCH/launch_menu"
   mkdir -p "$out_dir"
   SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
+    BRICKDESK_TEST_MEMORY_MB=132 \
     "$BUILD_DIR/tests/bd_harness" --scenario "$ROOT/tests/scenarios/launch_menu.json" \
     --out-dir "$out_dir" --config-dir "$ROOT/config" \
     --demo "$BUILD_DIR/brickdesk-demo" \
     --shim "$BUILD_DIR/libbrickdesk-menu.so" \
     --inputd "$BUILD_DIR/brickdesk-inputd" \
     --replay "$ROOT/tests/scenarios/launch_menu.replay"
-  image="$out_dir/launch_return.png"
-  if [ ! -f "$image" ]; then
-    printf 'update-baselines: launch_menu produced no screenshot\n' >&2
+  found=0
+  for image in "$out_dir"/*.png; do
+    if [ ! -e "$image" ]; then
+      continue
+    fi
+    cp "$image" "$BASELINE_DIR/"
+    printf 'baseline: %s\n' "$BASELINE_DIR/$(basename "$image")"
+    found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    printf 'update-baselines: launch_menu produced no screenshots\n' >&2
     exit 1
   fi
-  cp "$image" "$BASELINE_DIR/launch_return.png"
-  printf 'baseline: %s\n' "$BASELINE_DIR/launch_return.png"
 fi
 
 if [ "${#captures[@]}" -gt 0 ]; then
@@ -116,6 +123,8 @@ if [ "$home" -eq 1 ]; then
   mkdir -p "$out_dir"
   SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
     "$BUILD_DIR/tests/bd_home_capture" "$out_dir"
+  SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
+    "$BUILD_DIR/tests/bd_home_plugin_capture" "$out_dir"
 
   for image in "$out_dir"/home_*.png; do
     if [ ! -e "$image" ]; then

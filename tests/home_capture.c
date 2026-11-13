@@ -19,6 +19,17 @@
 #define CAPTURE_HEIGHT 768
 #define CAPTURE_MAX_PATH 1024
 
+/*
+ * Test fixture memory readings.  These are deliberately named as fixtures:
+ * production readings come from bd_sys_process_tree_rss_mb() and render
+ * "unknown" when /proc cannot be sampled.
+ */
+enum {
+  FIXTURE_MEMORY_TOWN_MB = 210,
+  FIXTURE_MEMORY_SPACE_MB = 210,
+  FIXTURE_MEMORY_MUSIC_MB = 86
+};
+
 static bool write_png(bd_gfx *gfx, const char *out_dir, const char *name) {
   char path[CAPTURE_MAX_PATH];
   int written = snprintf(path, sizeof(path), "%s/%s.png", out_dir, name);
@@ -245,7 +256,9 @@ int main(int argc, char **argv) {
   }
   bd_home_status status;
   memset(&status, 0, sizeof(status));
+  /* Fixture status for deterministic screenshots; production samples sysfs. */
   status.clock = "22:26";
+  status.wifi_known = true;
   status.wifi = true;
   status.battery_percent = 82;
   status.max_background = 3;
@@ -291,9 +304,24 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: light quick open failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_light")) {
+    return 1;
+  }
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+
   set_dark(home);
   bd_home_update(home, now);
-  if (!bd_home_set_running(home, "demo-03", town_path, true, 210)) {
+  if (!bd_home_set_running(home, "demo-03", town_path, true,
+                           FIXTURE_MEMORY_TOWN_MB)) {
     fprintf(stderr, "home_capture: town running failed\n");
     return 1;
   }
@@ -320,8 +348,8 @@ int main(int argc, char **argv) {
   now += 300;
   bd_home_update(home, now);
 
-  bd_home_set_running(home, "demo-10", space_path, true, 210);
-  bd_home_set_running(home, "music", music_path, true, 86);
+  bd_home_set_running(home, "demo-10", space_path, true, FIXTURE_MEMORY_SPACE_MB);
+  bd_home_set_running(home, "music", music_path, true, FIXTURE_MEMORY_MUSIC_MB);
   if (!bd_home_open_quick(home)) {
     fprintf(stderr, "home_capture: quick open failed\n");
     return 1;
@@ -334,6 +362,62 @@ int main(int argc, char **argv) {
 
   bd_home_close_quick(home);
   now += 220;
+  bd_home_update(home, now);
+  if (!bd_home_set_running_memory(home, "music", -1)) {
+    fprintf(stderr, "home_capture: unknown memory fixture failed\n");
+    return 1;
+  }
+  if (!bd_home_open_quick(home) ||
+      !bd_home_set_running_memory(home, "music", -1)) {
+    fprintf(stderr, "home_capture: unknown memory panel failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_unknown_memory")) {
+    return 1;
+  }
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+  bd_home_set_running_memory(home, "music", FIXTURE_MEMORY_MUSIC_MB);
+  if (!bd_home_open_background_full(home, "demo-04", "demo-03", 3)) {
+    fprintf(stderr, "home_capture: background full dialog failed\n");
+    return 1;
+  }
+  now += 200;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_background_full")) {
+    return 1;
+  }
+  bd_home_set_dialog_error(home, "无法结束「小镇四季」，请重试或取消");
+  now += 200;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_background_full_error")) {
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_CANCEL);
+  if (bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CANCEL) {
+    fprintf(stderr, "home_capture: background full cancel result missing\n");
+    return 1;
+  }
+  now += 200;
+  bd_home_update(home, now);
+  if (!bd_home_open_background_full(home, "demo-04", "demo-03", 3)) {
+    fprintf(stderr, "home_capture: second background full dialog failed\n");
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_RIGHT);
+  if (!bd_home_input(home, BD_HOME_ACTION_ACCEPT) ||
+      bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CONFIRM) {
+    fprintf(stderr, "home_capture: background full confirm result missing\n");
+    return 1;
+  }
+  if (bd_home_running_count(home) != 3 || bd_home_dialog_open(home)) {
+    fprintf(stderr, "home_capture: confirmation changed the running list\n");
+    return 1;
+  }
+  now += 200;
   bd_home_update(home, now);
   if (!bd_home_open_end_dialog(home, "demo-03")) {
     fprintf(stderr, "home_capture: end dialog failed\n");

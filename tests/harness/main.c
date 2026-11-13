@@ -17,7 +17,6 @@
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/shell.h"
-#include "brickdesk/theme.h"
 #include "scenario.h"
 
 #define BD_PATH_MAX 1024
@@ -229,24 +228,6 @@ static int run_scenario(const bd_scenario *scenario,
     return 1;
   }
 
-  bd_desktop_theme theme;
-  theme.dark = true;
-  theme.ambient_baked = true;
-  const char *accent_hex = bd_config_accent_hex("persimmon", true);
-  if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &theme.accent)) {
-    fprintf(stderr, "harness: cannot resolve theme accent\n");
-    bd_gfx_destroy(gfx);
-    bd_platform_destroy(platform);
-    return 1;
-  }
-  bd_desktop *desktop = bd_desktop_create(gfx, &theme);
-  if (desktop == NULL) {
-    fprintf(stderr, "harness: out of memory\n");
-    bd_gfx_destroy(gfx);
-    bd_platform_destroy(platform);
-    return 1;
-  }
-
   bd_config_options config_options;
   config_options.config_dir = options->config_dir;
   config_options.migrate = false;
@@ -255,7 +236,6 @@ static int run_scenario(const bd_scenario *scenario,
       bd_config_load(&config_options, config_error, sizeof(config_error));
   if (settings == NULL) {
     fprintf(stderr, "harness: config: %s\n", config_error);
-    bd_desktop_destroy(desktop);
     bd_gfx_destroy(gfx);
     bd_platform_destroy(platform);
     return 1;
@@ -272,7 +252,6 @@ static int run_scenario(const bd_scenario *scenario,
                     sizeof(socket_path))) {
     fprintf(stderr, "harness: cannot prepare app directory\n");
     bd_config_free(settings);
-    bd_desktop_destroy(desktop);
     bd_gfx_destroy(gfx);
     bd_platform_destroy(platform);
     return 1;
@@ -290,7 +269,6 @@ static int run_scenario(const bd_scenario *scenario,
       fprintf(stderr, "harness: inputd did not start\n");
       stop_inputd(inputd_pid);
       bd_config_free(settings);
-      bd_desktop_destroy(desktop);
       bd_gfx_destroy(gfx);
       bd_platform_destroy(platform);
       return 1;
@@ -301,7 +279,6 @@ static int run_scenario(const bd_scenario *scenario,
   memset(&shell_config, 0, sizeof(shell_config));
   shell_config.platform = platform;
   shell_config.gfx = gfx;
-  shell_config.desktop = desktop;
   shell_config.settings = settings;
   shell_config.apps_dir = apps_dir;
   shell_config.input_socket = inputd_pid > 0 ? socket_path : NULL;
@@ -312,7 +289,6 @@ static int run_scenario(const bd_scenario *scenario,
     fprintf(stderr, "harness: cannot create desktop loop\n");
     stop_inputd(inputd_pid);
     bd_config_free(settings);
-    bd_desktop_destroy(desktop);
     bd_gfx_destroy(gfx);
     bd_platform_destroy(platform);
     return 1;
@@ -358,16 +334,23 @@ static int run_scenario(const bd_scenario *scenario,
       case BD_STEP_SCREENSHOT: {
         bd_shell_test_advance(shell,
                               (uint64_t)frame * (uint64_t)scenario->fixed_dt_ms);
-        int quiet = 0;
-        for (int wait = 0; wait < 300 && quiet < 2; ++wait) {
-          bd_shell_render(shell);
-          if (bd_shell_has_pending_images(shell)) {
-            quiet = 0;
-          } else {
-            ++quiet;
+        if (step->settle) {
+          int quiet = 0;
+          for (int wait = 0; wait < 300 && quiet < 2; ++wait) {
+            bd_shell_iterate(shell, 0);
+            if (bd_shell_has_pending_images(shell)) {
+              quiet = 0;
+            } else {
+              ++quiet;
+            }
+            bd_event event;
+            bd_platform_wait_event(platform, &event, 5);
           }
-          bd_event event;
-          bd_platform_wait_event(platform, &event, 5);
+          bd_shell_render(shell);
+        } else {
+          /* One frame at the current transition timestamp. */
+          bd_shell_iterate(shell, 0);
+          bd_shell_render(shell);
         }
 
         char path[BD_PATH_MAX];
@@ -400,7 +383,6 @@ static int run_scenario(const bd_scenario *scenario,
   bd_shell_destroy(shell);
   stop_inputd(inputd_pid);
   bd_config_free(settings);
-  bd_desktop_destroy(desktop);
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);
   return result;

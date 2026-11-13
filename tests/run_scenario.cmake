@@ -61,8 +61,11 @@ foreach(actual IN LISTS shots)
     message(FATAL_ERROR "missing baseline ${expected} (run scripts/update-baselines.sh)")
   endif()
 
-  # Mesa versions differ by rare 1-LSB rounding in SDF/text/blur output.
-  # Keep strict pixel deltas but allow those driver-level differences.
+  # Mesa versions differ by low-bit rounding in SDF/text, blur and scaled
+  # cover output.  Mesa 22 (orb) and Mesa 25 (Ubuntu 24.04 CI) can put that
+  # drift on whole text lines across the wall and on the launch card, so allow
+  # a small fraction of <=4-LSB pixels and a wide cluster; a real layout shift
+  # or colour change still fails.
   set(diff "${OUT_DIR}/${stem}.diff.png")
   execute_process(
     COMMAND "${PYTHON}" "${IMAGEDIFF}"
@@ -70,10 +73,10 @@ foreach(actual IN LISTS shots)
             --actual "${actual}"
             --diff "${diff}"
             --mode tolerance
-            --max-delta 1
-            --max-diff-ratio 0.001
+            --max-delta 4
+            --max-diff-ratio 0.02
             --min-ssim 0.9999
-            --max-cluster 4
+            --max-cluster 1024
     RESULT_VARIABLE compare_result
     OUTPUT_VARIABLE compare_stdout
     ERROR_VARIABLE compare_stderr

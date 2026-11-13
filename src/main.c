@@ -7,7 +7,6 @@
 #include <time.h>
 
 #include "brickdesk/config.h"
-#include "brickdesk/desktop.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/plugin.h"
@@ -41,6 +40,19 @@ static int run_loop(bd_shell *shell, int idle_check_ms, bool verbose) {
     return 0;
   }
   if (idle_check) {
+    /*
+     * Cover decodes start on the first frame.  Let them finish before the
+     * measurement window so the idle check measures a settled home page.
+     */
+    for (int i = 0; i < 240 && bd_shell_has_pending_images(shell); ++i) {
+      if (bd_shell_iterate(shell, 0) < 0) {
+        return 0;
+      }
+      struct timespec delay;
+      delay.tv_sec = 0;
+      delay.tv_nsec = 5000000L;
+      nanosleep(&delay, NULL);
+    }
     cpu_start = process_cpu_ms();
     presents_start = bd_shell_present_count(shell);
   }
@@ -145,10 +157,9 @@ int main(int argc, char **argv) {
   const char *accent_name = bd_config_get_string(settings, "theme.accent", "persimmon");
   const char *accent_hex = bd_config_accent_hex(accent_name, dark);
   const char *ambient = bd_config_get_string(settings, "theme.ambient", "baked");
-  bd_desktop_theme theme;
-  theme.dark = dark;
-  theme.ambient_baked = strcmp(ambient, "baked") == 0;
-  if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &theme.accent)) {
+  bd_color theme_accent;
+  if (accent_hex == NULL ||
+      !bd_color_from_hex(accent_hex, &theme_accent)) {
     fprintf(stderr, "brickdesk: config: invalid theme accent '%s'\n", accent_name);
     bd_config_free(settings);
     return 1;
@@ -186,15 +197,6 @@ int main(int argc, char **argv) {
   }
   bd_gfx_image_cache_set_budget(gfx, (size_t)cover_cache_mb * 1024u * 1024u);
 
-  bd_desktop *desktop = bd_desktop_create(gfx, &theme);
-  if (desktop == NULL) {
-    fprintf(stderr, "brickdesk: out of memory\n");
-    bd_gfx_destroy(gfx);
-    bd_platform_destroy(platform);
-    bd_config_free(settings);
-    return 1;
-  }
-
   bd_plugin_host *plugin_host = NULL;
   bool plugins_enabled = bd_config_get_bool(settings, "plugins.enabled", true);
   if (plugins_enabled) {
@@ -211,10 +213,10 @@ int main(int argc, char **argv) {
     plugin_config.limits = &limits;
     plugin_config.display_width = bd_platform_width(platform);
     plugin_config.display_height = bd_platform_height(platform);
-    plugin_config.dark = theme.dark;
-    plugin_config.accent = ((uint32_t)(theme.accent.r * 255.0f + 0.5f) << 16) |
-                           ((uint32_t)(theme.accent.g * 255.0f + 0.5f) << 8) |
-                           (uint32_t)(theme.accent.b * 255.0f + 0.5f);
+    plugin_config.dark = dark;
+    plugin_config.accent = ((uint32_t)(theme_accent.r * 255.0f + 0.5f) << 16) |
+                           ((uint32_t)(theme_accent.g * 255.0f + 0.5f) << 8) |
+                           (uint32_t)(theme_accent.b * 255.0f + 0.5f);
     plugin_config.locale = bd_config_get_string(settings, "ui.language", "zh-CN");
     plugin_config.verbose = verbose;
     plugin_host = bd_plugin_host_create(&plugin_config);
@@ -234,25 +236,6 @@ int main(int argc, char **argv) {
             fprintf(stderr, "brickdesk: plugin: %s\n", diagnostic);
           }
         }
-        bd_plugin *tile_plugin = NULL;
-        for (size_t i = 0; i < bd_plugin_host_count(plugin_host); ++i) {
-          const bd_plugin_manifest *manifest =
-              bd_plugin_host_manifest(plugin_host, i);
-          if (manifest != NULL &&
-              (manifest->capabilities & BD_PLUGIN_CAP_TILE) != 0) {
-            tile_plugin = bd_plugin_host_at(plugin_host, i);
-            break;
-          }
-        }
-        if (tile_plugin != NULL && idle_check_ms == 0) {
-          /* An idle check measures the loop with no tile activity. */
-          bd_desktop_set_plugin_tile(desktop, tile_plugin);
-        } else if (verbose && tile_plugin == NULL) {
-          fprintf(stderr, "brickdesk: no tile plugin found in %s\n",
-                  configured_dir != NULL && configured_dir[0] != '\0'
-                      ? configured_dir
-                      : BRICKDESK_PLUGIN_DIR);
-        }
         for (size_t i = 0; i < bd_plugin_host_count(plugin_host); ++i) {
           const bd_plugin_manifest *manifest =
               bd_plugin_host_manifest(plugin_host, i);
@@ -268,14 +251,13 @@ int main(int argc, char **argv) {
   memset(&shell_config, 0, sizeof(shell_config));
   shell_config.platform = platform;
   shell_config.gfx = gfx;
-  shell_config.desktop = desktop;
   shell_config.settings = settings;
   shell_config.plugins = plugin_host;
   shell_config.verbose = verbose;
+  shell_config.attach_plugin_tile = idle_check_ms == 0;
   bd_shell *shell = bd_shell_create(&shell_config);
   if (shell == NULL) {
     fprintf(stderr, "brickdesk: cannot create desktop loop\n");
-    bd_desktop_destroy(desktop);
     bd_plugin_host_destroy(plugin_host);
     bd_gfx_destroy(gfx);
     bd_platform_destroy(platform);
@@ -287,7 +269,6 @@ int main(int argc, char **argv) {
   int result = run_loop(shell, idle_check_ms, verbose);
 
   bd_shell_destroy(shell);
-  bd_desktop_destroy(desktop);
   bd_plugin_host_destroy(plugin_host);
   bd_gfx_destroy(gfx);
   bd_platform_destroy(platform);

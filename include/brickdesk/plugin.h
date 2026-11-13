@@ -251,9 +251,10 @@ int bd_plugin_ui_generation(const bd_plugin *plugin);
 
 const char *bd_plugin_get_setting(const bd_plugin *plugin, const char *key);
 /*
- * Updates the value and notifies the plugin with settings.changed. The host
- * persists the value before reporting success; false means the value was
- * rejected or could not be written.
+ * Updates the value and notifies the plugin with settings.changed. False means
+ * the value was rejected or not applied. If the new file was already renamed
+ * into place but its directory sync failed, the value stays applied, the host
+ * records a diagnostic, and the protocol request reports {"durable":false}.
  */
 bool bd_plugin_set_setting(bd_plugin *plugin, const char *key,
                            const char *value);

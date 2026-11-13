@@ -270,10 +270,21 @@ manifest. Values are loaded from the host-owned settings file when the host
 scans plugins, so they survive a desktop restart.
 
 `set` validates the type, writes the new value atomically, and then sends a
-`settings.changed` event back. A successful request returns `{}`. If the file
-cannot be written, the value stays unchanged and the host returns
-`-32603` with the I/O error message. Setting the same value again is still a
-successful write, so a plugin can use `set` as an explicit save.
+`settings.changed` event back. A normal success returns `{}`.
+
+If the temporary file, its fsync, its close, or the rename fails before the new
+file is in place, the value stays unchanged and the host returns `-32603` with
+the I/O error message.
+
+If the rename succeeded but opening, fsyncing, or closing the settings
+directory fails, the new file is already visible. The host keeps the new value
+in memory, still sends `settings.changed`, returns `{"durable":false}`, and
+records a diagnostic instead of reporting a plain success. A crash or power
+loss before the directory entry is durable may restore the old file, so a
+caller that needs a durable acknowledgement can retry the same `set`. The
+host-side `bd_plugin_set_setting()` follows the same rule: it returns true
+because the value is applied, and exposes the sync failure through
+`bd_plugin_host_diagnostic()`.
 
 The settings file is a single JSON object. Values are encoded as strings and
 validated against the manifest when read:

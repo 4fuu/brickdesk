@@ -401,7 +401,8 @@ static int settings_request(int fd, long id, const char *method,
       return 0;
     }
     if (value != NULL) {
-      snprintf(out, out_size, "ok");
+      snprintf(out, out_size, "%s",
+               strstr(reply, "\"durable\":false") != NULL ? "unsynced" : "ok");
       return 0;
     }
     const char *value_field = strstr(reply, "\"value\":");

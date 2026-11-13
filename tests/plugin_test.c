@@ -1250,6 +1250,93 @@ static void test_settings_write_failure(void) {
   free(root);
 }
 
+static void test_settings_directory_sync_failure(void) {
+  char *root = make_root();
+  check(root != NULL, "dir sync: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *id = "com.test.dirsync";
+  char result[1024];
+  snprintf(result, sizeof(result), "%s/dirsync-result.txt", root);
+  check(write_settings_manifest(root, id, "true", "set", "false", result),
+        "dir sync: manifest");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  setenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC", "1", 1);
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "dir sync: host");
+  char state_file[2048];
+  settings_file_path(state_file, sizeof(state_file), root, id);
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "dir sync: scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "dir sync: find");
+    if (plugin != NULL) {
+      check(bd_plugin_set_settings_open(plugin, true),
+            "dir sync: start plugin");
+      char result_text[256] = {0};
+      check(wait_for_result(host, result, result_text, sizeof(result_text),
+                            3000),
+            "dir sync: protocol result");
+      check(strcmp(result_text, "unsynced") == 0,
+            "dir sync: expected durable:false, got %s", result_text);
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: memory keeps the new value");
+      char contents[2048] = {0};
+      check(read_file_text(state_file, contents, sizeof(contents)) &&
+                strstr(contents, "\"show_meta\":\"false\"") != NULL,
+            "dir sync: visible file keeps the new value");
+      int not_durable = 0;
+      for (size_t i = 0; i < bd_plugin_host_diagnostic_count(host); ++i) {
+        char diagnostic[256];
+        if (bd_plugin_host_diagnostic(host, i, diagnostic, sizeof(diagnostic)) &&
+            strstr(diagnostic, "not durable") != NULL) {
+          ++not_durable;
+        }
+      }
+      check(not_durable >= 1, "dir sync: expected a not-durable diagnostic");
+
+      size_t diagnostics_before = bd_plugin_host_diagnostic_count(host);
+      check(bd_plugin_set_setting(plugin, "show_meta", "true"),
+            "dir sync: host API reports the applied value");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "dir sync: host API keeps the new value");
+      check(bd_plugin_host_diagnostic_count(host) > diagnostics_before,
+            "dir sync: host API reports the sync failure");
+
+      unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC");
+      check(bd_plugin_set_setting(plugin, "show_meta", "false"),
+            "dir sync: recovery save succeeds");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: recovery value");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC");
+
+  host = make_host(root, limits);
+  check(host != NULL, "dir sync: reload host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "dir sync: reload scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "dir sync: reload find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: recovery value loaded");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
 static void test_python_plugin(void) {
   bd_plugin_limits limits = bd_plugin_default_limits();
   limits.handshake_timeout_ms = 5000;
@@ -1341,6 +1428,7 @@ int main(void) {
   test_settings_isolation();
   test_settings_corruption();
   test_settings_write_failure();
+  test_settings_directory_sync_failure();
   test_memory_limit();
   test_desktop_frames_with_busy_plugin();
   test_python_plugin();

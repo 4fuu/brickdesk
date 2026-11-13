@@ -1106,27 +1106,39 @@ static long settings_fail_after(void) {
   return parsed;
 }
 
+static bool settings_fail_dir_sync(void) {
+  const char *value = getenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC");
+  return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+typedef enum plugin_settings_write_result {
+  PLUGIN_SETTINGS_WRITE_FAILED = 0, /* old file and in-memory value remain */
+  PLUGIN_SETTINGS_WRITE_OK,         /* file and directory are durable */
+  PLUGIN_SETTINGS_WRITE_UNSYNCED    /* new file is visible, sync failed */
+} plugin_settings_write_result;
+
 /*
  * Writes through a temporary file in the same directory, fsyncs it, renames it
- * over the old file, then fsyncs the directory. A crash leaves either the old
- * or the new complete file, never a partial one.
+ * over the old file, then fsyncs the directory. A crash before the rename
+ * leaves the old file in place. A failed directory sync after the rename
+ * returns UNSYNCED: the new file is already visible, so the caller must commit
+ * the in-memory value instead of rolling it back.
  */
-static bool plugin_settings_write_atomic(const char *directory,
-                                         const char *path, const char *data,
-                                         size_t length, char *error,
-                                         size_t error_size) {
+static plugin_settings_write_result plugin_settings_write_atomic(
+    const char *directory, const char *path, const char *data, size_t length,
+    char *error, size_t error_size) {
   char temporary[BD_PLUGIN_MAX_PATH + BD_PLUGIN_MAX_ID + 64];
   int written = snprintf(temporary, sizeof(temporary), "%s/%s.tmp.XXXXXX",
                          directory, BD_PLUGIN_SETTINGS_FILE);
   if (written <= 0 || (size_t)written >= sizeof(temporary)) {
     snprintf(error, error_size, "settings path is too long");
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   int fd = mkstemp(temporary);
   if (fd < 0) {
     snprintf(error, error_size, "cannot create settings file: %s",
              strerror(errno));
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   (void)fchmod(fd, 0600);
 
@@ -1173,38 +1185,58 @@ static bool plugin_settings_write_atomic(const char *directory,
   }
   if (!ok) {
     unlink(temporary);
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   if (rename(temporary, path) != 0) {
     snprintf(error, error_size, "cannot replace settings file: %s",
              strerror(errno));
     unlink(temporary);
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
+  }
+  if (settings_fail_dir_sync()) {
+    snprintf(error, error_size, "injected directory sync failure");
+    return PLUGIN_SETTINGS_WRITE_UNSYNCED;
   }
   int directory_fd = open(directory, O_RDONLY | O_CLOEXEC);
-  if (directory_fd >= 0) {
-    (void)fsync(directory_fd);
-    close(directory_fd);
+  if (directory_fd < 0) {
+    snprintf(error, error_size,
+             "settings file replaced but cannot open its directory: %s",
+             strerror(errno));
+    return PLUGIN_SETTINGS_WRITE_UNSYNCED;
   }
-  return true;
+  if (fsync(directory_fd) != 0) {
+    snprintf(error, error_size,
+             "settings file replaced but directory sync failed: %s",
+             strerror(errno));
+    close(directory_fd);
+    return PLUGIN_SETTINGS_WRITE_UNSYNCED;
+  }
+  if (close(directory_fd) != 0) {
+    snprintf(error, error_size,
+             "settings file replaced but directory close failed: %s",
+             strerror(errno));
+    return PLUGIN_SETTINGS_WRITE_UNSYNCED;
+  }
+  return PLUGIN_SETTINGS_WRITE_OK;
 }
 
-static bool plugin_settings_save(bd_plugin *plugin, char *error,
-                                 size_t error_size) {
+static plugin_settings_write_result plugin_settings_save(bd_plugin *plugin,
+                                                         char *error,
+                                                         size_t error_size) {
   if (plugin->manifest.setting_count == 0) {
-    return true;
+    return PLUGIN_SETTINGS_WRITE_OK;
   }
   char directory[BD_PLUGIN_MAX_PATH + BD_PLUGIN_MAX_ID + 32];
   char path[BD_PLUGIN_MAX_PATH + BD_PLUGIN_MAX_ID + 64];
   if (!plugin_settings_dir(plugin, directory, sizeof(directory)) ||
       !plugin_settings_path(plugin, path, sizeof(path))) {
     snprintf(error, error_size, "settings path is too long");
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   if (!bd_plugin_make_dirs(directory)) {
     snprintf(error, error_size, "cannot create settings directory: %s",
              strerror(errno));
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   char data[8192];
   size_t used = 0;
@@ -1212,7 +1244,7 @@ static bool plugin_settings_save(bd_plugin *plugin, char *error,
                          "{\"version\":1,\"settings\":{");
   if (written <= 0 || (size_t)written >= sizeof(data)) {
     snprintf(error, error_size, "settings file is too large");
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   used += (size_t)written;
   for (int i = 0; i < plugin->manifest.setting_count; ++i) {
@@ -1226,33 +1258,40 @@ static bool plugin_settings_save(bd_plugin *plugin, char *error,
                        i > 0 ? "," : "", escaped_key, escaped_value);
     if (written < 0 || (size_t)written >= sizeof(data) - used) {
       snprintf(error, error_size, "settings file is too large");
-      return false;
+      return PLUGIN_SETTINGS_WRITE_FAILED;
     }
     used += (size_t)written;
   }
   written = snprintf(data + used, sizeof(data) - used, "}}");
   if (written < 0 || (size_t)written >= sizeof(data) - used) {
     snprintf(error, error_size, "settings file is too large");
-    return false;
+    return PLUGIN_SETTINGS_WRITE_FAILED;
   }
   used += (size_t)written;
   return plugin_settings_write_atomic(directory, path, data, used, error,
                                       error_size);
 }
 
-static bool plugin_settings_commit(bd_plugin *plugin, int index,
-                                   const char *value, char *error,
-                                   size_t error_size) {
+static plugin_settings_write_result plugin_settings_commit(
+    bd_plugin *plugin, int index, const char *value, char *error,
+    size_t error_size) {
   char previous[BD_PLUGIN_MAX_SETTING_VALUE];
   snprintf(previous, sizeof(previous), "%s", plugin->settings_values[index]);
   snprintf(plugin->settings_values[index], sizeof(plugin->settings_values[index]),
            "%s", value);
-  if (plugin_settings_save(plugin, error, error_size)) {
-    return true;
+  plugin_settings_write_result result =
+      plugin_settings_save(plugin, error, error_size);
+  if (result == PLUGIN_SETTINGS_WRITE_FAILED) {
+    snprintf(plugin->settings_values[index],
+             sizeof(plugin->settings_values[index]), "%s", previous);
   }
-  snprintf(plugin->settings_values[index], sizeof(plugin->settings_values[index]),
-           "%s", previous);
-  return false;
+  return result;
+}
+
+static void settings_report_unsynced(bd_plugin *plugin, const char *error) {
+  bd_plugin_diagnostic(plugin->host, "%s: settings saved but not durable: %s",
+                       plugin->manifest.id, error);
+  bd_plugin_log(plugin, "settings saved but not durable: %s", error);
 }
 
 static void handle_settings_get(bd_plugin *plugin, const bd_plugin_json *json,
@@ -1388,17 +1427,27 @@ static void handle_settings_set(bd_plugin *plugin, const bd_plugin_json *json,
     return;
   }
   char storage_error[192] = {0};
-  if (!plugin_settings_commit(plugin, index, value, storage_error,
-                              sizeof(storage_error))) {
+  plugin_settings_write_result write =
+      plugin_settings_commit(plugin, index, value, storage_error,
+                             sizeof(storage_error));
+  if (write == PLUGIN_SETTINGS_WRITE_FAILED) {
     bd_plugin_log(plugin, "cannot save settings: %s", storage_error);
     if (id > 0) {
       send_error(plugin, id, -32603, storage_error);
     }
     return;
   }
+  if (write == PLUGIN_SETTINGS_WRITE_UNSYNCED) {
+    settings_report_unsynced(plugin, storage_error);
+  }
   send_settings_event(plugin, spec, value);
   bd_plugin_mark_dirty(plugin->host);
-  if (id > 0) {
+  if (id > 0 && write == PLUGIN_SETTINGS_WRITE_UNSYNCED) {
+    queue_format(plugin,
+                 "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":"
+                 "{\"durable\":false}}",
+                 id);
+  } else if (id > 0) {
     queue_format(plugin, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{}}", id);
   }
 }
@@ -2320,10 +2369,15 @@ bool bd_plugin_set_setting(bd_plugin *plugin, const char *key,
     return false;
   }
   char storage_error[192] = {0};
-  if (!plugin_settings_commit(plugin, index, value, storage_error,
-                              sizeof(storage_error))) {
+  plugin_settings_write_result write =
+      plugin_settings_commit(plugin, index, value, storage_error,
+                             sizeof(storage_error));
+  if (write == PLUGIN_SETTINGS_WRITE_FAILED) {
     bd_plugin_log(plugin, "cannot save settings: %s", storage_error);
     return false;
+  }
+  if (write == PLUGIN_SETTINGS_WRITE_UNSYNCED) {
+    settings_report_unsynced(plugin, storage_error);
   }
   if (plugin->state == BD_PLUGIN_RUNNING && plugin->fd >= 0) {
     send_settings_event(plugin, spec, value);

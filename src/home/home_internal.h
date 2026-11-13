@@ -24,6 +24,15 @@
 #define BD_HOME_CLOSE_MS 180
 #define BD_HOME_PREFETCH 1024
 #define BD_HOME_MAX_RUNNING 8
+#define BD_HOME_QUICK_ROWS_START 204
+#define BD_HOME_QUICK_ROW_H 50
+#define BD_HOME_QUICK_ROW_BOX 48
+#define BD_HOME_QUICK_CONTROL_H 48
+#define BD_HOME_QUICK_CONTROL_COUNT 4
+#define BD_HOME_QUICK_BOTTOM_PAD 16
+#define BD_HOME_QUICK_FOOT_GAP 10
+#define BD_HOME_QUICK_ROWS_GAP 14
+#define BD_HOME_QUICK_SCROLLBAR_W 3
 #define BD_HOME_MAX_QUERY BD_HOME_QUERY_MAX
 #define BD_HOME_MAX_CUSTOM 8
 #define BD_HOME_ID_MAX 65
@@ -101,6 +110,15 @@ typedef struct bd_home_running {
   uint64_t since_ms;
 } bd_home_running;
 
+typedef struct bd_home_quick_layout {
+  int rows_start;
+  int visible_rows;
+  int scroll;
+  int max_scroll;
+  int foot_baseline;
+  int controls_y;
+} bd_home_quick_layout;
+
 typedef struct bd_home_pan {
   bool active;
   uint64_t start_ms;
@@ -161,6 +179,7 @@ struct bd_home {
   float quick_from;
   int quick_last_x;
   int quick_sel;
+  int quick_scroll;
 
   bool hint_visible;
   bool hint_anim;
@@ -228,6 +247,7 @@ float bd_home_quick_progress(const bd_home *home);
 float bd_home_hint_progress(const bd_home *home);
 float bd_home_dialog_progress(const bd_home *home);
 bd_rect bd_home_quick_panel_rect(const bd_home *home);
+bd_home_quick_layout bd_home_quick_layout_get(const bd_home *home);
 bd_rect bd_home_launch_rect(const bd_home *home);
 
 void bd_home_damage_rect(bd_home *home, bd_rect rect);

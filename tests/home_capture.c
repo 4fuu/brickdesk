@@ -187,6 +187,8 @@ static bool write_demo_frame(const char *path, int variant) {
 }
 
 static bool g_quick_available = true;
+static int g_quick_brightness = 70;
+static int g_quick_volume = 45;
 
 static bool capture_quick_read(void *user, bd_home_quick_control control,
                                int *percent) {
@@ -194,20 +196,258 @@ static bool capture_quick_read(void *user, bd_home_quick_control control,
   if (!g_quick_available || percent == NULL) {
     return false;
   }
-  *percent = control == BD_HOME_QUICK_BRIGHTNESS ? 70 : 45;
+  *percent =
+      control == BD_HOME_QUICK_BRIGHTNESS ? g_quick_brightness : g_quick_volume;
   return true;
 }
 
 static bool capture_quick_adjust(void *user, bd_home_quick_control control,
                                  int delta, int *percent) {
   (void)user;
-  (void)control;
-  (void)delta;
   if (!g_quick_available || percent == NULL) {
     return false;
   }
-  *percent = control == BD_HOME_QUICK_BRIGHTNESS ? 70 : 45;
+  int value = (control == BD_HOME_QUICK_BRIGHTNESS ? g_quick_brightness
+                                                   : g_quick_volume) +
+              delta;
+  if (value < 0) {
+    value = 0;
+  }
+  if (value > 100) {
+    value = 100;
+  }
+  if (control == BD_HOME_QUICK_BRIGHTNESS) {
+    g_quick_brightness = value;
+  } else {
+    g_quick_volume = value;
+  }
+  *percent = value;
   return true;
+}
+
+static int expect_quick_id(bd_home *home, const char *expected,
+                           const char *what) {
+  const char *id = bd_home_selected_id(home);
+  if (expected == NULL) {
+    if (id != NULL) {
+      fprintf(stderr, "home_capture: %s selected %s, expected a control\n",
+              what, id);
+      return 1;
+    }
+    return 0;
+  }
+  if (id == NULL || strcmp(id, expected) != 0) {
+    fprintf(stderr, "home_capture: %s selected %s, expected %s\n", what,
+            id != NULL ? id : "(control)", expected);
+    return 1;
+  }
+  return 0;
+}
+
+static int capture_quick_extremes(bd_platform *platform, bd_gfx *gfx,
+                                  bd_color accent, const char *out_dir) {
+  static const char *const IDS[8] = {
+      "demo-03", "demo-10", "music", "demo-01",
+      "demo-02", "demo-04", "demo-09", "demo-05"};
+  static const int MEMORY[8] = {210, 210, 86, 120, 64, -1, 310, 48};
+  bd_home_style style;
+  memset(&style, 0, sizeof(style));
+  style.accent_base = accent;
+  style.blur_enabled = true;
+  style.width = CAPTURE_WIDTH;
+  style.height = CAPTURE_HEIGHT;
+  bd_home *home = bd_home_create(gfx, &style);
+  if (home == NULL) {
+    fprintf(stderr, "home_capture: quick extremes create failed\n");
+    return 1;
+  }
+  bd_home_item items[HOME_DEMO_COUNT];
+  int count = 0;
+  home_demo_items(items, &count);
+  items[8].title = "这是一个非常非常长的应用程序名称用于测试省略边界";
+  if (!bd_home_set_items(home, items, count)) {
+    fprintf(stderr, "home_capture: quick extremes items failed\n");
+    return 1;
+  }
+  bd_home_status status;
+  memset(&status, 0, sizeof(status));
+  status.clock = "22:26";
+  status.wifi_known = true;
+  status.wifi = true;
+  status.battery_percent = 82;
+  status.max_background = 8;
+  bd_home_set_status(home, &status);
+  bd_home_quick_backend backend;
+  memset(&backend, 0, sizeof(backend));
+  backend.read = capture_quick_read;
+  backend.adjust = capture_quick_adjust;
+  bd_home_set_quick_backend(home, &backend);
+  g_quick_available = true;
+  g_quick_brightness = 70;
+  g_quick_volume = 45;
+
+  uint64_t now = 10000;
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: empty quick open failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (expect_quick_id(home, NULL, "empty panel") != 0) {
+    return 1;
+  }
+  if (!write_png(gfx, out_dir, "home_quick_empty")) {
+    return 1;
+  }
+
+  if (!bd_home_set_running(home, IDS[0], NULL, false, MEMORY[0])) {
+    fprintf(stderr, "home_capture: one-item running failed\n");
+    return 1;
+  }
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: one-item quick open failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (expect_quick_id(home, IDS[0], "one-item panel") != 0) {
+    return 1;
+  }
+  if (!write_png(gfx, out_dir, "home_quick_one")) {
+    return 1;
+  }
+
+  for (int i = 1; i < 8; ++i) {
+    if (!bd_home_set_running(home, IDS[i], NULL, i % 2 == 0, MEMORY[i])) {
+      fprintf(stderr, "home_capture: running %s failed\n", IDS[i]);
+      return 1;
+    }
+  }
+  if (expect_quick_id(home, IDS[0], "appended running list") != 0) {
+    return 1;
+  }
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: full quick open failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (expect_quick_id(home, IDS[0], "reopened full panel") != 0) {
+    return 1;
+  }
+  if (!write_png(gfx, out_dir, "home_quick_8_first")) {
+    return 1;
+  }
+
+  for (int i = 0; i < 7; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_DOWN);
+  }
+  if (expect_quick_id(home, IDS[7], "last running row") != 0) {
+    return 1;
+  }
+  now += 40;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_8_last")) {
+    return 1;
+  }
+  for (int i = 0; i < 4; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_DOWN);
+  }
+  if (expect_quick_id(home, NULL, "last control row") != 0) {
+    return 1;
+  }
+  now += 40;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_8_controls")) {
+    return 1;
+  }
+  if (bd_home_input(home, BD_HOME_ACTION_END)) {
+    fprintf(stderr, "home_capture: END acted on a control row\n");
+    return 1;
+  }
+
+  for (int i = 0; i < 4; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_UP);
+  }
+  if (expect_quick_id(home, IDS[7], "END target") != 0) {
+    return 1;
+  }
+  if (!bd_home_input(home, BD_HOME_ACTION_END) || !bd_home_dialog_open(home)) {
+    fprintf(stderr, "home_capture: quick end from full panel failed\n");
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_CANCEL);
+  if (bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CANCEL) {
+    fprintf(stderr, "home_capture: full-panel end cancel missing\n");
+    return 1;
+  }
+  now += 200;
+  bd_home_update(home, now);
+
+  bd_home_clear_running(home, IDS[5]);
+  if (expect_quick_id(home, IDS[7], "removal before selection") != 0) {
+    return 1;
+  }
+  now += 40;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_7_removed")) {
+    return 1;
+  }
+  bd_home_clear_running(home, IDS[7]);
+  if (expect_quick_id(home, NULL, "removed selected app") != 0) {
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_UP);
+  if (expect_quick_id(home, IDS[6], "row above removed app") != 0) {
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_DOWN);
+  if (bd_home_set_running(home, IDS[7], NULL, true, MEMORY[7]) != true) {
+    fprintf(stderr, "home_capture: re-add running failed\n");
+    return 1;
+  }
+  if (expect_quick_id(home, NULL, "control after append") != 0) {
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_UP);
+  if (expect_quick_id(home, IDS[7], "appended row") != 0) {
+    return 1;
+  }
+
+  bd_home_close_quick(home);
+  now += 220;
+  bd_home_update(home, now);
+  if (!bd_home_open_quick(home)) {
+    fprintf(stderr, "home_capture: second reopen failed\n");
+    return 1;
+  }
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (expect_quick_id(home, IDS[0], "second reopen selection") != 0) {
+    return 1;
+  }
+  for (int i = 0; i < 6; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_DOWN);
+  }
+  if (expect_quick_id(home, IDS[7], "resume target") != 0) {
+    return 1;
+  }
+  if (!bd_home_input(home, BD_HOME_ACTION_ACCEPT) ||
+      bd_home_launch_target(home) == NULL ||
+      strcmp(bd_home_launch_target(home), IDS[7]) != 0) {
+    fprintf(stderr, "home_capture: resume target id is wrong\n");
+    return 1;
+  }
+
+  bd_home_destroy(home);
+  return 0;
 }
 
 int main(int argc, char **argv) {
@@ -377,6 +617,63 @@ int main(int argc, char **argv) {
   if (!write_png(gfx, out_dir, "home_quick_running")) {
     return 1;
   }
+  if (bd_home_selected_id(home) == NULL ||
+      strcmp(bd_home_selected_id(home), "demo-03") != 0) {
+    fprintf(stderr, "home_capture: quick first-row id is wrong\n");
+    return 1;
+  }
+  for (int i = 0; i < 3; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_DOWN);
+  }
+  if (bd_home_selected_id(home) != NULL) {
+    fprintf(stderr, "home_capture: brightness row should have no app id\n");
+    return 1;
+  }
+  for (int i = 0; i < 3; ++i) {
+    bd_home_input(home, BD_HOME_ACTION_UP);
+  }
+  if (bd_home_selected_id(home) == NULL ||
+      strcmp(bd_home_selected_id(home), "demo-03") != 0) {
+    fprintf(stderr, "home_capture: quick navigation did not return to row 0\n");
+    return 1;
+  }
+  if (!bd_home_input(home, BD_HOME_ACTION_END) || !bd_home_dialog_open(home)) {
+    fprintf(stderr, "home_capture: quick end did not name the selected app\n");
+    return 1;
+  }
+  bd_home_input(home, BD_HOME_ACTION_CANCEL);
+  if (bd_home_take_dialog_result(home) != BD_HOME_DIALOG_RESULT_CANCEL) {
+    fprintf(stderr, "home_capture: quick end cancel result missing\n");
+    return 1;
+  }
+  now += 200;
+  bd_home_update(home, now);
+
+  g_quick_brightness = 0;
+  g_quick_volume = 100;
+  bd_home_refresh_quick(home);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_values_extreme")) {
+    return 1;
+  }
+  g_quick_brightness = 9;
+  g_quick_volume = 99;
+  bd_home_refresh_quick(home);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_values_high")) {
+    return 1;
+  }
+  g_quick_brightness = 70;
+  g_quick_volume = 45;
+  bd_home_refresh_quick(home);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
+
   status.wifi_known = false;
   status.wifi = false;
   status.battery_percent = -1;
@@ -530,6 +827,10 @@ int main(int argc, char **argv) {
   now += 340;
   settle(platform, gfx, home, now);
   if (!write_png(gfx, out_dir, "home_launch_340")) {
+    return 1;
+  }
+
+  if (capture_quick_extremes(platform, gfx, accent, out_dir) != 0) {
     return 1;
   }
 

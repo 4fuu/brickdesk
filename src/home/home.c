@@ -51,6 +51,8 @@ static int clamp_int(int value, int minimum, int maximum) {
   return value;
 }
 
+static void quick_scroll_to_selection(bd_home *home);
+
 static int floor_div(int value, int divisor) {
   int quotient = value / divisor;
   if (value < 0 && value % divisor != 0) {
@@ -744,6 +746,20 @@ bool bd_home_set_items(bd_home *home, const bd_home_item *items, int count) {
       home->entries[home->focus].id != NULL) {
     copy_text(old_focus, sizeof(old_focus), home->entries[home->focus].id);
   }
+  char old_quick_id[BD_HOME_ID_MAX];
+  old_quick_id[0] = '\0';
+  bool had_quick_running =
+      home->quick_open && home->quick_sel >= 0 &&
+      home->quick_sel < home->running_count;
+  if (had_quick_running) {
+    copy_text(old_quick_id, sizeof(old_quick_id),
+              home->running[home->quick_sel].id);
+  }
+  bool had_quick_control =
+      home->quick_open && home->quick_sel >= home->running_count &&
+      home->quick_sel < home->running_count + BD_HOME_QUICK_CONTROL_COUNT;
+  int old_quick_control =
+      had_quick_control ? home->quick_sel - home->running_count : -1;
 
   entries_free(home);
   home->focus = -1;
@@ -770,6 +786,7 @@ bool bd_home_set_items(bd_home *home, const bd_home_item *items, int count) {
     }
     update_running_flags(home);
     home->quick_sel = 0;
+    home->quick_scroll = 0;
     home->wall_width = 0;
     home->free_cells = 0;
     home->stats.total_items = 0;
@@ -897,10 +914,17 @@ bool bd_home_set_items(bd_home *home, const bd_home_item *items, int count) {
   home->stats.visible_items = 0;
   home->stats.drawn_items = 0;
   home->stats.buckets_visited = 0;
-  int max_selection = home->running_count + 3;
-  if (home->quick_sel > max_selection) {
-    home->quick_sel = max_selection;
+  int max_selection = home->running_count + BD_HOME_QUICK_CONTROL_COUNT - 1;
+  if (had_quick_running) {
+    int index = bd_home_running_index(home, old_quick_id);
+    if (index >= 0) {
+      home->quick_sel = index;
+    }
+  } else if (had_quick_control) {
+    home->quick_sel = home->running_count + old_quick_control;
   }
+  home->quick_sel = clamp_int(home->quick_sel, 0, max_selection);
+  quick_scroll_to_selection(home);
   bd_home_damage_all(home);
   return true;
 }
@@ -1405,6 +1429,16 @@ bool bd_home_set_running(bd_home *home, const char *id,
     return false;
   }
   int existing = bd_home_running_index(home, id);
+  bool panel_open = home->quick_open || home->quick_anim;
+  int old_running_count = home->running_count;
+  int old_sel = home->quick_sel;
+  char selected_id[BD_HOME_ID_MAX];
+  selected_id[0] = '\0';
+  bool selected_running =
+      panel_open && old_sel >= 0 && old_sel < old_running_count;
+  if (selected_running) {
+    copy_text(selected_id, sizeof(selected_id), home->running[old_sel].id);
+  }
   bd_home_running updated;
   memset(&updated, 0, sizeof(updated));
   if (existing >= 0) {
@@ -1446,6 +1480,21 @@ bool bd_home_set_running(bd_home *home, const char *id,
   int slot = home->running_count++;
   home->running[slot] = updated;
   update_running_flags(home);
+  if (panel_open) {
+    int max_selection = home->running_count + BD_HOME_QUICK_CONTROL_COUNT - 1;
+    if (selected_running) {
+      int index = bd_home_running_index(home, selected_id);
+      if (index >= 0) {
+        home->quick_sel = index;
+      }
+    } else if (home->running_count > old_running_count &&
+               old_sel >= old_running_count) {
+      /* A new app above the controls pushes the same control down one row. */
+      home->quick_sel = old_sel + (home->running_count - old_running_count);
+    }
+    home->quick_sel = clamp_int(home->quick_sel, 0, max_selection);
+    quick_scroll_to_selection(home);
+  }
   bd_home_damage_item(home, item);
   if (home->quick_open || home->quick_anim) {
     damage_quick_panel(home);
@@ -1492,14 +1541,19 @@ void bd_home_clear_running(bd_home *home, const char *id) {
     return;
   }
   int item = home->running[index].item_index;
+  bool panel_open = home->quick_open || home->quick_anim;
+  int old_sel = home->quick_sel;
   running_remove_at(home, index);
   update_running_flags(home);
   bd_home_damage_item(home, item);
-  if (home->quick_open || home->quick_anim) {
+  if (panel_open) {
+    if (index < old_sel) {
+      --home->quick_sel;
+    }
+    int max_selection = home->running_count + BD_HOME_QUICK_CONTROL_COUNT - 1;
+    home->quick_sel = clamp_int(home->quick_sel, 0, max_selection);
+    quick_scroll_to_selection(home);
     damage_quick_panel(home);
-  }
-  if (home->quick_sel > home->running_count + 3) {
-    home->quick_sel = home->running_count + 3;
   }
   if (home->closing_active && home->closing_item == item) {
     home->closing_active = false;
@@ -1686,6 +1740,61 @@ bd_rect bd_home_quick_panel_rect(const bd_home *home) {
   return bd_rect_make(x, 0, 402, home->height);
 }
 
+bd_home_quick_layout bd_home_quick_layout_get(const bd_home *home) {
+  bd_home_quick_layout layout;
+  memset(&layout, 0, sizeof(layout));
+  if (home == NULL) {
+    return layout;
+  }
+  layout.rows_start = BD_HOME_QUICK_ROWS_START;
+  int natural_rows = home->running_count > 0
+                         ? home->running_count * BD_HOME_QUICK_ROW_H
+                         : 30;
+  int natural_controls = layout.rows_start + natural_rows +
+                         BD_HOME_QUICK_ROWS_GAP + BD_HOME_QUICK_FOOT_GAP;
+  int controls_h = BD_HOME_QUICK_CONTROL_COUNT * BD_HOME_QUICK_CONTROL_H;
+  int bottom = home->height - BD_HOME_QUICK_BOTTOM_PAD;
+  /* Default quotas keep their natural flow; a full list pins the controls
+   * inside the panel and turns the run section into a bounded viewport. */
+  layout.controls_y = natural_controls;
+  if (layout.controls_y + controls_h > bottom) {
+    layout.controls_y = bottom - controls_h;
+  }
+  if (layout.controls_y < 0) {
+    layout.controls_y = 0;
+  }
+  layout.foot_baseline = layout.controls_y - BD_HOME_QUICK_FOOT_GAP;
+  int available =
+      layout.foot_baseline - BD_HOME_QUICK_ROWS_GAP - layout.rows_start;
+  layout.visible_rows =
+      available > 0 ? available / BD_HOME_QUICK_ROW_H : 0;
+  if (home->running_count > 0 && layout.visible_rows < 1) {
+    layout.visible_rows = 1;
+  }
+  if (layout.visible_rows > home->running_count) {
+    layout.visible_rows = home->running_count;
+  }
+  layout.max_scroll = home->running_count > layout.visible_rows
+                          ? home->running_count - layout.visible_rows
+                          : 0;
+  layout.scroll = clamp_int(home->quick_scroll, 0, layout.max_scroll);
+  return layout;
+}
+
+static void quick_scroll_to_selection(bd_home *home) {
+  bd_home_quick_layout layout = bd_home_quick_layout_get(home);
+  if (home->quick_sel >= 0 && home->quick_sel < home->running_count) {
+    int visible = layout.visible_rows > 0 ? layout.visible_rows : 1;
+    if (home->quick_sel < layout.scroll) {
+      home->quick_scroll = home->quick_sel;
+    } else if (home->quick_sel >= layout.scroll + visible) {
+      home->quick_scroll = home->quick_sel - visible + 1;
+    }
+  }
+  layout = bd_home_quick_layout_get(home);
+  home->quick_scroll = layout.scroll;
+}
+
 bool bd_home_open_quick(bd_home *home) {
   if (home == NULL || home->quick_open) {
     return false;
@@ -1697,6 +1806,7 @@ bool bd_home_open_quick(bd_home *home) {
   home->quick_anim = true;
   home->quick_start = home->now_ms;
   home->quick_sel = home->running_count > 0 ? 0 : home->running_count;
+  home->quick_scroll = 0;
   if (current <= 0.0f) {
     bd_home_damage_all(home);
   } else {
@@ -1965,12 +2075,14 @@ bool bd_home_input(bd_home *home, bd_home_action action) {
       case BD_HOME_ACTION_UP:
         if (home->quick_sel > 0) {
           --home->quick_sel;
+          quick_scroll_to_selection(home);
           damage_quick_panel(home);
         }
         return true;
       case BD_HOME_ACTION_DOWN:
         if (home->quick_sel + 1 < rows) {
           ++home->quick_sel;
+          quick_scroll_to_selection(home);
           damage_quick_panel(home);
         }
         return true;

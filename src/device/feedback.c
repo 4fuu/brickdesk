@@ -320,18 +320,51 @@ static bool active_trigger(const char *text, char *out, size_t out_size) {
   return out[0] != '\0';
 }
 
+static bd_feedback_result led_check_trigger(
+    const char *directory, const bd_feedback_file_io *file_io,
+    bd_feedback_error *error) {
+  char trigger_path[BD_FEEDBACK_PATH_MAX];
+  if (!bd_feedback_path_join(directory, "trigger", trigger_path,
+                             sizeof(trigger_path))) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "LED path is too long: %s", directory);
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  char text[BD_FEEDBACK_MESSAGE_MAX];
+  if (!file_io->read(file_io->user, trigger_path, text, sizeof(text))) {
+    /* A missing trigger attribute is valid: the LED has no trigger support. */
+    if (!bd_feedback_file_exists(trigger_path)) {
+      return BD_FEEDBACK_OK;
+    }
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "cannot read the LED trigger under %s", directory);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  char trigger[BD_FEEDBACK_NAME_MAX];
+  if (!active_trigger(text, trigger, sizeof(trigger))) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "cannot parse the LED trigger under %s", directory);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  if (strcmp(trigger, "none") != 0) {
+    bd_feedback_set_error(
+        error, BD_FEEDBACK_ERR_UNSUPPORTED,
+        "LED %s has active trigger '%s'; set trigger to none first", directory,
+        trigger);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  return BD_FEEDBACK_OK;
+}
+
 static bd_feedback_result probe_led_directory(
     bd_feedback_led *led, const char *directory, int max_percent,
     const bd_feedback_file_io *file_io, bd_feedback_error *error) {
   char max_path[BD_FEEDBACK_PATH_MAX];
   char value_path[BD_FEEDBACK_PATH_MAX];
-  char trigger_path[BD_FEEDBACK_PATH_MAX];
   if (!bd_feedback_path_join(directory, "max_brightness", max_path,
                              sizeof(max_path)) ||
       !bd_feedback_path_join(directory, "brightness", value_path,
-                             sizeof(value_path)) ||
-      !bd_feedback_path_join(directory, "trigger", trigger_path,
-                             sizeof(trigger_path))) {
+                             sizeof(value_path))) {
     bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
                           "LED path is too long: %s", directory);
     return BD_FEEDBACK_ERR_ARGUMENT;
@@ -361,25 +394,10 @@ static bd_feedback_result probe_led_directory(
     return BD_FEEDBACK_ERR_UNSUPPORTED;
   }
 
-  if (file_io->read(file_io->user, trigger_path, text, sizeof(text))) {
-    char trigger[BD_FEEDBACK_NAME_MAX];
-    if (!active_trigger(text, trigger, sizeof(trigger))) {
-      bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
-                            "cannot parse the LED trigger under %s",
-                            directory);
-      return BD_FEEDBACK_ERR_UNSUPPORTED;
-    }
-    if (strcmp(trigger, "none") != 0) {
-      bd_feedback_set_error(
-          error, BD_FEEDBACK_ERR_UNSUPPORTED,
-          "LED %s has active trigger '%s'; set trigger to none first",
-          directory, trigger);
-      return BD_FEEDBACK_ERR_UNSUPPORTED;
-    }
-  } else if (bd_feedback_file_exists(trigger_path)) {
-    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
-                          "cannot read the LED trigger under %s", directory);
-    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  bd_feedback_result trigger_result =
+      led_check_trigger(directory, file_io, error);
+  if (trigger_result != BD_FEEDBACK_OK) {
+    return trigger_result;
   }
 
   const char *base = strrchr(directory, '/');
@@ -677,6 +695,11 @@ bd_feedback_result bd_feedback_led_set(bd_feedback_led *led, int percent,
     bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
                           "LED file I/O is not initialised");
     return BD_FEEDBACK_ERR_STATE;
+  }
+  bd_feedback_result trigger_result =
+      led_check_trigger(led->device, file_io, error);
+  if (trigger_result != BD_FEEDBACK_OK) {
+    return trigger_result;
   }
   char path[BD_FEEDBACK_PATH_MAX];
   bd_feedback_result result = led_value_path(led, path, sizeof(path), error);

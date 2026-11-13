@@ -46,7 +46,7 @@
 | 标准 LED 读取 | 已实现，宿主测试 | `/sys/class/leds/<dev>/brightness`、`max_brightness` | 读原始值并换算 0..100 |
 | 标准 LED 设置 | 已实现，宿主测试 | 同上，且 `brightness` 可写 | 写入后回读，必须完全一致 |
 | LED 0% | 已实现，宿主测试 | 同上 | 写 raw 0；不自动加最小可见值 |
-| LED trigger 门禁 | 已实现，宿主测试 | `trigger` 可读 | 活动 trigger 不是 `none` 时 `unsupported` |
+| LED trigger 门禁 | 已实现，宿主测试 | `trigger` 可读 | probe 时及每次写前复查；活动 trigger 不是 `none` 时 `unsupported` |
 | LED 自动发现 | 已实现，宿主测试 | `allow_auto_discover=true` | 按名称排序，选第一个可用项；默认关闭 |
 | 标准 LED 多色 | 明确不支持 | — | 4.9.191 无 multicolor 文档；独立颜色 LED 可分别打开 |
 | `/sys/class/led_anim` | 只读探测/blocker | 目录存在 | 不写效果、帧、分区或 `max_scale` |
@@ -151,6 +151,11 @@ bd_feedback_result bd_feedback_rumble_close(
 - 每次 `play()` 会先停止并删除旧效果，再上传新效果。`stop()` 在打开且没有活动
   效果时幂等；已 close 的句柄返回 `invalid-state`。`close()` 会停止、删除并
   关闭 fd。
+- 库本身没有内部线程或定时器；它只负责上传/播放/停止。`bd-feedback` CLI 的
+  `rumble play` 会在播放成功后保持 event fd 打开，等待请求的 `MS`，然后才
+  `close()` 停止/删除。播放失败（包括参数/能力/上传/EV_FF 写失败）不会等待，
+  但仍会 close 清理；SIGINT/SIGTERM 会中断等待并走同一清理路径。0 强度是
+  stop，不等待。
 
 evdev 探测规则：
 
@@ -183,8 +188,10 @@ evdev 探测规则：
 
 实现中的 trigger 门禁不是内核文档强制要求，而是“不假成功”的选择：当
 `trigger` 显示 `[heartbeat]` 等活动触发器时，直接写 `brightness` 可能被内核
-覆盖。本实现返回 `unsupported` 并提示先把 trigger 设为 `none`；本模块**不写**
-trigger。
+覆盖。本实现因此在 probe 时检查，并在**每次 `set()` 写 brightness 之前重新
+读取** `trigger`；如果探测后被其他服务切到活动 trigger，`set()` 返回
+`unsupported` 且不写 brightness。缺失 `trigger` 属性仍然支持，表示该 LED 没有
+trigger 控制。本模块**不写** trigger。
 
 ### 4.2 evdev force feedback
 
@@ -302,6 +309,11 @@ bd-feedback --event /dev/input/eventN --rumble-max 30 --rumble-max-ms 200 \
 bd-feedback --event /dev/input/eventN rumble stop
 ```
 
+`rumble play` 在 `bd_feedback_rumble_play()` 成功后不会立即 close：它保持 event
+fd 打开并等待 `MS`（默认 200ms），然后停止/删除并 close。播放失败不会等待，
+但仍会 close 清理；Ctrl-C/SIGINT/SIGTERM 会中断等待并清理。实际等待/清理顺序
+由宿主回归测试用假 evdev 执行验证，不由源码检查代替。
+
 宿主无硬件时的实际输出：
 
 ```text
@@ -331,7 +343,7 @@ ctest --test-dir build-host -R device_feedback --output-on-failure
 ```
 
 本次宿主结果：`device_feedback` 通过；随后完整
-`ctest --test-dir build-host --output-on-failure` 为 39/39 通过（RelWithDebInfo，
+`ctest --test-dir build-host --output-on-failure` 为 40/40 通过（RelWithDebInfo，
 `BRICKDESK_WERROR=ON`）。同一测试用
 `-fsanitize=address,undefined -fno-omit-frame-pointer` 单独编译运行也通过，
 没有 ASan/UBSan 报告。
@@ -345,6 +357,14 @@ ctest --test-dir build-host -R device_feedback --output-on-failure
 - raw/percent 往返、0/100 边界、配置上限拒绝且不写、写失败、回读不一致、
   只读 LED、缺文件；
 - 厂商 `led_anim` 目录只读探测和 blocker，验证 `max_scale` 未被修改；
+- probe 后 trigger 切到活动值，`set()` 复查拒绝且 brightness 不变；缺 trigger
+  时 `set()` 仍可写；
+- CLI `rumble play` 生命周期：fake evdev 上验证 wait 时 fd 仍打开、请求时长、
+  wait 完成后才 stop/erase/close、事件顺序、播放失败不等待、0 强度不等待、
+  中断仍清理；真实 `bd_feedback_cli_wait_ms` 的 40ms 等待和 SIGALRM 中断；
+- `device_feedback_cli` 用 test-only LD_PRELOAD 假 evdev 运行**真实
+  `bd-feedback` 进程**：200ms 播放期间不 close，stop/erase/close 顺序和时长；
+  上传失败立即退出且不等待；SIGINT 返回 130 并完成 stop/erase/close；
 - evdev 探测的 `EV_FF`/`FF_RUMBLE`/效果槽缺失、event 缺失/权限失败/ioctl 失败；
 - 效果上传参数（type、id、strong/weak、replay.length、trigger）、播放、
   停止、删除、重复播放、0 强度；
@@ -364,9 +384,10 @@ export TRIMUI_SYSROOT=/tmp/trimui-sysroot
 scripts/build-target.sh --build-dir /tmp/bd-target-build
 ```
 
-结果：146 个构建步骤全部成功，`dist/bin/bd-feedback` 存在；
+结果：152 个构建步骤全部成功，`dist/bin/bd-feedback` 存在；
 `bd-feedback` 为 aarch64 ELF，max GLIBC 2.17（限制 2.23），只 NEEDED
-`libc.so.6`。同一个 target 构建也编译了 `tests/bd_device_feedback_test`。
+`libc.so.6`。同一个 target 构建也编译了 `tests/bd_device_feedback_test`、
+`tests/bd_feedback_cli_process_test` 和 test-only fake evdev preload（不进入发布包）。
 `bd-feedback` 已加入 `scripts/build-target.sh` 的 `dist/bin` 与 GLIBC 检查、
 `.github/workflows/target.yml` 的 `test -x`/`file`/`check-glibc` 检查，以及
 发布包和离线包测试。
@@ -450,5 +471,8 @@ NEEDED: libc.so.6
 - `src/device/feedback.c`
 - `src/device/feedback_linux.c`
 - `tools/bd-feedback.c`
+- `tools/bd-feedback-play.c` / `tools/bd-feedback-play.h`
 - `tests/device_feedback_test.c`
+- `tests/bd_feedback_cli_process_test.c`
+- `tests/fake_evdev_preload.c`
 - `docs/device-feedback.md`（本文）

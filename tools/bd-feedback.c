@@ -1,8 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "brickdesk/device_feedback.h"
+#include "bd-feedback-play.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +43,9 @@ static void usage(FILE *out) {
           "\n"
           "probe is read-only.  led set/off and rumble play/stop perform only\n"
           "the explicitly requested standard Linux operation; vendor\n"
-          "/sys/class/led_anim and /sys/class/motor paths are never written.\n");
+          "/sys/class/led_anim and /sys/class/motor paths are never written.\n"
+          "rumble play keeps the event node open for MS, then stops/erases it;\n"
+          "SIGINT/SIGTERM interrupts the wait and still cleans up.\n");
 }
 
 static bool parse_int(const char *text, int *out) {
@@ -233,6 +237,43 @@ static int command_probe(const options *options) {
   return 0;
 }
 
+#define BD_FEEDBACK_PLAY_SIGNAL_COUNT 4
+
+static volatile sig_atomic_t g_play_signal;
+
+static void play_signal_handler(int signum) {
+  g_play_signal = signum;
+}
+
+static bool install_play_signal_handlers(
+    struct sigaction old[BD_FEEDBACK_PLAY_SIGNAL_COUNT]) {
+  static const int signals[BD_FEEDBACK_PLAY_SIGNAL_COUNT] = {
+      SIGINT, SIGTERM, SIGHUP, SIGQUIT};
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = play_signal_handler;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  for (int i = 0; i < BD_FEEDBACK_PLAY_SIGNAL_COUNT; ++i) {
+    if (sigaction(signals[i], &action, &old[i]) != 0) {
+      for (int j = 0; j < i; ++j) {
+        sigaction(signals[j], &old[j], NULL);
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+static void restore_play_signal_handlers(
+    struct sigaction old[BD_FEEDBACK_PLAY_SIGNAL_COUNT]) {
+  static const int signals[BD_FEEDBACK_PLAY_SIGNAL_COUNT] = {
+      SIGINT, SIGTERM, SIGHUP, SIGQUIT};
+  for (int i = 0; i < BD_FEEDBACK_PLAY_SIGNAL_COUNT; ++i) {
+    sigaction(signals[i], &old[i], NULL);
+  }
+}
+
 static int command_led(const options *options, int argc, char **argv) {
   bd_feedback_led_config config;
   fill_led_config(options, &config);
@@ -292,10 +333,44 @@ static int command_rumble(const options *options, int argc, char **argv) {
     } else if (argc >= 3 && !parse_int(argv[2], &duration)) {
       fprintf(stderr, "bd-feedback: invalid duration '%s'\n", argv[2]);
       status = 2;
-    } else if (bd_feedback_rumble_play(&rumble, strength, duration, &error) !=
-               BD_FEEDBACK_OK) {
-      print_error("rumble play", &error);
-      status = 1;
+    } else {
+      struct sigaction old[BD_FEEDBACK_PLAY_SIGNAL_COUNT];
+      g_play_signal = 0;
+      if (!install_play_signal_handlers(old)) {
+        fprintf(stderr, "bd-feedback: cannot install signal handlers: %s\n",
+                strerror(errno));
+        bd_feedback_error close_error;
+        bd_feedback_error_clear(&close_error);
+        if (bd_feedback_rumble_close(&rumble, &close_error) !=
+            BD_FEEDBACK_OK) {
+          print_error("rumble close", &close_error);
+        }
+        return 1;
+      }
+      bd_feedback_cli_play_report report;
+      bd_feedback_cli_play_status play_status = bd_feedback_cli_play_and_wait(
+          &rumble, strength, duration, bd_feedback_cli_wait_ms,
+          (void *)&g_play_signal, &report);
+      int signum = (int)g_play_signal;
+      restore_play_signal_handlers(old);
+      if (report.play_result != BD_FEEDBACK_OK) {
+        print_error("rumble play", &report.play_error);
+      }
+      if (report.wait_result == BD_FEEDBACK_CLI_WAIT_INTERRUPTED) {
+        fprintf(stderr,
+                "bd-feedback: rumble play interrupted by signal %d; stopped "
+                "and cleaned up\n",
+                signum);
+      } else if (report.wait_result == BD_FEEDBACK_CLI_WAIT_ERROR) {
+        fprintf(stderr, "bd-feedback: rumble play: playback wait failed\n");
+      }
+      if (report.close_result != BD_FEEDBACK_OK) {
+        print_error("rumble close", &report.close_error);
+      }
+      if (play_status == BD_FEEDBACK_CLI_PLAY_INTERRUPTED) {
+        return signum > 0 ? 128 + signum : 130;
+      }
+      return play_status == BD_FEEDBACK_CLI_PLAY_OK ? 0 : 1;
     }
   } else if (strcmp(argv[0], "stop") == 0) {
     if (bd_feedback_rumble_stop(&rumble, &error) != BD_FEEDBACK_OK) {

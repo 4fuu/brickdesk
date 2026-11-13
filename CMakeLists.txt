@@ -454,7 +454,10 @@ target_link_libraries(brickdesk-config PRIVATE brickdesk_config brickdesk_warnin
 add_executable(bd-av tools/bd-av.c)
 target_link_libraries(bd-av PRIVATE brickdesk_device brickdesk_warnings)
 
-add_executable(bd-feedback tools/bd-feedback.c)
+add_executable(bd-feedback
+  tools/bd-feedback.c
+  tools/bd-feedback-play.c
+)
 target_link_libraries(bd-feedback PRIVATE brickdesk_feedback brickdesk_warnings)
 
 # --- tests --------------------------------------------------------------

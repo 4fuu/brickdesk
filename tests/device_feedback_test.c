@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "brickdesk/device_feedback.h"
+#include "bd-feedback-play.h"
 #include "device_feedback_internal.h"
 
 #include <errno.h>
@@ -13,9 +14,17 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 static int g_failures;
+static volatile sig_atomic_t g_alarm_stop;
+
+static void test_alarm_handler(int signum) {
+  (void)signum;
+  g_alarm_stop = 1;
+}
 
 #define CHECK(condition, ...)                             \
   do {                                                    \
@@ -215,6 +224,14 @@ static bool fake_file_writable(void *user, const char *path) {
 /* Fake evdev force-feedback device                                       */
 /* ---------------------------------------------------------------------- */
 
+typedef enum fake_evdev_event {
+  FAKE_EV_UPLOAD = 1,
+  FAKE_EV_PLAY,
+  FAKE_EV_STOP,
+  FAKE_EV_ERASE,
+  FAKE_EV_CLOSE
+} fake_evdev_event;
+
 typedef struct fake_evdev {
   int fd;
   int open_calls;
@@ -239,10 +256,27 @@ typedef struct fake_evdev {
   bool rmff_fail;
   int next_effect_id;
   int last_rmff;
+  int events[64];
+  int event_count;
   char name[BD_FEEDBACK_NAME_MAX];
   struct ff_effect last_effect;
   struct input_event last_write;
 } fake_evdev;
+
+static void fake_evdev_log(fake_evdev *fake, fake_evdev_event event) {
+  if (fake->event_count < (int)(sizeof(fake->events) / sizeof(fake->events[0]))) {
+    fake->events[fake->event_count] = (int)event;
+  }
+  ++fake->event_count;
+}
+
+static int fake_evdev_event_at(const fake_evdev *fake, int index) {
+  if (index < 0 || index >= fake->event_count ||
+      index >= (int)(sizeof(fake->events) / sizeof(fake->events[0]))) {
+    return -1;
+  }
+  return fake->events[index];
+}
 
 static void fake_evdev_init(fake_evdev *fake) {
   memset(fake, 0, sizeof(*fake));
@@ -268,6 +302,7 @@ static int fake_evdev_close(void *user, int fd) {
   fake_evdev *fake = (fake_evdev *)user;
   (void)fd;
   ++fake->close_calls;
+  fake_evdev_log(fake, FAKE_EV_CLOSE);
   return 0;
 }
 
@@ -322,6 +357,7 @@ static int fake_evdev_ioctl(void *user, int fd, unsigned long request,
     int id = fake->negative_id ? -1 : fake->next_effect_id++;
     effect->id = (short)id;
     memcpy(&fake->last_effect, effect, sizeof(*effect));
+    fake_evdev_log(fake, FAKE_EV_UPLOAD);
     return 0;
   }
   if (nr == 0x81u) {
@@ -331,6 +367,7 @@ static int fake_evdev_ioctl(void *user, int fd, unsigned long request,
     }
     ++fake->rmff_calls;
     fake->last_rmff = (int)(intptr_t)arg;
+    fake_evdev_log(fake, FAKE_EV_ERASE);
     return 0;
   }
   errno = ENOTTY;
@@ -348,6 +385,10 @@ static ssize_t fake_evdev_write(void *user, int fd, const void *data,
   }
   if (size == sizeof(fake->last_write)) {
     memcpy(&fake->last_write, data, size);
+    if (fake->last_write.type == EV_FF) {
+      fake_evdev_log(fake, fake->last_write.value == 0 ? FAKE_EV_STOP
+                                                       : FAKE_EV_PLAY);
+    }
   }
   return (ssize_t)size;
 }
@@ -361,6 +402,28 @@ static bd_feedback_evdev_io make_fake_evdev_io(fake_evdev *fake) {
   io.ioctl = fake_evdev_ioctl;
   io.write = fake_evdev_write;
   return io;
+}
+
+typedef struct fake_cli_wait {
+  int calls;
+  int requested_ms;
+  bd_feedback_rumble *rumble;
+  fake_evdev *evdev;
+  bool fd_open_at_wait;
+  bool active_at_wait;
+  int close_calls_at_wait;
+  bd_feedback_cli_wait_result result;
+} fake_cli_wait;
+
+static bd_feedback_cli_wait_result fake_cli_wait_fn(void *user,
+                                                     int duration_ms) {
+  fake_cli_wait *wait = (fake_cli_wait *)user;
+  ++wait->calls;
+  wait->requested_ms = duration_ms;
+  wait->fd_open_at_wait = wait->rumble->internal.fd >= 0;
+  wait->active_at_wait = wait->rumble->active;
+  wait->close_calls_at_wait = wait->evdev->close_calls;
+  return wait->result;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -436,6 +499,37 @@ static void test_led_real_sysfs(void) {
   CHECK_RESULT(bd_feedback_led_get(&capped, &percent, &error),
                BD_FEEDBACK_OK);
   CHECK(percent == 40, "capped readback %d", percent);
+
+  char before[64];
+  CHECK(read_file(path, before, sizeof(before)), "read pre-trigger brightness");
+  CHECK(write_fixture(root, "sys/class/leds/test-led/trigger",
+                      "[heartbeat] none timer\n"),
+        "switch to active trigger after probe");
+  CHECK_RESULT(bd_feedback_led_set(&led, 50, &error),
+               BD_FEEDBACK_ERR_UNSUPPORTED);
+  CHECK(strstr(error.message, "heartbeat") != NULL,
+        "set recheck error mentions heartbeat: %s", error.message);
+  char after[64];
+  CHECK(read_file(path, after, sizeof(after)), "read post-trigger brightness");
+  CHECK(strcmp(before, after) == 0,
+        "set with active trigger changed brightness: '%s' -> '%s'", before,
+        after);
+  CHECK(write_fixture(root, "sys/class/leds/test-led/trigger",
+                      "[none] timer heartbeat\n"),
+        "restore trigger after set recheck");
+
+  char trigger_path[512];
+  CHECK(join_path(trigger_path, sizeof(trigger_path), root,
+                  "sys/class/leds/test-led/trigger"),
+        "trigger path");
+  CHECK(unlink(trigger_path) == 0, "remove trigger file");
+  CHECK_RESULT(bd_feedback_led_probe(&led, &config, &error), BD_FEEDBACK_OK);
+  CHECK_RESULT(bd_feedback_led_set(&led, 30, &error), BD_FEEDBACK_OK);
+  CHECK(read_file(path, text, sizeof(text)) && strcmp(text, "77") == 0,
+        "set without trigger wrote '%s'", text);
+  CHECK(write_fixture(root, "sys/class/leds/test-led/trigger",
+                      "[none] timer heartbeat\n"),
+        "restore trigger after missing-trigger test");
 
   CHECK(write_fixture(root, "sys/class/leds/test-led/trigger",
                       "[heartbeat] none timer\n"),
@@ -593,6 +687,19 @@ static void test_led_fake_io(void) {
   int percent = 0;
   CHECK_RESULT(bd_feedback_led_get(&led, &percent, &error), BD_FEEDBACK_OK);
   CHECK(percent == 50, "fake LED read %d", percent);
+
+  int writes_before_trigger = files.write_calls;
+  files.has_trigger = true;
+  strcpy(files.trigger, "[timer] none");
+  CHECK_RESULT(bd_feedback_led_set(&led, 20, &error),
+               BD_FEEDBACK_ERR_UNSUPPORTED);
+  CHECK(files.write_calls == writes_before_trigger,
+        "set recheck did not write a triggered LED");
+  CHECK(strcmp(files.brightness, "128") == 0,
+        "set recheck left brightness unchanged");
+  CHECK(strstr(error.message, "timer") != NULL,
+        "set recheck error mentions trigger: %s", error.message);
+  files.has_trigger = false;
 
   files.write_fail = true;
   CHECK_RESULT(bd_feedback_led_set(&led, 20, &error), BD_FEEDBACK_ERR_IO);
@@ -1042,6 +1149,261 @@ static void test_rumble_vendor_motor(void) {
   remove_temp_dir(root);
 }
 
+static void test_cli_play_lifecycle(void) {
+  bd_feedback_rumble_config config = rumble_config("/nonexistent-bd-feedback");
+  bd_feedback_error error;
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    fake_cli_wait wait;
+    memset(&wait, 0, sizeof(wait));
+    wait.rumble = &rumble;
+    wait.evdev = &fake;
+    wait.result = BD_FEEDBACK_CLI_WAIT_COMPLETE;
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 50, 200, fake_cli_wait_fn, &wait, &report);
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_OK, "CLI play status %d", status);
+    CHECK(wait.calls == 1, "CLI waited once, got %d", wait.calls);
+    CHECK(wait.requested_ms == 200, "CLI waited %d ms, expected 200",
+          wait.requested_ms);
+    CHECK(wait.fd_open_at_wait, "CLI closed the fd before the wait");
+    CHECK(wait.active_at_wait, "CLI effect was inactive during the wait");
+    CHECK(wait.close_calls_at_wait == 0,
+          "CLI closed the event node before the wait");
+    CHECK(fake.close_calls == 1, "CLI close count %d", fake.close_calls);
+    CHECK(report.waited, "CLI report says it did not wait");
+    CHECK(report.play_result == BD_FEEDBACK_OK &&
+              report.close_result == BD_FEEDBACK_OK &&
+              report.wait_result == BD_FEEDBACK_CLI_WAIT_COMPLETE,
+          "CLI report results play=%s close=%s wait=%d",
+          bd_feedback_result_name(report.play_result),
+          bd_feedback_result_name(report.close_result), report.wait_result);
+    CHECK(fake.event_count == 5, "CLI event count %d", fake.event_count);
+    CHECK(fake_evdev_event_at(&fake, 0) == FAKE_EV_UPLOAD,
+          "CLI event 0 %d", fake_evdev_event_at(&fake, 0));
+    CHECK(fake_evdev_event_at(&fake, 1) == FAKE_EV_PLAY,
+          "CLI event 1 %d", fake_evdev_event_at(&fake, 1));
+    CHECK(fake_evdev_event_at(&fake, 2) == FAKE_EV_STOP,
+          "CLI event 2 %d", fake_evdev_event_at(&fake, 2));
+    CHECK(fake_evdev_event_at(&fake, 3) == FAKE_EV_ERASE,
+          "CLI event 3 %d", fake_evdev_event_at(&fake, 3));
+    CHECK(fake_evdev_event_at(&fake, 4) == FAKE_EV_CLOSE,
+          "CLI event 4 %d", fake_evdev_event_at(&fake, 4));
+  }
+
+  {
+    volatile sig_atomic_t stop = 0;
+    struct timespec start;
+    struct timespec end;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0, "clock start");
+    bd_feedback_cli_wait_result wait_result =
+        bd_feedback_cli_wait_ms((void *)&stop, 40);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &end) == 0, "clock end");
+    long long elapsed_ms =
+        (long long)(end.tv_sec - start.tv_sec) * 1000 +
+        (long long)(end.tv_nsec - start.tv_nsec) / 1000000;
+    CHECK(wait_result == BD_FEEDBACK_CLI_WAIT_COMPLETE,
+          "real wait result %d", wait_result);
+    CHECK(elapsed_ms >= 30 && elapsed_ms < 1000,
+          "real wait elapsed %lld ms", elapsed_ms);
+    stop = 1;
+    wait_result = bd_feedback_cli_wait_ms((void *)&stop, 200);
+    CHECK(wait_result == BD_FEEDBACK_CLI_WAIT_INTERRUPTED,
+          "interrupted wait result %d", wait_result);
+  }
+
+  {
+    struct sigaction old_action;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = test_alarm_handler;
+    sigemptyset(&action.sa_mask);
+    CHECK(sigaction(SIGALRM, &action, &old_action) == 0,
+          "install SIGALRM handler");
+    struct itimerval timer;
+    memset(&timer, 0, sizeof(timer));
+    timer.it_value.tv_usec = 20000;
+    CHECK(setitimer(ITIMER_REAL, &timer, NULL) == 0, "arm SIGALRM");
+    struct timespec start;
+    struct timespec end;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0, "signal clock start");
+    g_alarm_stop = 0;
+    bd_feedback_cli_wait_result wait_result =
+        bd_feedback_cli_wait_ms((void *)&g_alarm_stop, 200);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &end) == 0, "signal clock end");
+    long long elapsed_ms =
+        (long long)(end.tv_sec - start.tv_sec) * 1000 +
+        (long long)(end.tv_nsec - start.tv_nsec) / 1000000;
+    memset(&timer, 0, sizeof(timer));
+    setitimer(ITIMER_REAL, &timer, NULL);
+    sigaction(SIGALRM, &old_action, NULL);
+    CHECK(wait_result == BD_FEEDBACK_CLI_WAIT_INTERRUPTED,
+          "signal wait result %d", wait_result);
+    CHECK(elapsed_ms < 180, "signal wait elapsed %lld ms", elapsed_ms);
+  }
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    volatile sig_atomic_t stop = 0;
+    struct timespec start;
+    struct timespec end;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0, "play clock start");
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 50, 40, bd_feedback_cli_wait_ms, (void *)&stop, &report);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &end) == 0, "play clock end");
+    long long elapsed_ms =
+        (long long)(end.tv_sec - start.tv_sec) * 1000 +
+        (long long)(end.tv_nsec - start.tv_nsec) / 1000000;
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_OK, "real-wait CLI status %d",
+          status);
+    CHECK(elapsed_ms >= 30 && elapsed_ms < 1000,
+          "real-wait CLI elapsed %lld ms", elapsed_ms);
+    CHECK(report.waited, "real-wait report waited");
+    CHECK(fake.close_calls == 1, "real-wait close %d", fake.close_calls);
+    CHECK(fake_evdev_event_at(&fake, 2) == FAKE_EV_STOP,
+          "real-wait cleanup stop");
+    CHECK(fake_evdev_event_at(&fake, 3) == FAKE_EV_ERASE,
+          "real-wait cleanup erase");
+    CHECK(fake_evdev_event_at(&fake, 4) == FAKE_EV_CLOSE,
+          "real-wait cleanup close");
+  }
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    fake_cli_wait wait;
+    memset(&wait, 0, sizeof(wait));
+    wait.rumble = &rumble;
+    wait.evdev = &fake;
+    wait.result = BD_FEEDBACK_CLI_WAIT_INTERRUPTED;
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 50, 200, fake_cli_wait_fn, &wait, &report);
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_INTERRUPTED,
+          "interrupted CLI status %d", status);
+    CHECK(wait.calls == 1, "interrupted CLI wait calls %d", wait.calls);
+    CHECK(fake.close_calls == 1, "interrupted CLI close %d",
+          fake.close_calls);
+    CHECK(report.wait_result == BD_FEEDBACK_CLI_WAIT_INTERRUPTED,
+          "interrupted report wait %d", report.wait_result);
+    CHECK(fake_evdev_event_at(&fake, 2) == FAKE_EV_STOP,
+          "interrupted CLI cleanup stopped");
+    CHECK(fake_evdev_event_at(&fake, 3) == FAKE_EV_ERASE,
+          "interrupted CLI cleanup erased");
+    CHECK(fake_evdev_event_at(&fake, 4) == FAKE_EV_CLOSE,
+          "interrupted CLI cleanup closed");
+  }
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    fake.upload_fail = true;
+    fake.upload_errno = EINVAL;
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    fake_cli_wait wait;
+    memset(&wait, 0, sizeof(wait));
+    wait.rumble = &rumble;
+    wait.evdev = &fake;
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 50, 200, fake_cli_wait_fn, &wait, &report);
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_FAILED,
+          "failed play CLI status %d", status);
+    CHECK(wait.calls == 0, "failed play waited %d times", wait.calls);
+    CHECK(!report.waited, "failed play report waited");
+    CHECK(report.play_result == BD_FEEDBACK_ERR_IO,
+          "failed play result %s",
+          bd_feedback_result_name(report.play_result));
+    CHECK(fake.close_calls == 1, "failed play close %d", fake.close_calls);
+  }
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    fake_cli_wait wait;
+    memset(&wait, 0, sizeof(wait));
+    wait.rumble = &rumble;
+    wait.evdev = &fake;
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 0, 200, fake_cli_wait_fn, &wait, &report);
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_OK,
+          "zero-strength CLI status %d", status);
+    CHECK(wait.calls == 0, "zero strength waited %d times", wait.calls);
+    CHECK(!report.waited, "zero strength report waited");
+    CHECK(fake.upload_calls == 0, "zero strength uploaded");
+    CHECK(fake.close_calls == 1, "zero strength close %d", fake.close_calls);
+  }
+
+  {
+    fake_evdev fake;
+    fake_evdev_init(&fake);
+    bd_feedback_evdev_io io = make_fake_evdev_io(&fake);
+    bd_feedback_rumble rumble;
+    bd_feedback_error_clear(&error);
+    CHECK_RESULT(bd_feedback_rumble_probe_with_io(&rumble, &config, &io,
+                                                  &error),
+                 BD_FEEDBACK_OK);
+    fake.write_fail = true;
+    fake.write_errno = EIO;
+    fake.rmff_fail = true;
+    fake_cli_wait wait;
+    memset(&wait, 0, sizeof(wait));
+    wait.rumble = &rumble;
+    wait.evdev = &fake;
+    bd_feedback_cli_play_report report;
+    bd_feedback_cli_play_status status = bd_feedback_cli_play_and_wait(
+        &rumble, 50, 200, fake_cli_wait_fn, &wait, &report);
+    CHECK(status == BD_FEEDBACK_CLI_PLAY_FAILED,
+          "cleanup failure CLI status %d", status);
+    CHECK(wait.calls == 0, "cleanup failure waited %d times", wait.calls);
+    CHECK(report.close_result == BD_FEEDBACK_ERR_IO,
+          "cleanup failure close result %s",
+          bd_feedback_result_name(report.close_result));
+    CHECK(fake.close_calls == 1, "cleanup failure close %d",
+          fake.close_calls);
+  }
+
+  bd_feedback_cli_play_report null_report;
+  CHECK(bd_feedback_cli_play_and_wait(NULL, 10, 10, fake_cli_wait_fn, NULL,
+                                      &null_report) ==
+            BD_FEEDBACK_CLI_PLAY_FAILED,
+        "NULL rumble helper status");
+}
+
 int main(void) {
   test_led_real_sysfs();
   test_led_fake_io();
@@ -1050,6 +1412,7 @@ int main(void) {
   test_rumble_capabilities();
   test_rumble_failures();
   test_rumble_vendor_motor();
+  test_cli_play_lifecycle();
 
   if (g_failures != 0) {
     fprintf(stderr, "device_feedback_test: %d failure(s)\n", g_failures);

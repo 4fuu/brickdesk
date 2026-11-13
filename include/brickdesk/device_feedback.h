@@ -154,6 +154,11 @@ bd_feedback_result bd_feedback_led_get(const bd_feedback_led *led,
  * BD_FEEDBACK_ERR_RANGE and no write.  The raw value is rounded and read back;
  * a backend that does not match the request is an I/O error.  A read-only LED
  * returns UNSUPPORTED.  Writing 0 turns the LED off.
+ *
+ * The trigger attribute is read again immediately before the write.  If it is
+ * now an active non-none trigger, the write is rejected with UNSUPPORTED and
+ * no brightness write occurs.  A missing trigger attribute is still supported:
+ * it means the LED has no trigger control.
  */
 bd_feedback_result bd_feedback_led_set(bd_feedback_led *led, int percent,
                                        bd_feedback_error *error);

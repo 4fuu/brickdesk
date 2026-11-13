@@ -148,9 +148,9 @@ static void test_memory(void) {
   if (child == 0) {
     close(ready_pipe[0]);
     char ready = '1';
-    (void)write(ready_pipe[1], &ready, 1);
+    ssize_t wrote = write(ready_pipe[1], &ready, 1);
     close(ready_pipe[1]);
-    _exit(0);
+    _exit(wrote == 1 ? 0 : 1);
   }
   close(ready_pipe[1]);
 

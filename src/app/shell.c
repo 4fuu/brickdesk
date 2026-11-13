@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
+#include <limits.h>
+#include <linux/input-event-codes.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -3669,6 +3671,108 @@ static bool shell_home_input(bd_shell *shell, bd_home_action action) {
   return changed;
 }
 
+static void shell_calibrate_stick(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  bd_evdev devices[BD_EVDEV_MAX_DEVICES];
+  char error[128] = {0};
+  int count = bd_evdev_scan("/dev/input", devices, BD_EVDEV_MAX_DEVICES, error,
+                            sizeof(error));
+  if (count <= 0) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING,
+                    error[0] != '\0' ? error : "没有可校准的输入设备", 0);
+    return;
+  }
+  bd_shell_notice(shell, BD_NOTICE_INFO, "请转动左右摇杆 5 秒…", 0);
+  bd_shell_render(shell);
+  int min_x = INT_MAX;
+  int max_x = INT_MIN;
+  int min_y = INT_MAX;
+  int max_y = INT_MIN;
+  bool saw_x = false;
+  bool saw_y = false;
+  uint64_t deadline = monotonic_ms() + 5000;
+  while (monotonic_ms() < deadline) {
+    struct pollfd fds[BD_EVDEV_MAX_DEVICES];
+    for (int i = 0; i < count; ++i) {
+      fds[i].fd = devices[i].fd;
+      fds[i].events = POLLIN;
+      fds[i].revents = 0;
+    }
+    int ready = poll(fds, (nfds_t)count, 50);
+    if (ready <= 0) {
+      continue;
+    }
+    for (int i = 0; i < count; ++i) {
+      if ((fds[i].revents & POLLIN) == 0) {
+        continue;
+      }
+      for (;;) {
+        bd_evdev_event event;
+        int result = bd_evdev_read(&devices[i], &event);
+        if (result <= 0) {
+          break;
+        }
+        if (event.kind != BD_EVDEV_EVENT_ABS) {
+          continue;
+        }
+        if (event.code == ABS_X) {
+          saw_x = true;
+          if (event.value < min_x) {
+            min_x = event.value;
+          }
+          if (event.value > max_x) {
+            max_x = event.value;
+          }
+        } else if (event.code == ABS_Y) {
+          saw_y = true;
+          if (event.value < min_y) {
+            min_y = event.value;
+          }
+          if (event.value > max_y) {
+            max_y = event.value;
+          }
+        }
+      }
+    }
+  }
+  for (int i = 0; i < count; ++i) {
+    bd_evdev_close(&devices[i]);
+  }
+  if (!saw_x && !saw_y) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING, "没有读到摇杆轴，校准未保存", 0);
+    return;
+  }
+  char save_error[128] = {0};
+  bool ok = true;
+  if (saw_x) {
+    char text[32];
+    snprintf(text, sizeof(text), "%d", min_x);
+    ok = bd_config_set(shell->settings, "input.stick_x_min", text, save_error,
+                       sizeof(save_error)) && ok;
+    snprintf(text, sizeof(text), "%d", max_x);
+    ok = bd_config_set(shell->settings, "input.stick_x_max", text, save_error,
+                       sizeof(save_error)) && ok;
+  }
+  if (saw_y) {
+    char text[32];
+    snprintf(text, sizeof(text), "%d", min_y);
+    ok = bd_config_set(shell->settings, "input.stick_y_min", text, save_error,
+                       sizeof(save_error)) && ok;
+    snprintf(text, sizeof(text), "%d", max_y);
+    ok = bd_config_set(shell->settings, "input.stick_y_max", text, save_error,
+                       sizeof(save_error)) && ok;
+  }
+  ok = bd_config_save(shell->settings, save_error, sizeof(save_error)) && ok;
+  if (ok) {
+    bd_shell_notice(shell, BD_NOTICE_SUCCESS, "摇杆校准已保存", 2500);
+  } else {
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "摇杆校准保存失败", 0);
+  }
+}
+
 static void shell_time_done(void *user, bool accepted, const char *text) {
   bd_shell *shell = (bd_shell *)user;
   if (shell != NULL && accepted && shell->settings_page != NULL) {
@@ -5319,6 +5423,8 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     bd_settings_set_share(shell->settings_page, shell->share);
     bd_settings_set_time_prompt(shell->settings_page, shell_time_prompt,
                                 shell);
+    bd_settings_set_calibrate(shell->settings_page, shell_calibrate_stick,
+                              shell);
     char system_error[128] = {0};
     if (!bd_settings_sync_system(shell->settings_page, system_error,
                                  sizeof(system_error)) &&

@@ -255,7 +255,7 @@ static void test_rows(bd_settings *settings) {
 
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_SOUND),
         "open sound");
-  CHECK(bd_settings_row_count(settings) == 6, "sound rows %d",
+  CHECK(bd_settings_row_count(settings) == 7, "sound rows %d",
         bd_settings_row_count(settings));
   CHECK(strcmp(bd_settings_row_key(settings, 0), "audio.volume") == 0,
         "sound row 0 %s", bd_settings_row_key(settings, 0));

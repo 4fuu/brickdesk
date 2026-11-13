@@ -179,6 +179,9 @@ void bd_settings_set_time_prompt(bd_settings *settings,
 bool bd_settings_set_time_text(bd_settings *settings, const char *text);
 void bd_settings_time_refresh(bd_settings *settings);
 void bd_settings_set_audio(bd_settings *settings, bd_av_audio *audio);
+typedef void (*bd_settings_calibrate_fn)(void *user);
+void bd_settings_set_calibrate(bd_settings *settings,
+                               bd_settings_calibrate_fn calibrate, void *user);
 /*
  * Supplies installed app ids for the hotkey scope picker.  The page copies the
  * ids, so the caller may free its list after the call.

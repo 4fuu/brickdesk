@@ -1,0 +1,18 @@
+gl: Mesa/X.org / llvmpipe (LLVM 15.0.6, 256 bits) / OpenGL ES 2.0 Mesa 22.3.6
+glsl: OpenGL ES GLSL ES 1.0.16
+self-check: bayer_permutation=ok bayer_subset=ok density_clamp=ok
+capture: prototype/cui/samples/00_current_506.png
+capture: prototype/cui/samples/00b_current_unknown.png
+capture: prototype/cui/samples/01_cell2_zero.png
+capture: prototype/cui/samples/02_cell2_506.png
+capture: prototype/cui/samples/03_cell2_full.png
+capture: prototype/cui/samples/04_cell2_unknown.png
+capture: prototype/cui/samples/05_cell3_zero.png
+capture: prototype/cui/samples/06_cell3_506.png
+capture: prototype/cui/samples/07_cell3_full.png
+capture: prototype/cui/samples/08_cell3_unknown.png
+capture: prototype/cui/samples/09_cell4_zero.png
+capture: prototype/cui/samples/10_cell4_506.png
+capture: prototype/cui/samples/11_cell4_full.png
+capture: prototype/cui/samples/12_cell4_unknown.png
+shots: 14, failures: 0

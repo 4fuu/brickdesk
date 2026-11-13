@@ -1,0 +1,15 @@
+name	file	mode	value	cell	bar_x	bar_y	bar_w	bar_h	tex_w	tex_h	cols	rows	lit	total	density	memory_mb	rows_start	controls_y	bakes	uploads	idle_frames	idle_presents	idle_draw_calls	idle_damage_rects	idle_bakes
+00_current_506	00_current_506.png	current	common	0	640	196	366	2	0	0	0	0	0	0	0.4941	506	204	378	0	0	120	0	0	0	0
+00b_current_unknown	00b_current_unknown.png	current	unknown	0	640	196	366	2	0	0	0	0	0	0	0.0000	-1	204	378	0	0	120	0	0	0	0
+01_cell2_zero	01_cell2_zero.png	dither	zero	2	640	196	366	10	183	5	183	5	0	915	0.0000	0	214	388	1	1	120	0	0	0	0
+02_cell2_506	02_cell2_506.png	dither	506	2	640	196	366	10	183	5	183	5	458	915	0.4941	506	214	388	1	1	120	0	0	0	0
+03_cell2_full	03_cell2_full.png	dither	full	2	640	196	366	10	183	5	183	5	915	915	1.0000	1024	214	388	1	1	120	0	0	0	0
+04_cell2_unknown	04_cell2_unknown.png	dither	unknown	2	640	196	366	10	183	5	183	5	276	915	0.2500	-1	214	388	1	1	120	0	0	0	0
+05_cell3_zero	05_cell3_zero.png	dither	zero	3	640	196	366	12	122	4	122	4	0	488	0.0000	0	216	390	1	1	120	0	0	0	0
+06_cell3_506	06_cell3_506.png	dither	506	3	640	196	366	12	122	4	122	4	244	488	0.4941	506	216	390	1	1	120	0	0	0	0
+07_cell3_full	07_cell3_full.png	dither	full	3	640	196	366	12	122	4	122	4	488	488	1.0000	1024	216	390	1	1	120	0	0	0	0
+08_cell3_unknown	08_cell3_unknown.png	dither	unknown	3	640	196	366	12	122	4	122	4	122	488	0.2500	-1	216	390	1	1	120	0	0	0	0
+09_cell4_zero	09_cell4_zero.png	dither	zero	4	641	196	364	16	91	4	91	4	0	364	0.0000	0	220	394	1	1	120	0	0	0	0
+10_cell4_506	10_cell4_506.png	dither	506	4	641	196	364	16	91	4	91	4	182	364	0.4941	506	220	394	1	1	120	0	0	0	0
+11_cell4_full	11_cell4_full.png	dither	full	4	641	196	364	16	91	4	91	4	364	364	1.0000	1024	220	394	1	1	120	0	0	0	0
+12_cell4_unknown	12_cell4_unknown.png	dither	unknown	4	641	196	364	16	91	4	91	4	92	364	0.2500	-1	220	394	1	1	120	0	0	0	0

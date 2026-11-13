@@ -1,0 +1,17 @@
+CUI static dither samples
+1x 1024x768, dark warm palette, persimmon accent
+
+00_current_506: mode=current value=common cell=0px bar=366x2 tex=0x0 lit=0/0 density=0.4941 memory=506MB rows_start=204 idle_presents=0 idle_draws=0
+00b_current_unknown: mode=current value=unknown cell=0px bar=366x2 tex=0x0 lit=0/0 density=0.0000 memory=-1MB rows_start=204 idle_presents=0 idle_draws=0
+01_cell2_zero: mode=dither value=zero cell=2px bar=366x10 tex=183x5 lit=0/915 density=0.0000 memory=0MB rows_start=214 idle_presents=0 idle_draws=0
+02_cell2_506: mode=dither value=506 cell=2px bar=366x10 tex=183x5 lit=458/915 density=0.4941 memory=506MB rows_start=214 idle_presents=0 idle_draws=0
+03_cell2_full: mode=dither value=full cell=2px bar=366x10 tex=183x5 lit=915/915 density=1.0000 memory=1024MB rows_start=214 idle_presents=0 idle_draws=0
+04_cell2_unknown: mode=dither value=unknown cell=2px bar=366x10 tex=183x5 lit=276/915 density=0.2500 memory=-1MB rows_start=214 idle_presents=0 idle_draws=0
+05_cell3_zero: mode=dither value=zero cell=3px bar=366x12 tex=122x4 lit=0/488 density=0.0000 memory=0MB rows_start=216 idle_presents=0 idle_draws=0
+06_cell3_506: mode=dither value=506 cell=3px bar=366x12 tex=122x4 lit=244/488 density=0.4941 memory=506MB rows_start=216 idle_presents=0 idle_draws=0
+07_cell3_full: mode=dither value=full cell=3px bar=366x12 tex=122x4 lit=488/488 density=1.0000 memory=1024MB rows_start=216 idle_presents=0 idle_draws=0
+08_cell3_unknown: mode=dither value=unknown cell=3px bar=366x12 tex=122x4 lit=122/488 density=0.2500 memory=-1MB rows_start=216 idle_presents=0 idle_draws=0
+09_cell4_zero: mode=dither value=zero cell=4px bar=364x16 tex=91x4 lit=0/364 density=0.0000 memory=0MB rows_start=220 idle_presents=0 idle_draws=0
+10_cell4_506: mode=dither value=506 cell=4px bar=364x16 tex=91x4 lit=182/364 density=0.4941 memory=506MB rows_start=220 idle_presents=0 idle_draws=0
+11_cell4_full: mode=dither value=full cell=4px bar=364x16 tex=91x4 lit=364/364 density=1.0000 memory=1024MB rows_start=220 idle_presents=0 idle_draws=0
+12_cell4_unknown: mode=dither value=unknown cell=4px bar=364x16 tex=91x4 lit=92/364 density=0.2500 memory=-1MB rows_start=220 idle_presents=0 idle_draws=0

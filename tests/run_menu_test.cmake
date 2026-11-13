@@ -1,4 +1,4 @@
-# Runs the end-to-end menu shim test and compares its two screenshots.
+# Runs the end-to-end menu shim test and compares its three screenshots.
 #
 # Required -D variables:
 #   MENU_TEST, DEMO, STATE_APP, INPUTD, SHIM, CONFIG_DIR, ASSET_DIR,
@@ -39,7 +39,7 @@ if(NOT menu_result EQUAL 0)
   message(FATAL_ERROR "menu test failed (exit ${menu_result})")
 endif()
 
-foreach(name IN ITEMS menu_open menu_focus)
+foreach(name IN ITEMS menu_open menu_focus menu_brightness)
   set(actual "${OUT_DIR}/${name}.png")
   set(expected "${BASELINE_DIR}/${name}.png")
   if(NOT EXISTS "${actual}")

@@ -656,8 +656,8 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
     int fields = sscanf(start, "%llu %15s %63s %31s", &time_ms, kind, name,
                         value);
     if (fields < 2) {
-      log_message(daemon, "replay: malformed line: %s", start);
-      return false;
+      log_message(daemon, "replay: skipping malformed line: %s", start);
+      continue;
     }
     memset(event, 0, sizeof(*event));
     event->time_ms = (uint64_t)time_ms;
@@ -674,7 +674,7 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
     if (strcmp(kind, "key") == 0) {
       if (fields < 4) {
         log_message(daemon, "replay: key needs a name and down/up");
-        return false;
+        continue;
       }
       event->kind = REPLAY_KEY;
       bd_key logical = bd_key_from_name(name);
@@ -682,7 +682,7 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
         bool pressed = strcmp(value, "down") == 0 || strcmp(value, "1") == 0;
         if (!pressed && strcmp(value, "up") != 0 && strcmp(value, "0") != 0) {
           log_message(daemon, "replay: key action must be down/up");
-          return false;
+          continue;
         }
         event->logical_key = true;
         event->key = logical;
@@ -695,7 +695,7 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
       if (!bd_device_map_parse_value(name, &type, &code, &direction) ||
           type != BD_DEVICE_MAP_KEY) {
         log_message(daemon, "replay: unknown key '%s'", name);
-        return false;
+        continue;
       }
       event->event.kind = BD_EVDEV_EVENT_KEY;
       event->event.code = code;
@@ -704,19 +704,19 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
       if (strcmp(value, "down") != 0 && strcmp(value, "up") != 0 &&
           strcmp(value, "1") != 0 && strcmp(value, "0") != 0) {
         log_message(daemon, "replay: key action must be down/up");
-        return false;
+        continue;
       }
       return true;
     }
     if (strcmp(kind, "abs") == 0) {
       if (fields < 4) {
         log_message(daemon, "replay: abs needs a name and value");
-        return false;
+        continue;
       }
       unsigned code = 0;
       if (!parse_abs_code(name, &code)) {
         log_message(daemon, "replay: unknown abs axis '%s'", name);
-        return false;
+        continue;
       }
       event->kind = REPLAY_ABS;
       event->event.kind = BD_EVDEV_EVENT_ABS;
@@ -727,12 +727,12 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
     if (strcmp(kind, "sw") == 0 || strcmp(kind, "switch") == 0) {
       if (fields < 4) {
         log_message(daemon, "replay: sw needs a name and value");
-        return false;
+        continue;
       }
       unsigned code = 0;
       if (!parse_switch_code(name, &code)) {
         log_message(daemon, "replay: unknown switch '%s'", name);
-        return false;
+        continue;
       }
       event->kind = REPLAY_SWITCH;
       event->event.kind = BD_EVDEV_EVENT_SWITCH;
@@ -741,7 +741,7 @@ static bool read_replay_line(inputd *daemon, replay_event *event) {
       return true;
     }
     log_message(daemon, "replay: unknown record '%s'", kind);
-    return false;
+    continue;
   }
   return false;
 }

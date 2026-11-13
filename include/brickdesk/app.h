@@ -381,7 +381,10 @@ typedef enum bd_session_result {
   BD_SESSION_INVALID_STATE,
   BD_SESSION_UNSUPPORTED,
   BD_SESSION_SPAWN_FAILED,
-  BD_SESSION_IO_ERROR
+  BD_SESSION_IO_ERROR,
+  /* The app's state directory is over session.state_quota_mb; nothing was
+   * deleted and the app was not started or resumed. */
+  BD_SESSION_STATE_QUOTA
 } bd_session_result;
 
 typedef struct bd_session_timeouts {
@@ -447,6 +450,7 @@ typedef struct bd_session_config {
   const char *state_root; /* NULL: BRICKDESK_STATE_DIR or /mnt/.../state */
   const char *session_id; /* NULL: generated per session */
   int max_background;     /* <=0: 3 */
+  int state_quota_mb;     /* <=0: 512; per-app state directory limit */
   bd_session_timeouts timeouts; /* zero fields use defaults */
   bd_session_perf_ops perf;     /* optional */
   bd_session_event_fn on_event;
@@ -503,6 +507,8 @@ bd_session_result bd_session_launch(bd_session *session, const bd_app *app,
 bd_session_result bd_session_background(bd_session *session,
                                         const char *app_id);
 bd_session_result bd_session_resume(bd_session *session, const char *app_id);
+/* Message for the last refused launch/resume, or "" when none. */
+const char *bd_session_last_error(const bd_session *session);
 
 /*
  * RAM-only light-sleep freeze of the foreground app.

@@ -391,6 +391,7 @@ settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
 | `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、patched `libSDL2-2.0.so.0`、assets 和默认 config | 只写 SD 卡应用目录；不覆盖 `config/local.ini`；`sync` |
 | `run.sh` | 停原厂 UI，启动二进制；`--foreground` 直接跑 | 日志 `$DEST/logs/<name>.log` |
 | `logs.sh` | 拉应用日志、dmesg、logread、系统信息 | 默认输出 `build-device/logs` |
+| `collect.sh` | 一条命令生成完整诊断包：日志、配置、power/LED/马达/显示/音频/输入/网络/调频节点 | 只读；输出 `build-device/diagnostics-*.tar.gz` |
 | `screenshot.sh` | 通过 `display_probe --dump-fb` 读 fb0，拉回 PPM/PNG | 需要应用不占用 fb0 或能读 |
 | `perf.sh` | 采 CPU/RSS/频率/温度/电量 CSV | 不依赖 `top`/`pidof` |
 | `bench.sh` | 运行已部署的 `bench_render` 并拉回 JSON | 发布包已包含 target 版 `bench_render` |
@@ -402,6 +403,7 @@ settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
 ```sh
 scripts/device/deploy.sh
 scripts/device/smoke.sh
+scripts/device/collect.sh -o /tmp/brickpro-diagnostics
 scripts/device/perf.sh -n 30 -i 1 -o /tmp/perf.csv
 scripts/device/logs.sh -o /tmp/brickpro-logs
 scripts/device/recover.sh

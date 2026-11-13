@@ -89,9 +89,12 @@ process-tree RSS, not a single-process estimate. `-1` means the tree could not
 be sampled; the panel then shows "内存未知" and the aggregate bar is empty.
 Tests and demos pass explicitly named fixture values; the launch-menu capture
 sets `BRICKDESK_TEST_MEMORY_MB=132` so its screenshot text is deterministic,
-while `tests/shell_quota_test.c` reads the real `/proc` value. A memory reading
-is never an eviction input: `bd_session_suggest_eviction()` chooses the least
-recently backgrounded app.
+while `tests/shell_quota_test.c` reads the real `/proc` value. The
+`session.max_background` dialog still evicts by least-recently-backgrounded app,
+not by memory. `session.memory_budget_mb` is a separate soft limit: every five
+seconds the shell sums background RSS and, when it exceeds the budget, asks the
+user before ending the LRU app (see below). A memory reading never terminates a
+process without that confirmation.
 
 ## Background quota
 
@@ -104,6 +107,27 @@ retry or cancel; the pending launch is never retried automatically while the
 failure is showing. `bd_home_open_background_full()` owns the dialog,
 `bd_home_set_dialog_error()` reports the failure, and
 `bd_home_take_dialog_result()` reports the choice.
+
+## Memory budget and state quota
+
+- `session.memory_budget_mb` (default 560 MB): every 5 seconds the shell samples
+  the RSS of background apps and sums it. Over budget, it shows a confirmation
+  naming the LRU app (`bd_session_suggest_eviction()`); only 确认 terminates
+  that app. 取消 leaves everything running and the check retries after 5 seconds.
+  Foreground apps are not counted.
+- `session.state_quota_mb` (default 512 MB per app): before a cold launch or a
+  resume, the session sums the app's `state/` directory without following
+  symlinks. Over quota returns `state_quota` with a message and starts nothing;
+  no file is deleted. The shell shows the message as an error notice. Quota is
+  per app id, not a global total.
+
+## Error notices
+
+Launch/resume failures, session hook timeouts, protocol errors, plugin-host
+poll failures and a missing menu shim all raise `bd_shell_notice()` warnings.
+A crashed app raises a confirmation with a restart action; the shell never
+restarts it silently. Notices are queued while an app owns the display and
+appear when the desktop returns (`docs/notices.md`).
 
 ## Animations
 

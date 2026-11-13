@@ -3,6 +3,7 @@
 #include "brickdesk/app.h"
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -126,6 +127,8 @@ struct bd_session {
   char state_root[BD_APP_PATH_MAX];
   char session_id[32];
   int max_background;
+  int state_quota_mb;
+  char last_error[256];
   bd_session_timeouts timeouts;
   bd_session_perf_ops perf;
   bd_session_event_fn on_event;
@@ -185,6 +188,76 @@ static bool make_dirs(const char *path, mode_t mode) {
   }
   struct stat status;
   return stat(buffer, &status) == 0 && S_ISDIR(status.st_mode);
+}
+
+static uint64_t directory_bytes(const char *path, uint64_t limit) {
+  DIR *dir = opendir(path);
+  if (dir == NULL) {
+    return 0;
+  }
+  uint64_t total = 0;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    char child[BD_APP_PATH_MAX];
+    int written = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+    if (written <= 0 || (size_t)written >= sizeof(child)) {
+      continue;
+    }
+    struct stat status;
+    if (lstat(child, &status) != 0) {
+      continue;
+    }
+    if (S_ISDIR(status.st_mode)) {
+      total += directory_bytes(child, limit - (total < limit ? total : limit));
+    } else if (S_ISREG(status.st_mode)) {
+      if ((uint64_t)status.st_size > UINT64_MAX - total) {
+        total = UINT64_MAX;
+      } else {
+        total += (uint64_t)status.st_size;
+      }
+    }
+    if (total > limit) {
+      break;
+    }
+  }
+  closedir(dir);
+  return total;
+}
+
+/*
+ * Enforces session.state_quota_mb per app before a cold launch or a resume.
+ * It only reads directory metadata: no file is removed or truncated.
+ */
+static bool state_quota_check(bd_session *session, const char *app_id,
+                              char *error, size_t error_size) {
+  if (session == NULL || app_id == NULL || session->state_quota_mb <= 0) {
+    return true;
+  }
+  char dir[BD_APP_PATH_MAX];
+  int written = snprintf(dir, sizeof(dir), "%s/%s", session->state_root, app_id);
+  if (written <= 0 || (size_t)written >= sizeof(dir)) {
+    set_error(error, error_size, "state path is too long for '%s'", app_id);
+    snprintf(session->last_error, sizeof(session->last_error),
+             "state path is too long");
+    return false;
+  }
+  uint64_t limit = (uint64_t)session->state_quota_mb * 1024u * 1024u;
+  uint64_t used = directory_bytes(dir, limit);
+  if (used <= limit) {
+    return true;
+  }
+  unsigned long long used_mb = (unsigned long long)(used / (1024u * 1024u));
+  set_error(error, error_size,
+            "state quota exceeded for '%s': %llu MiB used of %d MiB; "
+            "delete old saves or raise session.state_quota_mb",
+            app_id, used_mb, session->state_quota_mb);
+  snprintf(session->last_error, sizeof(session->last_error),
+           "存档配额已满：%s 已用 %llu MB，上限 %d MB。请删除旧存档或提高配额。",
+           app_id, used_mb, session->state_quota_mb);
+  return false;
 }
 
 static bool write_full(int fd, const char *data, size_t length) {
@@ -1427,6 +1500,10 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
   }
   session->max_background =
       config != NULL && config->max_background > 0 ? config->max_background : 3;
+  session->state_quota_mb =
+      config != NULL && config->state_quota_mb > 0 ? config->state_quota_mb
+                                                   : 512;
+  session->last_error[0] = '\0';
   session->on_event = config != NULL ? config->on_event : NULL;
   session->event_user = config != NULL ? config->event_user : NULL;
   session->perf = config != NULL ? config->perf : (bd_session_perf_ops){0};
@@ -1534,6 +1611,9 @@ bd_session_result bd_session_launch(bd_session *session, const bd_app *app,
   if (has_foreground(session, NULL)) {
     set_error(error, error_size, "another app is already in the foreground");
     return BD_SESSION_BUSY;
+  }
+  if (!state_quota_check(session, app->id, error, error_size)) {
+    return BD_SESSION_STATE_QUOTA;
   }
 
   session_instance *instance =
@@ -1654,6 +1734,7 @@ bd_session_result bd_session_launch(bd_session *session, const bd_app *app,
   } else {
     finish_foreground(session, instance);
   }
+  session->last_error[0] = '\0';
   return BD_SESSION_OK;
 }
 
@@ -1713,6 +1794,11 @@ bd_session_result bd_session_resume(bd_session *session, const char *app_id) {
   if (has_foreground(session, instance)) {
     return BD_SESSION_BUSY;
   }
+  char error[256] = {0};
+  if (!state_quota_check(session, app_id, error, sizeof(error))) {
+    return BD_SESSION_STATE_QUOTA;
+  }
+  session->last_error[0] = '\0';
   start_resume(session, instance);
   return BD_SESSION_OK;
 }
@@ -2008,6 +2094,10 @@ const char *bd_session_state_name(bd_session_state state) {
   return "unknown";
 }
 
+const char *bd_session_last_error(const bd_session *session) {
+  return session != NULL ? session->last_error : "";
+}
+
 const char *bd_session_result_name(bd_session_result result) {
   switch (result) {
     case BD_SESSION_OK: return "ok";
@@ -2018,6 +2108,7 @@ const char *bd_session_result_name(bd_session_result result) {
     case BD_SESSION_UNSUPPORTED: return "unsupported";
     case BD_SESSION_SPAWN_FAILED: return "spawn_failed";
     case BD_SESSION_IO_ERROR: return "io_error";
+    case BD_SESSION_STATE_QUOTA: return "state_quota";
   }
   return "unknown";
 }

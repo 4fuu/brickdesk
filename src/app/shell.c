@@ -195,6 +195,14 @@ struct bd_shell {
   bool status_wifi;
   int status_max_background;
   uint64_t status_sampled_ms;
+  int memory_budget_mb;
+  uint64_t memory_budget_next_ms;
+  bool memory_budget_prompt;
+  char memory_budget_victim[BD_APP_ID_MAX];
+  bool menu_shim_warned;
+  bool plugin_error_notified;
+  bool crash_prompt;
+  char crash_retry_app[BD_APP_ID_MAX];
 
   bool dirty;
   bool visible;
@@ -849,6 +857,8 @@ static void shell_power_service(bd_shell *shell);
 static void shell_power_check_hold(bd_shell *shell);
 static void shell_auto_sleep_check(bd_shell *shell, uint64_t now);
 static void shell_battery_deadline_check(bd_shell *shell, uint64_t now);
+static void shell_memory_budget_check(bd_shell *shell, uint64_t now);
+static void shell_crash_retry_confirm(void *user, bool confirmed);
 static void shell_mark_activity(bd_shell *shell);
 static bool shell_power_asleep(const bd_shell *shell);
 static void shell_power_cancel_gesture(bd_shell *shell);
@@ -1378,6 +1388,11 @@ static bool apply_menu_env(bd_shell *shell, bd_app *app,
   }
   const char *shim = menu_shim_path(shell, configured_shim);
   if (shim == NULL) {
+    if (!shell->menu_shim_warned) {
+      shell->menu_shim_warned = true;
+      bd_shell_notice(shell, BD_NOTICE_WARNING,
+                      "菜单叠加组件缺失，应用将全屏启动", 0);
+    }
     if (shell->verbose) {
       fprintf(stderr,
               "brickdesk: menu shim not found; launching %s without overlay\n",
@@ -1434,6 +1449,18 @@ static void on_session_event(void *user, const bd_session_event *event) {
     case BD_SESSION_EVENT_NEEDS_ATTENTION:
       pending->kind = SHELL_PENDING_ATTENTION;
       break;
+    case BD_SESSION_EVENT_HOOK:
+      if (!event->hook_ok) {
+        char text[192];
+        snprintf(text, sizeof(text), "应用 %s 的 %s 钩子未完成",
+                 event->app_id, event->hook != NULL ? event->hook : "unknown");
+        bd_shell_notice(shell, BD_NOTICE_WARNING, text, 0);
+      }
+      return;
+    case BD_SESSION_EVENT_PROTOCOL_ERROR:
+      bd_shell_notice(shell, BD_NOTICE_WARNING,
+                      "应用协议错误，已忽略该消息", 0);
+      return;
     default:
       return;
   }
@@ -1662,6 +1689,20 @@ static void shell_process_pending(bd_shell *shell) {
           if (!shell->visible || launch_owner) {
             shell_request_return(shell, pending->app_id);
           }
+          if (pending->state == BD_SESSION_CRASHED && !shell->crash_prompt &&
+              shell->home != NULL && !bd_home_dialog_open(shell->home)) {
+            copy_text(shell->crash_retry_app, sizeof(shell->crash_retry_app),
+                      pending->app_id);
+            char text[192];
+            snprintf(text, sizeof(text), "应用 %s 异常退出，是否重新启动？",
+                     pending->app_id);
+            shell->crash_prompt = true;
+            if (!bd_shell_confirm(shell, "应用异常退出", text, 0,
+                                  shell_crash_retry_confirm, shell)) {
+              shell->crash_prompt = false;
+              shell->crash_retry_app[0] = '\0';
+            }
+          }
           shell->dirty = true;
           break;
         }
@@ -1730,6 +1771,7 @@ static void shell_service(bd_shell *shell) {
   inputd_service(shell, monotonic_ms());
   shell_battery_deadline_check(shell, now);
   shell_auto_sleep_check(shell, now);
+  shell_memory_budget_check(shell, now);
   if (!asleep) {
     shell_update_home(shell, now);
     shell_refresh_status(shell, false);
@@ -1759,15 +1801,22 @@ static void shell_service(bd_shell *shell) {
   }
   if (shell->plugins != NULL) {
     if (bd_plugin_host_poll(shell->plugins, 0) < 0) {
+      if (!shell->plugin_error_notified) {
+        shell->plugin_error_notified = true;
+        bd_shell_notice(shell, BD_NOTICE_WARNING, "插件服务异常，已跳过本轮", 0);
+      }
       if (shell->verbose) {
         fprintf(stderr, "brickdesk: plugin poll failed\n");
       }
-    } else if (!asleep && bd_plugin_host_take_dirty(shell->plugins)) {
-      /*
-       * Leave the host's dirty flag queued while asleep: waking consumes it
-       * and forces one frame without rendering or consuming tile deadlines.
-       */
-      shell->dirty = true;
+    } else {
+      shell->plugin_error_notified = false;
+      if (!asleep && bd_plugin_host_take_dirty(shell->plugins)) {
+        /*
+         * Leave the host's dirty flag queued while asleep: waking consumes it
+         * and forces one frame without rendering or consuming tile deadlines.
+         */
+        shell->dirty = true;
+      }
     }
   }
   /*
@@ -2145,6 +2194,96 @@ static void shell_battery_deadline_check(bd_shell *shell, uint64_t now) {
   }
   shell->low_battery_shutdown_armed = false;
   shell->power_request = SHELL_POWER_REQUEST_POWEROFF;
+}
+
+static void shell_crash_retry_confirm(void *user, bool confirmed) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  shell->crash_prompt = false;
+  char app_id[BD_APP_ID_MAX];
+  copy_text(app_id, sizeof(app_id), shell->crash_retry_app);
+  shell->crash_retry_app[0] = '\0';
+  if (confirmed && app_id[0] != '\0') {
+    shell_launch_app(shell, app_id);
+  }
+}
+
+static void shell_memory_budget_confirm(void *user, bool confirmed) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  shell->memory_budget_prompt = false;
+  if (confirmed && shell->memory_budget_victim[0] != '\0' &&
+      shell->session != NULL) {
+    bd_session_result result =
+        bd_session_terminate(shell->session, shell->memory_budget_victim);
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: memory budget evict %s -> %s\n",
+              shell->memory_budget_victim, bd_session_result_name(result));
+    }
+    shell->memory_budget_victim[0] = '\0';
+    shell->dirty = true;
+  }
+  shell->memory_budget_next_ms = shell_now(shell) + 5000u;
+}
+
+static void shell_memory_budget_check(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || shell->session == NULL || shell->memory_budget_mb <= 0 ||
+      now < shell->memory_budget_next_ms) {
+    return;
+  }
+  shell->memory_budget_next_ms = now + 5000u;
+  if (shell->memory_budget_prompt || shell->apps == NULL ||
+      (shell->home != NULL && bd_home_dialog_open(shell->home))) {
+    return;
+  }
+  int total = 0;
+  size_t count = bd_app_list_count(shell->apps);
+  for (size_t i = 0; i < count && i < shell->runtime_count; ++i) {
+    const bd_app *app = bd_app_list_at(shell->apps, i);
+    if (app == NULL) {
+      continue;
+    }
+    bd_session_app_info info;
+    if (!bd_session_find(shell->session, app->id, &info) ||
+        info.state != BD_SESSION_BACKGROUND) {
+      continue;
+    }
+    int memory = shell_runtime_memory(&shell->runtime[i], &info, now, true);
+    if (memory > 0) {
+      total += memory;
+    }
+  }
+  if (total <= shell->memory_budget_mb) {
+    return;
+  }
+  bd_session_eviction eviction;
+  memset(&eviction, 0, sizeof(eviction));
+  if (!bd_session_suggest_eviction(shell->session, &eviction) ||
+      eviction.app_id[0] == '\0') {
+    return;
+  }
+  const char *name = eviction.app_id;
+  bd_session_app_info victim;
+  if (bd_session_find(shell->session, eviction.app_id, &victim) &&
+      victim.name[0] != '\0') {
+    name = victim.name;
+  }
+  char text[224];
+  snprintf(text, sizeof(text),
+           "后台内存 %d MB 超过预算 %d MB，结束最久未用的「%s」？", total,
+           shell->memory_budget_mb, name);
+  shell->memory_budget_prompt = true;
+  copy_text(shell->memory_budget_victim, sizeof(shell->memory_budget_victim),
+            eviction.app_id);
+  if (!bd_shell_confirm(shell, "后台内存超预算", text, 0,
+                        shell_memory_budget_confirm, shell)) {
+    shell->memory_budget_prompt = false;
+    shell->memory_budget_victim[0] = '\0';
+  }
 }
 
 static void shell_auto_sleep_check(bd_shell *shell, uint64_t now) {
@@ -2834,6 +2973,12 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
         fprintf(stderr, "brickdesk: resume %s -> %s\n", app_id,
                 bd_session_result_name(result));
       }
+      if (result == BD_SESSION_STATE_QUOTA) {
+        const char *message = bd_session_last_error(shell->session);
+        bd_shell_notice(shell, BD_NOTICE_ERROR,
+                        message[0] != '\0' ? message : "存档配额已满，无法恢复应用",
+                        0);
+      }
       return false;
     }
     if (session_active_state(info.state) || info.state == BD_SESSION_CRASHED) {
@@ -2883,6 +3028,10 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
     fprintf(stderr, "brickdesk: launch %s failed: %s%s%s\n", app_id,
             bd_session_result_name(result), error[0] != '\0' ? ": " : "",
             error);
+    bd_shell_notice(shell,
+                    result == BD_SESSION_STATE_QUOTA ? BD_NOTICE_ERROR
+                                                     : BD_NOTICE_WARNING,
+                    error[0] != '\0' ? error : "应用启动失败", 0);
     return false;
   }
   if (!shell_home_begin_launch(shell, app_id)) {
@@ -3694,6 +3843,13 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
   long max_background =
       bd_config_get_int(config->settings, "session.max_background", 3);
+  long memory_budget =
+      bd_config_get_int(config->settings, "session.memory_budget_mb", 560);
+  if (memory_budget < 0 || memory_budget > 4096) {
+    memory_budget = 560;
+  }
+  shell->memory_budget_mb = (int)memory_budget;
+  shell->memory_budget_next_ms = shell_now(shell);
   status.clock = shell->clock;
   status.max_background = (int)max_background;
   status.battery_percent = -1;
@@ -3726,6 +3882,8 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   session_config.state_root = config->session_state_root;
   session_config.max_background =
       (int)bd_config_get_int(config->settings, "session.max_background", 3);
+  session_config.state_quota_mb =
+      (int)bd_config_get_int(config->settings, "session.state_quota_mb", 512);
   session_config.on_event = on_session_event;
   session_config.event_user = shell;
   char error[256] = {0};

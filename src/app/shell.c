@@ -672,7 +672,9 @@ static void shell_config_changed(void *user, const char *key) {
              strcmp(key, "audio.mute") == 0) {
     shell_home_quick_refresh(shell);
   } else if (strncmp(key, "display.", 8) == 0) {
-    shell_display_apply(shell);
+    if (!shell_power_asleep(shell)) {
+      shell_display_apply(shell);
+    }
   } else if (strcmp(key, "session.max_background") == 0) {
     long max_background =
         bd_config_get_int(shell->settings, "session.max_background", 3);
@@ -2907,6 +2909,9 @@ static int shell_power_display_on(void *user) {
     return 1;
   }
   shell->power_brightness_known = false;
+  if (!shell_display_apply(shell) && shell->verbose) {
+    fprintf(stderr, "brickdesk: display settings not reapplied on wake\n");
+  }
   return 0;
 }
 

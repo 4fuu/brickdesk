@@ -78,7 +78,7 @@ make_desktop() {
 
 printf '== fake target build ==\n'
 mkdir -p "$FAKE_BUILD/dist/lib" "$FAKE_BUILD/bench" "$TMP/hello/bin"
-for name in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config display_probe bench_render brickdesk-demo; do
+for name in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av display_probe bench_render brickdesk-demo; do
     make_exit_script "$FAKE_BUILD/$name"
 done
 make_desktop "$FAKE_BUILD/brickdesk"

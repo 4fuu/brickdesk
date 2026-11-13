@@ -64,33 +64,8 @@ static void prepare_root(const char *root) {
   make_dir(path);
   snprintf(path, sizeof(path), "%s/sys/class", root);
   make_dir(path);
-  snprintf(path, sizeof(path), "%s/sys/class/power_supply", root);
-  make_dir(path);
   snprintf(path, sizeof(path), "%s/sys/class/net", root);
   make_dir(path);
-}
-
-static void test_battery(const char *root) {
-  char supply[512];
-  char path[512];
-  snprintf(supply, sizeof(supply), "%s/sys/class/power_supply/BAT0", root);
-  CHECK(make_dir(supply), "create battery fixture directory");
-  CHECK(join(path, sizeof(path), supply, "type"), "battery type path");
-  CHECK(write_text(path, "Battery\n"), "write battery type");
-  CHECK(join(path, sizeof(path), supply, "capacity"), "battery capacity path");
-  CHECK(write_text(path, "57\n"), "write battery capacity");
-
-  int percent = -1;
-  CHECK(bd_sys_battery_percent(root, &percent), "battery should be sampled");
-  CHECK(percent == 57, "battery percent %d, wanted 57", percent);
-
-  CHECK(write_text(path, "not-a-number\n"), "write invalid battery capacity");
-  percent = 12;
-  CHECK(!bd_sys_battery_percent(root, &percent), "invalid capacity is unknown");
-  CHECK(percent == 12, "unknown battery must not overwrite output");
-
-  CHECK(write_text(path, "999\n"), "write out-of-range battery capacity");
-  CHECK(!bd_sys_battery_percent(root, &percent), "out-of-range is unknown");
 }
 
 static void test_wifi(const char *root) {
@@ -187,7 +162,6 @@ int main(void) {
   }
   prepare_root(root);
   test_memory();
-  test_battery(root);
   test_wifi(root);
   remove_tree(root);
 

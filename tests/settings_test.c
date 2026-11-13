@@ -1,13 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "brickdesk/config.h"
+#include "brickdesk/device_av.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
 #include "brickdesk/settings.h"
@@ -88,6 +92,122 @@ static bool focus_row(bd_settings *settings, const char *key) {
 static bool color_close(bd_color a, bd_color b) {
   return fabsf(a.r - b.r) < 0.01f && fabsf(a.g - b.g) < 0.01f &&
          fabsf(a.b - b.b) < 0.01f;
+}
+
+static bool fake_perf_apply(void *user, const char *profile, char *error,
+                            size_t error_size) {
+  (void)user;
+  (void)profile;
+  (void)error;
+  (void)error_size;
+  return true;
+}
+
+static bool failing_perf_apply(void *user, const char *profile, char *error,
+                               size_t error_size) {
+  (void)user;
+  (void)profile;
+  if (error != NULL && error_size > 0) {
+    snprintf(error, error_size, "perfd 未连接");
+  }
+  return false;
+}
+
+static bool write_text_file(const char *path, const char *text) {
+  FILE *file = fopen(path, "w");
+  if (file == NULL) {
+    return false;
+  }
+  bool ok = fputs(text, file) >= 0;
+  return fclose(file) == 0 && ok;
+}
+
+static bool make_path(const char *path) {
+  if (mkdir(path, 0777) == 0) {
+    return true;
+  }
+  return errno == EEXIST;
+}
+
+static bool av_set_brightness(void *user, int percent) {
+  bd_av_error error;
+  return bd_av_brightness_set((bd_av_brightness *)user, percent, &error) ==
+         BD_AV_OK;
+}
+
+static bool av_get_brightness(void *user, int *percent) {
+  bd_av_error error;
+  return bd_av_brightness_get((bd_av_brightness *)user, percent, &error) ==
+         BD_AV_OK;
+}
+
+static void test_real_sysfs_transaction(bd_platform *platform, bd_gfx *gfx,
+                                        bd_settings *settings,
+                                        bd_config *config) {
+  (void)platform;
+  (void)gfx;
+  char root[] = "/tmp/bd-settings-sysfs-XXXXXX";
+  char *temp = mkdtemp(root);
+  CHECK(temp != NULL, "fake sysfs temp dir");
+  if (temp == NULL) {
+    return;
+  }
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/sys", temp);
+  CHECK(make_path(path), "fake sysfs sys");
+  snprintf(path, sizeof(path), "%s/sys/class", temp);
+  CHECK(make_path(path), "fake sysfs class");
+  snprintf(path, sizeof(path), "%s/sys/class/backlight", temp);
+  CHECK(make_path(path), "fake sysfs backlight");
+  snprintf(path, sizeof(path), "%s/sys/class/backlight/test", temp);
+  CHECK(make_path(path), "fake sysfs device");
+  char brightness_path[2048];
+  char max_path[2048];
+  snprintf(brightness_path, sizeof(brightness_path), "%s/brightness", path);
+  snprintf(max_path, sizeof(max_path), "%s/max_brightness", path);
+  CHECK(write_text_file(brightness_path, "64\n"), "fake brightness");
+  CHECK(write_text_file(max_path, "255\n"), "fake max brightness");
+
+  bd_av_brightness brightness;
+  bd_av_error error;
+  bd_av_brightness_config av_config;
+  memset(&av_config, 0, sizeof(av_config));
+  av_config.sysfs_root = temp;
+  CHECK(bd_av_brightness_probe(&brightness, &av_config, &error) == BD_AV_OK,
+        "probe fake backlight: %s", error.message);
+
+  bd_settings_system system;
+  memset(&system, 0, sizeof(system));
+  system.user = &brightness;
+  system.set_brightness = av_set_brightness;
+  system.get_brightness = av_get_brightness;
+  bd_settings_set_system(settings, &system);
+  CHECK(bd_config_set(config, "display.brightness", "70", NULL, 0),
+        "set config brightness");
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
+        "open display for fake sysfs");
+  CHECK(focus_row(settings, "display.brightness"),
+        "focus brightness for fake sysfs");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "write fake sysfs brightness");
+  int percent = -1;
+  bd_av_error read_error;
+  CHECK(bd_av_brightness_get(&brightness, &percent, &read_error) == BD_AV_OK &&
+            percent == 26,
+        "fake sysfs readback %d", percent);
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 26,
+        "fake sysfs persisted brightness %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+
+  CHECK(chmod(brightness_path, 0444) == 0, "make brightness read-only");
+  long saved = bd_config_get_int(config, "display.brightness", -1);
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "read-only fake sysfs must reject the write");
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == saved,
+        "failed fake sysfs write must not save %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  chmod(brightness_path, 0644);
+  sf_remove_tree(temp);
 }
 
 static void test_schema_describe(bd_config *config) {
@@ -581,14 +701,58 @@ int main(void) {
   bd_settings_system system;
   bd_settings_system_stub_init(&stub, &system);
   bd_settings_set_system(settings, &system);
+  bd_settings_perf perf = {.user = NULL,
+                           .apply_global_profile = fake_perf_apply};
+  bd_settings_set_perf(settings, &perf);
 
   test_schema_describe(config);
   test_rows(settings);
   test_focus_damage(platform, gfx, settings);
   test_values(platform, gfx, settings, config, dir, &stub);
+  test_real_sysfs_transaction(platform, gfx, settings, config);
   test_pages(settings, config);
   test_plugin_scroll(platform, gfx, settings);
   test_reset_and_subpages(platform, gfx, settings, config);
+
+  const char *profile =
+      bd_config_get_string(config, "perf.global_profile", "default");
+  char saved_profile[64];
+  snprintf(saved_profile, sizeof(saved_profile), "%s", profile);
+  bd_settings_perf rejected = {.user = NULL,
+                               .apply_global_profile = failing_perf_apply};
+  bd_settings_set_perf(settings, &rejected);
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_PERFORMANCE),
+        "open performance for rejection");
+  CHECK(focus_row(settings, "perf.global_profile"),
+        "focus perf for rejection");
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "rejected perf must not report success");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               saved_profile) == 0,
+        "rejected perf must not save %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(strcmp(bd_settings_last_error(settings), "perfd 未连接") == 0,
+        "perf error %s", bd_settings_last_error(settings));
+
+  bd_settings_set_perf(settings, NULL);
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "missing perf service must not report success");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               saved_profile) == 0,
+        "missing perf must not save");
+
+  int saved_brightness = (int)bd_config_get_int(config, "display.brightness", -1);
+  bd_settings_set_system(settings, NULL);
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
+        "open display without a system backend");
+  CHECK(focus_row(settings, "display.brightness"),
+        "focus brightness without a backend");
+  CHECK(!bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT),
+        "missing device must not report a write");
+  CHECK(bd_config_get_int(config, "display.brightness", -1) ==
+            saved_brightness,
+        "missing device must not save brightness");
+  bd_settings_set_system(settings, &system);
 
   bd_settings_destroy(settings);
   bd_config_free(config);

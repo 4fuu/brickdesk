@@ -198,6 +198,7 @@ struct bd_home {
   int brightness;
   int volume;
   bool bluetooth;
+  bd_home_quick_backend quick_backend;
 
   uint32_t stamp;
   bd_home_stats stats;

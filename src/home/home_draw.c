@@ -564,9 +564,14 @@ static void draw_wall(bd_home *home, bd_gfx *gfx) {
     }
   }
 
-  bd_gfx_fill_gradient(gfx, bd_rect_make(0, 0, home->width, home->height), 0,
-                       home->palette.bg_deep, home->palette.bg,
-                       BD_GRADIENT_VERTICAL);
+  if (home->style.ambient_solid) {
+    bd_gfx_fill_rect(gfx, bd_rect_make(0, 0, home->width, home->height),
+                     home->palette.bg_deep);
+  } else {
+    bd_gfx_fill_gradient(gfx, bd_rect_make(0, 0, home->width, home->height), 0,
+                         home->palette.bg_deep, home->palette.bg,
+                         BD_GRADIENT_VERTICAL);
+  }
 
   int focus_index = home->focus;
   for (int pass = 0; pass < 2; ++pass) {
@@ -862,21 +867,6 @@ static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
   }
 }
 
-static void draw_switch(bd_home *home, bd_gfx *gfx, int x, int y, bool on,
-                        float alpha) {
-  bd_color fill = on ? home->accent.accent : home->palette.surface3;
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y, 38, 22), 11,
-                         alpha_color(fill, alpha));
-  if (!on) {
-    bd_gfx_stroke_round_rect(gfx, bd_rect_make(x, y, 38, 22), 11, 1,
-                             alpha_color(home->palette.line_strong, alpha));
-  }
-  bd_color knob = on ? home->accent.on_accent : home->palette.ink2;
-  bd_gfx_fill_round_rect(gfx,
-                         bd_rect_make(on ? x + 19 : x + 3, y + 3, 16, 16), 8,
-                         alpha_color(knob, alpha));
-}
-
 static void draw_slider(bd_home *home, bd_gfx *gfx, int x, int y, int value,
                         float alpha) {
   int width = 92;
@@ -1081,13 +1071,22 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                      focused ? palette->ink : palette->ink2, LABELS[i]);
     if (i == 0 || i == 1) {
       int value = i == 0 ? home->brightness : home->volume;
-      draw_slider(home, gfx, row.x + row.w - 26 - 8 - 92, row.y + 23, value, 1.0f);
-      char number[16];
-      snprintf(number, sizeof(number), "%d", value);
-      bd_gfx_draw_text(gfx, home->fonts.body14,
-                       row.x + row.w - 10 -
-                           bd_font_measure_text(home->fonts.body14, number),
-                       row.y + 29, palette->ink2, number);
+      if (value < 0) {
+        const char *unknown = "未知";
+        bd_gfx_draw_text(gfx, home->fonts.body14,
+                         row.x + row.w - 18 -
+                             bd_font_measure_text(home->fonts.body14, unknown),
+                         row.y + 29, palette->ink3, unknown);
+      } else {
+        draw_slider(home, gfx, row.x + row.w - 26 - 8 - 92, row.y + 23, value,
+                    1.0f);
+        char number[16];
+        snprintf(number, sizeof(number), "%d", value);
+        bd_gfx_draw_text(gfx, home->fonts.body14,
+                         row.x + row.w - 10 -
+                             bd_font_measure_text(home->fonts.body14, number),
+                         row.y + 29, palette->ink2, number);
+      }
     } else if (i == 2) {
       const char *value = !home->status.wifi_known
                               ? "未知"
@@ -1097,13 +1096,11 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                            bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
     } else if (i == 3) {
-      bool on = home->bluetooth;
-      const char *value = on ? "开" : "关";
+      const char *value = "不可用";
       bd_gfx_draw_text(gfx, home->fonts.body14,
-                       row.x + row.w - 18 - 38 - 12 -
+                       row.x + row.w - 18 -
                            bd_font_measure_text(home->fonts.body14, value),
-                       row.y + 29, palette->ink2, value);
-      draw_switch(home, gfx, row.x + row.w - 18 - 38, row.y + 13, on, 1.0f);
+                       row.y + 29, palette->ink3, value);
     }
   }
 

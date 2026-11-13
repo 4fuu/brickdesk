@@ -858,6 +858,11 @@ static void set_error(bd_settings *settings, const char *fmt, ...) {
   va_start(args, fmt);
   vsnprintf(settings->error, sizeof(settings->error), fmt, args);
   va_end(args);
+  settings->hint_dirty = true;
+  int top = settings->style.height - BD_SETTINGS_HINT_HEIGHT;
+  bd_gfx_damage_rect(settings->gfx,
+                     bd_rect_make(0, top, settings->style.width,
+                                  BD_SETTINGS_HINT_HEIGHT));
 }
 
 static void clear_error(bd_settings *settings) {
@@ -868,27 +873,86 @@ static bool apply_system_value(bd_settings *settings, const char *key,
                                const char *value) {
   if (strcmp(key, "display.brightness") == 0) {
     int percent = atoi(value);
-    if (settings->system.set_brightness != NULL &&
-        !settings->system.set_brightness(settings->system.user, percent)) {
+    if (settings->system.set_brightness == NULL) {
+      set_error(settings, "背光接口不可用");
+      return false;
+    }
+    if (!settings->system.set_brightness(settings->system.user, percent)) {
       set_error(settings, "背光接口拒绝了亮度 %d", percent);
       return false;
     }
   } else if (strcmp(key, "audio.volume") == 0) {
     int percent = atoi(value);
-    if (settings->system.set_volume != NULL &&
-        !settings->system.set_volume(settings->system.user, percent)) {
+    if (settings->system.set_volume == NULL) {
+      set_error(settings, "音频接口不可用");
+      return false;
+    }
+    if (!settings->system.set_volume(settings->system.user, percent)) {
       set_error(settings, "音频接口拒绝了音量 %d", percent);
       return false;
     }
   } else if (strcmp(key, "audio.mute") == 0) {
     bool muted = strcmp(value, "true") == 0;
-    if (settings->system.set_muted != NULL &&
-        !settings->system.set_muted(settings->system.user, muted)) {
+    if (settings->system.set_muted == NULL) {
+      set_error(settings, "音频接口不可用");
+      return false;
+    }
+    if (!settings->system.set_muted(settings->system.user, muted)) {
       set_error(settings, "音频接口拒绝了静音切换");
       return false;
     }
   }
   return true;
+}
+
+static bool read_system_value(const bd_settings *settings, const char *key,
+                              bd_config_value *value) {
+  if (strcmp(key, "display.brightness") == 0 &&
+      settings->system.get_brightness != NULL) {
+    int percent = 0;
+    if (!settings->system.get_brightness(settings->system.user, &percent)) {
+      return false;
+    }
+    memset(value, 0, sizeof(*value));
+    value->type = BD_CONFIG_INT;
+    value->integer = percent;
+    return true;
+  }
+  if (strcmp(key, "audio.volume") == 0 &&
+      settings->system.get_volume != NULL) {
+    int percent = 0;
+    if (!settings->system.get_volume(settings->system.user, &percent)) {
+      return false;
+    }
+    memset(value, 0, sizeof(*value));
+    value->type = BD_CONFIG_INT;
+    value->integer = percent;
+    return true;
+  }
+  if (strcmp(key, "audio.mute") == 0 && settings->system.get_muted != NULL) {
+    bool muted = false;
+    if (!settings->system.get_muted(settings->system.user, &muted)) {
+      return false;
+    }
+    memset(value, 0, sizeof(*value));
+    value->type = BD_CONFIG_BOOL;
+    value->boolean = muted;
+    return true;
+  }
+  return bd_config_get(settings->config, key, value);
+}
+
+static bool has_system_reader(const bd_settings *settings, const char *key) {
+  if (strcmp(key, "display.brightness") == 0) {
+    return settings->system.get_brightness != NULL;
+  }
+  if (strcmp(key, "audio.volume") == 0) {
+    return settings->system.get_volume != NULL;
+  }
+  if (strcmp(key, "audio.mute") == 0) {
+    return settings->system.get_muted != NULL;
+  }
+  return false;
 }
 
 static bool config_set(bd_settings *settings, const char *key,
@@ -966,8 +1030,17 @@ void bd_settings_row_value(const bd_settings *settings,
   }
   switch (row->kind) {
     case BD_SETTINGS_ROW_TOGGLE: {
-      bool value = bd_config_get_bool(settings->config, row->key, false);
-      snprintf(buffer, size, "%s", value ? "开" : "关");
+      bd_config_value value;
+      if (has_system_reader(settings, row->key)) {
+        if (!read_system_value(settings, row->key, &value)) {
+          snprintf(buffer, size, "不可用");
+          break;
+        }
+        snprintf(buffer, size, "%s", value.boolean ? "开" : "关");
+        break;
+      }
+      bool enabled = bd_config_get_bool(settings->config, row->key, false);
+      snprintf(buffer, size, "%s", enabled ? "开" : "关");
       break;
     }
     case BD_SETTINGS_ROW_SLIDER: {
@@ -976,8 +1049,8 @@ void bd_settings_row_value(const bd_settings *settings,
         break;
       }
       bd_config_value value;
-      if (!bd_config_get(settings->config, row->key, &value)) {
-        snprintf(buffer, size, "—");
+      if (!read_system_value(settings, row->key, &value)) {
+        snprintf(buffer, size, "不可用");
         break;
       }
       if (value.type == BD_CONFIG_DURATION) {
@@ -1015,6 +1088,14 @@ void bd_settings_row_value(const bd_settings *settings,
 static bool adjust_slider(bd_settings *settings, bd_settings_row *row,
                           int direction) {
   long value = bd_settings_row_slider_value(settings, row);
+  if (has_system_reader(settings, row->key)) {
+    bd_config_value current;
+    if (!read_system_value(settings, row->key, &current)) {
+      set_error(settings, "%s不可用", row->label);
+      return false;
+    }
+    value = current.integer;
+  }
   long step = row->step > 0 ? row->step : 1;
   value += direction > 0 ? step : -step;
   if (value < row->min_value) {
@@ -1054,8 +1135,46 @@ static bool adjust_slider(bd_settings *settings, bd_settings_row *row,
   return set_config_value(settings, row, text);
 }
 
+static bool adjust_perf_profile(bd_settings *settings, bd_settings_row *row,
+                               int direction) {
+  if (row->enum_values == NULL || row->enum_count <= 0) {
+    return false;
+  }
+  if (settings->perf_apply.apply_global_profile == NULL) {
+    set_error(settings, "perf 服务不可用");
+    return false;
+  }
+  const char *current =
+      bd_config_get_string(settings->config, row->key, NULL);
+  int index = -1;
+  for (int i = 0; i < row->enum_count; ++i) {
+    if (current != NULL && strcmp(row->enum_values[i], current) == 0) {
+      index = i;
+      break;
+    }
+  }
+  int next;
+  if (index < 0) {
+    next = direction > 0 ? 0 : row->enum_count - 1;
+  } else {
+    next = (index + direction + row->enum_count) % row->enum_count;
+  }
+  const char *profile = row->enum_values[next];
+  char error[128] = {0};
+  if (!settings->perf_apply.apply_global_profile(
+          settings->perf_apply.user, profile, error, sizeof(error))) {
+    set_error(settings, "%s",
+              error[0] != '\0' ? error : "perf 未确认应用该档位");
+    return false;
+  }
+  return set_config_value(settings, row, profile);
+}
+
 static bool adjust_enum(bd_settings *settings, bd_settings_row *row,
                         int direction) {
+  if (strcmp(row->key, "perf.global_profile") == 0) {
+    return adjust_perf_profile(settings, row, direction);
+  }
   if (row->enum_values == NULL || row->enum_count <= 0) {
     return false;
   }
@@ -1101,6 +1220,14 @@ static bool adjust_accent(bd_settings *settings, bd_settings_row *row,
 
 static bool adjust_toggle(bd_settings *settings, bd_settings_row *row) {
   bool value = bd_config_get_bool(settings->config, row->key, false);
+  if (has_system_reader(settings, row->key)) {
+    bd_config_value current;
+    if (!read_system_value(settings, row->key, &current)) {
+      set_error(settings, "%s不可用", row->label);
+      return false;
+    }
+    value = current.boolean;
+  }
   return set_config_value(settings, row, value ? "false" : "true");
 }
 
@@ -1329,6 +1456,53 @@ void bd_settings_set_system(bd_settings *settings,
     settings->system = *system;
   } else {
     memset(&settings->system, 0, sizeof(settings->system));
+  }
+}
+
+bool bd_settings_sync_system(bd_settings *settings, char *error,
+                             size_t error_size) {
+  if (settings == NULL) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "设置页不可用");
+    }
+    return false;
+  }
+  static const char *const KEYS[] = {"display.brightness", "audio.volume",
+                                     "audio.mute"};
+  bool ok = true;
+  for (size_t i = 0; i < sizeof(KEYS) / sizeof(KEYS[0]); ++i) {
+    bd_config_value value;
+    if (!bd_config_get(settings->config, KEYS[i], &value)) {
+      continue;
+    }
+    char text[32];
+    if (value.type == BD_CONFIG_BOOL) {
+      snprintf(text, sizeof(text), "%s", value.boolean ? "true" : "false");
+    } else {
+      snprintf(text, sizeof(text), "%ld", value.integer);
+    }
+    if (!apply_system_value(settings, KEYS[i], text)) {
+      if (ok && error != NULL && error_size > 0) {
+        snprintf(error, error_size, "%s", settings->error);
+      }
+      ok = false;
+    }
+  }
+  if (ok) {
+    clear_error(settings);
+  }
+  return ok;
+}
+
+void bd_settings_set_perf(bd_settings *settings,
+                          const bd_settings_perf *perf) {
+  if (settings == NULL) {
+    return;
+  }
+  if (perf != NULL) {
+    settings->perf_apply = *perf;
+  } else {
+    memset(&settings->perf_apply, 0, sizeof(settings->perf_apply));
   }
 }
 

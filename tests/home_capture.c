@@ -186,6 +186,30 @@ static bool write_demo_frame(const char *path, int variant) {
   return ok;
 }
 
+static bool g_quick_available = true;
+
+static bool capture_quick_read(void *user, bd_home_quick_control control,
+                               int *percent) {
+  (void)user;
+  if (!g_quick_available || percent == NULL) {
+    return false;
+  }
+  *percent = control == BD_HOME_QUICK_BRIGHTNESS ? 70 : 45;
+  return true;
+}
+
+static bool capture_quick_adjust(void *user, bd_home_quick_control control,
+                                 int delta, int *percent) {
+  (void)user;
+  (void)control;
+  (void)delta;
+  if (!g_quick_available || percent == NULL) {
+    return false;
+  }
+  *percent = control == BD_HOME_QUICK_BRIGHTNESS ? 70 : 45;
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: bd_home_capture OUT_DIR\n");
@@ -244,6 +268,11 @@ int main(int argc, char **argv) {
   status.battery_percent = 82;
   status.max_background = 3;
   bd_home_set_status(home, &status);
+  bd_home_quick_backend quick_backend;
+  memset(&quick_backend, 0, sizeof(quick_backend));
+  quick_backend.read = capture_quick_read;
+  quick_backend.adjust = capture_quick_adjust;
+  bd_home_set_quick_backend(home, &quick_backend);
 
   char temp_dir[] = "/tmp/bd_home_capture.XXXXXX";
   if (mkdtemp(temp_dir) == NULL) {
@@ -362,6 +391,19 @@ int main(int argc, char **argv) {
   status.wifi = true;
   status.battery_percent = 82;
   bd_home_set_status(home, &status);
+  g_quick_available = false;
+  bd_home_refresh_quick(home);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
+  if (!write_png(gfx, out_dir, "home_quick_controls_unknown")) {
+    return 1;
+  }
+  g_quick_available = true;
+  bd_home_refresh_quick(home);
+  bd_home_damage(home);
+  now += 220;
+  settle(platform, gfx, home, now);
 
   bd_home_close_quick(home);
   now += 220;

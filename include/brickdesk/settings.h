@@ -86,7 +86,29 @@ typedef struct bd_settings_system {
   bool (*set_brightness)(void *user, int percent);
   bool (*set_volume)(void *user, int percent);
   bool (*set_muted)(void *user, bool muted);
+  /*
+   * Optional read-back.  A device backend implements all three so the rows
+   * show the hardware value rather than the stored preference.  A getter that
+   * fails (or a NULL getter) makes the row "unavailable"; a setter is never
+   * assumed to have succeeded.  Tests install an explicit recording backend.
+   */
+  bool (*get_brightness)(void *user, int *percent);
+  bool (*get_volume)(void *user, int *percent);
+  bool (*get_muted)(void *user, bool *muted);
 } bd_settings_system;
+
+/*
+ * Performance-profile seam.  The page never writes perf sysfs itself: perfd is
+ * the only writer.  apply_global_profile must perform the real service
+ * round-trip and return false with a message when the service is missing,
+ * refuses, or does not confirm the applied profile.  The page then saves
+ * perf.global_profile only after that confirmation.
+ */
+typedef struct bd_settings_perf {
+  void *user;
+  bool (*apply_global_profile)(void *user, const char *profile, char *error,
+                               size_t error_size);
+} bd_settings_perf;
 
 /* Stub backend used by the tests and by M3; device backends arrive in M4. */
 typedef struct bd_settings_system_stub {
@@ -122,6 +144,11 @@ void bd_settings_destroy(bd_settings *settings);
 /* Optional integrations.  The page works without any of them. */
 void bd_settings_set_system(bd_settings *settings,
                             const bd_settings_system *system);
+/* Applies the persisted brightness/volume/mute through the installed system. */
+bool bd_settings_sync_system(bd_settings *settings, char *error,
+                             size_t error_size);
+void bd_settings_set_perf(bd_settings *settings,
+                          const bd_settings_perf *perf);
 void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host);
 void bd_settings_set_status(bd_settings *settings,
                             const bd_settings_status *status);

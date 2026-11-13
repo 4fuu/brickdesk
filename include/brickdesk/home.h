@@ -55,6 +55,7 @@ typedef struct bd_home_item {
 typedef struct bd_home_style {
   bd_color accent_base;      /* required; bd_config_accent_hex() output */
   bool blur_enabled;         /* false: plain gradients for the floating bars */
+  bool ambient_solid;        /* true: flat backdrop instead of baked gradient */
   int width;                 /* 0 uses the renderer width */
   int height;                /* 0 uses the renderer height */
 } bd_home_style;
@@ -152,9 +153,12 @@ bool bd_home_set_custom_draw(bd_home *home, const char *id,
                              bd_home_custom_draw_fn draw, void *user);
 /* Tells custom tiles whether the home surface itself is on screen. */
 void bd_home_set_surface_visible(bd_home *home, bool visible);
+bool bd_home_surface_visible(const bd_home *home);
 
 int bd_home_focus(const bd_home *home);
 void bd_home_set_focus(bd_home *home, int index);
+/* Index of an item id, or -1. */
+int bd_home_find_item(const bd_home *home, const char *id);
 /*
  * Item id A would act on right now: the selected running row while the quick
  * panel is open, otherwise the focused wall tile.  Returns NULL for quick
@@ -165,8 +169,42 @@ int bd_home_tab(const bd_home *home);
 void bd_home_set_tab(bd_home *home, int tab);
 
 void bd_home_set_blur_enabled(bd_home *home, bool enabled);
+/* theme.ambient: solid uses a flat backdrop; baked keeps the gradient. */
+void bd_home_set_ambient_solid(bd_home *home, bool solid);
+bool bd_home_ambient_solid(const bd_home *home);
+/* Rebuilds the derived accent palette and repaints the whole page. */
+void bd_home_set_accent(bd_home *home, bd_color accent_base);
+bd_color bd_home_accent_base(const bd_home *home);
 void bd_home_set_status(bd_home *home, const bd_home_status *status);
 void bd_home_set_live(bd_home *home, const bd_home_live *live);
+
+/*
+ * Optional quick-panel controls.  The shell owns the device backend and the
+ * config persistence; the home only asks for the current 0..100 value and for
+ * a relative adjustment.  A missing callback leaves the row unknown, never
+ * pretending that a software-only change reached the hardware.
+ */
+typedef enum bd_home_quick_control {
+  BD_HOME_QUICK_BRIGHTNESS = 0,
+  BD_HOME_QUICK_VOLUME
+} bd_home_quick_control;
+
+typedef struct bd_home_quick_backend {
+  void *user;
+  /* Reads the current percent.  false means unknown/unavailable. */
+  bool (*read)(void *user, bd_home_quick_control control, int *percent);
+  /*
+   * Applies delta (one step is 10 percent), persists it and returns the value
+   * read back from the device.  false leaves the displayed value unchanged.
+   */
+  bool (*adjust)(void *user, bd_home_quick_control control, int delta,
+                 int *percent);
+} bd_home_quick_backend;
+
+void bd_home_set_quick_backend(bd_home *home,
+                               const bd_home_quick_backend *backend);
+/* Re-reads brightness and volume for the next panel paint. */
+void bd_home_refresh_quick(bd_home *home);
 
 /*
  * Marks an app as running and loads its last frame through the M1-06

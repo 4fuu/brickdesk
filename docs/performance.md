@@ -60,6 +60,28 @@ Options:
 repaint. It deliberately does not start a plugin process or decode images, so
 IPC and plugin CPU are outside this number.
 
+## perfd socket
+
+`brickdesk-perfd` listens on a Unix socket (`$BRICKDESK_PERF_SOCKET`, default
+`/run/brickdesk/perfd.sock`) and speaks one JSON object per line. The desktop
+uses `bd_perf_client_set_global()` from `include/brickdesk/perf_client.h`,
+which performs a bounded, non-blocking connect/send/receive round trip and
+returns a typed error instead of blocking the event loop.
+
+The settings page's global profile row sends:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"perf.global","profile":"performance"}
+```
+
+`perf.global` validates the profile, rejects the request while an app lease
+owns the effective profile, sets the daemon's global profile, applies it
+through the normal transaction path and returns the confirmed plan. A missing
+daemon, an unknown profile, an active lease or a failed sysfs write is reported
+back; the settings page then leaves `perf.global_profile` unchanged and shows
+the error. `perf.apply`, `perf.set`, `perf.restore`, `perf.get`, `perf.list`,
+`perf.capabilities` and `perf.ping` are unchanged.
+
 ## Reading the JSON
 
 The schema is `"schema": "brickdesk-bench-v1"`, `"schema_version": 1`. New

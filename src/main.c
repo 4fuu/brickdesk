@@ -1,5 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 
+#ifndef BRICKDESK_STATE_DIR
+#define BRICKDESK_STATE_DIR "/tmp/brickdesk-state"
+#endif
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,6 +199,11 @@ int main(int argc, char **argv) {
   }
   bd_gfx_image_cache_set_budget(gfx, (size_t)cover_cache_mb * 1024u * 1024u);
 
+  const char *state_root = getenv("BRICKDESK_STATE_DIR");
+  if (state_root == NULL || state_root[0] == '\0') {
+    state_root = BRICKDESK_STATE_DIR;
+  }
+
   bd_plugin_host *plugin_host = NULL;
   bool plugins_enabled = bd_config_get_bool(settings, "plugins.enabled", true);
   if (plugins_enabled) {
@@ -216,6 +225,7 @@ int main(int argc, char **argv) {
                            ((uint32_t)(theme_accent.g * 255.0f + 0.5f) << 8) |
                            (uint32_t)(theme_accent.b * 255.0f + 0.5f);
     plugin_config.locale = bd_config_get_string(settings, "ui.language", "zh-CN");
+    plugin_config.state_dir = state_root;
     plugin_config.verbose = verbose;
     plugin_host = bd_plugin_host_create(&plugin_config);
     if (plugin_host == NULL) {
@@ -251,6 +261,7 @@ int main(int argc, char **argv) {
   shell_config.gfx = gfx;
   shell_config.settings = settings;
   shell_config.plugins = plugin_host;
+  shell_config.session_state_root = state_root;
   shell_config.verbose = verbose;
   shell_config.attach_plugin_tile = idle_check_ms == 0;
   bd_shell *shell = bd_shell_create(&shell_config);

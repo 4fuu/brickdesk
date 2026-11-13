@@ -119,11 +119,11 @@ def main() -> int:
             ("3 px  /  0 MB", "05_cell3_zero", bar_box(manifest["05_cell3_zero"])),
             ("3 px  /  506 MB", "06_cell3_506", bar_box(manifest["06_cell3_506"])),
             ("3 px  /  1024 MB", "07_cell3_full", bar_box(manifest["07_cell3_full"])),
-            ("3 px  /  unknown (neutral 25%)", "08_cell3_unknown", bar_box(manifest["08_cell3_unknown"])),
+            ("3 px  /  unknown (25%, rejected)", "08_cell3_unknown", bar_box(manifest["08_cell3_unknown"])),
         ],
         "Value states at 3 px cells - 1x, same scale",
         "compare_values_1x.png",
-        note="Unknown is a proposal: muted neutral dither; current product leaves the track empty.",
+        note="Product preference: unknown stays an empty track; 25% is rejected evidence.",
     )
 
     panes = [

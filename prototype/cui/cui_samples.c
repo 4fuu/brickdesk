@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -609,8 +610,8 @@ static bool self_check(const char *out_dir) {
   }
 
   bool subset = true;
-  cui_dither_bitmap low;
-  cui_dither_bitmap high;
+  cui_dither_bitmap low = {0};
+  cui_dither_bitmap high = {0};
   bool baked = cui_dither_bake(&low, 8, 8, 1, 0.25f,
                                bd_color_rgba(255, 255, 255, 255)) &&
                cui_dither_bake(&high, 8, 8, 1, 0.75f,
@@ -629,8 +630,8 @@ static bool self_check(const char *out_dir) {
   cui_dither_free(&low);
   cui_dither_free(&high);
 
-  cui_dither_bitmap over;
-  cui_dither_bitmap under;
+  cui_dither_bitmap over = {0};
+  cui_dither_bitmap under = {0};
   bool clamp = cui_dither_bake(&over, 8, 8, 1, 1.5f,
                                bd_color_rgba(255, 255, 255, 255)) &&
                cui_dither_bake(&under, 8, 8, 1, -1.0f,
@@ -746,8 +747,10 @@ int main(int argc, char **argv) {
     return 2;
   }
   const char *out_dir = argv[1];
-  if (mkdir(out_dir, 0777) != 0) {
-    /* Reusing an existing output directory is fine. */
+  if (mkdir(out_dir, 0777) != 0 && errno != EEXIST) {
+    fprintf(stderr, "cui_samples: cannot create %s: %s\n", out_dir,
+            strerror(errno));
+    return 1;
   }
 
   bd_platform_config config;

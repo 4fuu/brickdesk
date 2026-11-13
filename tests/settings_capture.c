@@ -316,6 +316,9 @@ int main(int argc, char **argv) {
        capture(platform, gfx, settings, out_dir, "settings_background", now) &&
        ok;
   now += 16;
+  ok = open_page(settings, BD_SETTINGS_CATEGORY_NETWORK) &&
+       capture(platform, gfx, settings, out_dir, "settings_network", now) && ok;
+  now += 16;
 
   ok = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) &&
        capture(platform, gfx, settings, out_dir, "settings_plugins", now) && ok;

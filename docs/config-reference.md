@@ -147,6 +147,10 @@ schema_version = 1
 |---|---|---|---|---|
 | `volume` | int | `70` | 0..100 | 系统输出音量百分比 |
 | `mute` | bool | `false` | — | 静音；保留音量值，取消静音后恢复 |
+| `channel_swap` | bool | `false` | — | 左右声道交换（ALSA 可选控件） |
+| `speaker_gain` | int | `100` | 0..100 | 扬声器增益（ALSA Speaker Volume） |
+| `headphone_gain` | int | `100` | 0..100 | 耳机增益（ALSA Headphone Volume） |
+| `mic` | bool | `false` | — | 内置麦克风开关（ALSA 可选控件） |
 
 音量、静音和背光由 `bd_settings_system` 接口应用到硬件；M3 使用记录状态的
 stub，M4 接入设备后端。
@@ -162,6 +166,8 @@ stub，M4 接入设备后端。
 | `double_tap_ms` | int | `300` | 100..1000 | 双击判定窗口 |
 | `haptics` | bool | `true` | — | 菜单/系统触觉总开关 |
 | `haptic_strength` | int | `60` | 0..100 | 菜单触觉强度（马达百分比） |
+| `stick_deadzone` | int | `8` | 0..30 | ABS_X/ABS_Y 死区百分比 |
+| `remap_a`/`b`/`x`/`y` | enum | 同名 | `A`/`B`/`X`/`Y` | 物理键输出的逻辑键；只影响 inputd/桌面，不改变 SDL 应用直读的 evdev |
 | `haptic_duration_ms` | int | `35` | 5..500 | 单次菜单触觉时长 |
 | `fn_switch_action` | enum | `mute` | `none`/`mute`/`led_off`/`performance`/`powersave`/`turbo`/`dpad_joystick` | FN 拨动开关动作 |
 | `f1_action` / `f2_action` | enum | `none` | `none`/`screenshot`/`settings`/`quick`/`recent`/`return_home`/`menu` | F1/F2 动作 |
@@ -208,6 +214,38 @@ Brick Pro 的厂商 LED 分区。`m` 是顶栏/Logo，`lr` 是摇杆环，`f1`/`
 | `safe_shutdown` | bool | `true` | — | 关机前经 `/dev/i2c-6` 对 AXP2202 软断开，失败回退标准关机 |
 | `low_battery_percent` | int | `5` | 0..100 | 低电量关机阈值 |
 | `shutdown_on_low_battery` | bool | `true` | — | 临界电量倒计时结束后是否自动关机 |
+
+### 4.7.1 `[net]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `wifi_enabled` | bool | `true` | — | Wi-Fi 开关的持久值；设置页切换时同时启停 wlan0/supplicant/DHCP |
+| `hotspot_enabled` | bool | `false` | — | 热点开关；启动 hostapd + dnsmasq |
+| `hotspot_ssid` | string | `BrickDesk` | ≤32 字符 | 热点 SSID |
+| `hotspot_psk` | string | `brickdesk` | ≤63 字符 | 热点 WPA2 密码；空字符串表示开放热点 |
+
+### 4.7.2 `[bt]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `enabled` | bool | `true` | — | 蓝牙电源的持久值；设置页和快捷面板切换时调用 `bluetoothctl power on/off` |
+
+### 4.7.3 `[share]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `ssh` | bool | `false` | — | 启动 sshd/dropbear |
+| `ftp` | bool | `false` | — | 启动 vsftpd/tcpsvd |
+| `samba` | bool | `false` | — | 启动 smbd |
+| `adb` | bool | `false` | — | 启动 adbd |
+| `usb_mode` | enum | `host` | `host`/`dock`/`data` | 调用厂商 `usbmode` 脚本切换 USB 模式 |
+
+### 4.7.4 `[time]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `ntp` | bool | `true` | — | NTP 自动校时；写 uci system.ntp.enable |
+| `timezone` | enum | `UTC` | 常见 IANA 时区 | 写 uci system.zonename 与 /etc/localtime |
 
 ### 4.8 `[plugins]`
 

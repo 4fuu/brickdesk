@@ -867,3 +867,111 @@ bd_av_result bd_av_audio_set_jack(bd_av_audio *audio, bool plugged,
   }
   return bd_av_audio_set_route(audio, BD_AV_ROUTE_AUTO, error);
 }
+
+static int find_named_control(const bd_av_audio *audio, const char *name,
+                              bool writable) {
+  if (name == NULL || name[0] == '\0') {
+    return -1;
+  }
+  for (size_t i = 0; i < audio->control_count; ++i) {
+    const bd_av_control_info *control = &audio->controls[i];
+    if (strcmp(control->name, name) == 0 && control->readable &&
+        (!writable || control->writable) && control->count > 0) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+bool bd_av_audio_has_control(const bd_av_audio *audio, const char *name) {
+  return audio != NULL && find_named_control(audio, name, false) >= 0;
+}
+
+bd_av_result bd_av_audio_set_switch_by_name(bd_av_audio *audio,
+                                            const char *name, bool value,
+                                            bd_av_error *error) {
+  bd_av_error_clear(error);
+  if (audio == NULL) {
+    bd_av_set_error(error, BD_AV_ERR_ARGUMENT, "audio is NULL");
+    return BD_AV_ERR_ARGUMENT;
+  }
+  int index = find_named_control(audio, name, true);
+  if (index < 0 ||
+      audio->controls[index].type != BD_AV_CONTROL_BOOLEAN) {
+    bd_av_set_error(error, BD_AV_ERR_UNSUPPORTED,
+                    "boolean control '%s' is not available", name);
+    return BD_AV_ERR_UNSUPPORTED;
+  }
+  return write_switch_value(audio, index, value, error);
+}
+
+bd_av_result bd_av_audio_set_percent_by_name(bd_av_audio *audio,
+                                             const char *name, int percent,
+                                             bd_av_error *error) {
+  bd_av_error_clear(error);
+  if (audio == NULL) {
+    bd_av_set_error(error, BD_AV_ERR_ARGUMENT, "audio is NULL");
+    return BD_AV_ERR_ARGUMENT;
+  }
+  if (percent < 0 || percent > 100) {
+    bd_av_set_error(error, BD_AV_ERR_ARGUMENT, "percent %d is outside 0..100",
+                    percent);
+    return BD_AV_ERR_ARGUMENT;
+  }
+  int index = find_named_control(audio, name, true);
+  if (index < 0 ||
+      (audio->controls[index].type != BD_AV_CONTROL_INTEGER &&
+       audio->controls[index].type != BD_AV_CONTROL_INTEGER64)) {
+    bd_av_set_error(error, BD_AV_ERR_UNSUPPORTED,
+                    "integer control '%s' is not available", name);
+    return BD_AV_ERR_UNSUPPORTED;
+  }
+  const bd_av_control_info *info = &audio->controls[index];
+  long span = info->max - info->min;
+  long value = info->min + (span * percent + 50) / 100;
+  if (info->step > 1) {
+    value = info->min + ((value - info->min) / info->step) * info->step;
+  }
+  if (value < info->min) {
+    value = info->min;
+  }
+  if (value > info->max) {
+    value = info->max;
+  }
+  long values[8];
+  size_t count = info->count < 8 ? info->count : 8;
+  for (size_t i = 0; i < count; ++i) {
+    values[i] = value;
+  }
+  return audio_write_values(audio, index, values, count, error);
+}
+
+bd_av_result bd_av_audio_get_percent_by_name(const bd_av_audio *audio,
+                                             const char *name, int *percent,
+                                             bd_av_error *error) {
+  bd_av_error_clear(error);
+  if (audio == NULL || percent == NULL) {
+    bd_av_set_error(error, BD_AV_ERR_ARGUMENT, "audio or percent is NULL");
+    return BD_AV_ERR_ARGUMENT;
+  }
+  int index = find_named_control(audio, name, false);
+  if (index < 0 ||
+      (audio->controls[index].type != BD_AV_CONTROL_INTEGER &&
+       audio->controls[index].type != BD_AV_CONTROL_INTEGER64)) {
+    bd_av_set_error(error, BD_AV_ERR_UNSUPPORTED,
+                    "integer control '%s' is not available", name);
+    return BD_AV_ERR_UNSUPPORTED;
+  }
+  long values[8];
+  size_t count = 0;
+  bd_av_result result =
+      audio_read_values(audio, index, values, 8, &count, error);
+  if (result != BD_AV_OK) {
+    return result;
+  }
+  const bd_av_control_info *info = &audio->controls[index];
+  long span = info->max - info->min;
+  *percent = span > 0 ? (int)(((values[0] - info->min) * 100 + span / 2) / span)
+                      : 0;
+  return BD_AV_OK;
+}

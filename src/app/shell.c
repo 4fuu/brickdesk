@@ -172,6 +172,9 @@ struct bd_shell {
   bd_keyboard *keyboard;
   bd_ui_fonts keyboard_fonts;
   bool keyboard_fonts_loaded;
+  bd_net *net;
+  bd_bt *bt;
+  bd_share *share;
 
   bd_session *session;
   int session_next_ms;
@@ -244,6 +247,8 @@ struct bd_shell {
   int status_battery;
   bool status_wifi_known;
   bool status_wifi;
+  bool status_bt_known;
+  bool status_bt;
   int status_max_background;
   uint64_t status_sampled_ms;
   int memory_budget_mb;
@@ -333,6 +338,8 @@ static void shell_publish_status(bd_shell *shell, bool force) {
   home_status.clock = shell->clock;
   home_status.wifi_known = shell->status_wifi_known;
   home_status.wifi = shell->status_wifi;
+  home_status.bt_known = shell->status_bt_known;
+  home_status.bt = shell->status_bt;
   home_status.battery_percent = shell->status_battery;
   home_status.max_background = max_background;
   bd_home_set_status(shell->home, &home_status);
@@ -435,6 +442,66 @@ static bool shell_home_adjust(void *user, bd_home_quick_control control,
   return true;
 }
 
+static bool shell_home_toggle(void *user, bd_home_quick_control control,
+                              bool *enabled) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || enabled == NULL) {
+    return false;
+  }
+  if (control == BD_HOME_QUICK_WIFI) {
+    if (shell->net == NULL) {
+      return false;
+    }
+    bd_net_status status;
+    bool current = false;
+    if (bd_net_get_status(shell->net, &status)) {
+      current = status.enabled;
+    }
+    char error[160] = {0};
+    if (!bd_net_set_enabled(shell->net, !current, error, sizeof(error))) {
+      bd_shell_notice(shell, BD_NOTICE_WARNING,
+                      error[0] != '\0' ? error : "Wi-Fi 切换失败", 0);
+      return false;
+    }
+    *enabled = !current;
+    shell->status_wifi_known = true;
+    shell->status_wifi = *enabled;
+    char save_error[128] = {0};
+    bd_config_set(shell->settings, "net.wifi_enabled",
+                  *enabled ? "true" : "false", save_error,
+                  sizeof(save_error));
+    bd_config_save(shell->settings, save_error, sizeof(save_error));
+    shell_publish_status(shell, true);
+    return true;
+  }
+  if (control == BD_HOME_QUICK_BLUETOOTH) {
+    if (shell->bt == NULL) {
+      return false;
+    }
+    bd_bt_status status;
+    bool current = false;
+    if (bd_bt_get_status(shell->bt, &status)) {
+      current = status.powered;
+    }
+    char error[160] = {0};
+    if (!bd_bt_set_powered(shell->bt, !current, error, sizeof(error))) {
+      bd_shell_notice(shell, BD_NOTICE_WARNING,
+                      error[0] != '\0' ? error : "蓝牙切换失败", 0);
+      return false;
+    }
+    *enabled = !current;
+    shell->status_bt_known = true;
+    shell->status_bt = *enabled;
+    char save_error[128] = {0};
+    bd_config_set(shell->settings, "bt.enabled", *enabled ? "true" : "false",
+                  save_error, sizeof(save_error));
+    bd_config_save(shell->settings, save_error, sizeof(save_error));
+    shell_publish_status(shell, true);
+    return true;
+  }
+  return false;
+}
+
 static void shell_home_quick_refresh(bd_shell *shell) {
   if (shell != NULL && shell->home != NULL) {
     bd_home_refresh_quick(shell->home);
@@ -507,6 +574,7 @@ static void shell_open_devices(bd_shell *shell, const bd_shell_config *config) {
     shell->system = *config->settings_system;
     shell->home_quick.read = shell_system_read;
     shell->home_quick.adjust = shell_home_adjust;
+    shell->home_quick.toggle = shell_home_toggle;
     shell->home_quick.user = shell;
     return;
   }
@@ -546,6 +614,7 @@ static void shell_open_devices(bd_shell *shell, const bd_shell_config *config) {
   shell->system.get_muted = shell_mute_get;
   shell->home_quick.read = shell_system_read;
   shell->home_quick.adjust = shell_home_adjust;
+  shell->home_quick.toggle = shell_home_toggle;
   shell->home_quick.user = shell;
 }
 
@@ -2744,13 +2813,50 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
   bd_wifi_state wifi = bd_sys_wifi_state(NULL);
   bool known = wifi != BD_WIFI_UNKNOWN;
   bool connected = wifi == BD_WIFI_CONNECTED;
-  if (!force && known == shell->status_wifi_known &&
-      connected == shell->status_wifi) {
-    return;
-  }
+  bool changed = force || known != shell->status_wifi_known ||
+                 connected != shell->status_wifi;
   shell->status_wifi_known = known;
   shell->status_wifi = connected;
-  shell_publish_status(shell, true);
+  if (getenv("BRICKDESK_HEADLESS") == NULL) {
+    time_t wall = time(NULL);
+    struct tm local;
+    if (wall != (time_t)-1 && localtime_r(&wall, &local) != NULL) {
+      char clock[16];
+      const char *format =
+          bd_config_get_string(shell->settings, "ui.time_format", "24h");
+      if (format == NULL) {
+        format = "24h";
+      }
+      bool seconds =
+          bd_config_get_bool(shell->settings, "ui.clock_seconds", false);
+      if (strcmp(format, "12h") == 0) {
+        strftime(clock, sizeof(clock), seconds ? "%I:%M:%S %p" : "%I:%M %p",
+                 &local);
+      } else {
+        strftime(clock, sizeof(clock), seconds ? "%H:%M:%S" : "%H:%M", &local);
+      }
+      if (strcmp(clock, shell->clock) != 0) {
+        copy_text(shell->clock, sizeof(shell->clock), clock);
+        changed = true;
+      }
+    }
+  }
+  if (shell->bt != NULL) {
+    bd_bt_status bt_status;
+    if (bd_bt_get_status(shell->bt, &bt_status)) {
+      bool bt_known = bt_status.state != BD_BT_STATE_UNKNOWN;
+      bool bt_on = bt_status.powered;
+      if (bt_known != shell->status_bt_known ||
+          bt_on != shell->status_bt) {
+        changed = true;
+      }
+      shell->status_bt_known = bt_known;
+      shell->status_bt = bt_on;
+    }
+  }
+  if (changed) {
+    shell_publish_status(shell, true);
+  }
 }
 
 static void shell_service(bd_shell *shell) {
@@ -3561,6 +3667,50 @@ static bool shell_home_input(bd_shell *shell, bd_home_action action) {
     shell->dirty = true;
   }
   return changed;
+}
+
+static void shell_time_done(void *user, bool accepted, const char *text) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell != NULL && accepted && shell->settings_page != NULL) {
+    bd_settings_set_time_text(shell->settings_page, text);
+  }
+}
+
+static void shell_time_prompt(void *user, const char *initial) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  if (!bd_shell_prompt_text(shell, "日期时间", initial, 19, false,
+                            shell_time_done, shell)) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING, "无法打开时间键盘", 0);
+  }
+}
+
+static void shell_net_password_done(void *user, bool accepted,
+                                    const char *text) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  if (accepted && shell->settings_page != NULL) {
+    bd_settings_net_connect(shell->settings_page, text);
+  }
+  shell->dirty = true;
+}
+
+static void shell_net_prompt(void *user, const char *ssid) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return;
+  }
+  char title[128];
+  snprintf(title, sizeof(title), "Wi-Fi 密码 · %.64s",
+           ssid != NULL ? ssid : "");
+  if (!bd_shell_prompt_text(shell, title, "", 63, true,
+                            shell_net_password_done, shell)) {
+    bd_shell_notice(shell, BD_NOTICE_WARNING, "无法打开密码键盘", 0);
+  }
 }
 
 static void shell_publish_app_ids(bd_shell *shell) {
@@ -5042,6 +5192,9 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->dirty = true;
   shell->status_battery = -1;
   shell->keyboard = bd_keyboard_create();
+  shell->net = bd_net_create(NULL, NULL);
+  shell->bt = bd_bt_create();
+  shell->share = bd_share_create(NULL);
   shell->keyboard_fonts_loaded =
       bd_ui_fonts_load(&shell->keyboard_fonts, config->gfx);
   if (!shell->keyboard_fonts_loaded) {
@@ -5154,10 +5307,18 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     fprintf(stderr, "brickdesk: settings page unavailable\n");
   } else {
     bd_settings_set_system(shell->settings_page, &shell->system);
+    bd_settings_set_audio(shell->settings_page,
+                          shell->av_audio_ready ? &shell->av_audio : NULL);
     bd_settings_perf perf_backend = {.user = shell,
                                      .apply_global_profile = shell_perf_apply};
     bd_settings_set_perf(shell->settings_page, &perf_backend);
     bd_settings_set_plugins(shell->settings_page, shell->plugins);
+    bd_settings_set_net(shell->settings_page, shell->net, shell_net_prompt,
+                        shell);
+    bd_settings_set_bt(shell->settings_page, shell->bt);
+    bd_settings_set_share(shell->settings_page, shell->share);
+    bd_settings_set_time_prompt(shell->settings_page, shell_time_prompt,
+                                shell);
     char system_error[128] = {0};
     if (!bd_settings_sync_system(shell->settings_page, system_error,
                                  sizeof(system_error)) &&
@@ -5377,6 +5538,12 @@ void bd_shell_destroy(bd_shell *shell) {
   }
   bd_keyboard_destroy(shell->keyboard);
   shell->keyboard = NULL;
+  bd_net_destroy(shell->net);
+  shell->net = NULL;
+  bd_bt_destroy(shell->bt);
+  shell->bt = NULL;
+  bd_share_destroy(shell->share);
+  shell->share = NULL;
   if (shell->keyboard_fonts_loaded) {
     bd_ui_fonts_free(&shell->keyboard_fonts);
     shell->keyboard_fonts_loaded = false;

@@ -160,6 +160,42 @@ struct bd_settings {
   char scope_app_ids[BD_SETTINGS_MAX_SCOPES][96];
   int scope_app_count;
 
+  bd_net *net;
+  bd_settings_net_prompt_fn net_prompt;
+  void *net_prompt_user;
+  bd_net_status net_status;
+  bool net_status_known;
+  bd_net_network net_scan[BD_NET_MAX_SCAN];
+  size_t net_scan_count;
+  bool net_scan_pending;
+  uint64_t net_scan_deadline;
+  bd_net_network net_saved[BD_NET_MAX_NETWORKS];
+  size_t net_saved_count;
+  char net_pending_ssid[BD_NET_SSID_MAX];
+  uint64_t net_status_deadline;
+
+  bd_bt *bt;
+  bd_bt_status bt_status;
+  bool bt_status_known;
+  bd_bt_device bt_devices[BD_BT_MAX_DEVICES];
+  size_t bt_count;
+  bool bt_scan_pending;
+  uint64_t bt_scan_deadline;
+  uint64_t bt_status_deadline;
+
+  bd_share *share;
+  bd_share_status share_status;
+  bool share_status_known;
+  uint64_t share_status_deadline;
+
+  bd_av_audio *audio;
+
+  bd_time_status time_status;
+  bool time_status_known;
+  bd_settings_time_prompt_fn time_prompt;
+  void *time_prompt_user;
+  uint64_t time_status_deadline;
+
   bd_perf_policy perf;
   bool perf_loaded;
   const char *profile_names[BD_PERF_MAX_PROFILES + 1];

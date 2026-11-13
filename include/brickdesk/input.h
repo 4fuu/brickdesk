@@ -417,6 +417,7 @@ typedef struct bd_device_mapping {
   uint16_t vendor;
   uint16_t product;
   bool has_ids;
+  int deadzone; /* percent of the 0..127 range for ABS_X/ABS_Y */
   int entry_count;
   bd_device_map_entry entries[BD_DEVICE_MAX_MAPPINGS];
 } bd_device_mapping;
@@ -424,6 +425,7 @@ typedef struct bd_device_mapping {
 typedef struct bd_device_map {
   bd_device_mapping devices[BD_DEVICE_MAX];
   size_t count;
+  int deadzone;
 } bd_device_map;
 
 /*

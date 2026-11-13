@@ -312,6 +312,8 @@ adb shell 'ls /sys/class/motor/ 2>/dev/null'
   的实际控件名、范围、方向；`tinymix set 9 1`/`1 0` 对应哪个控件。
 - 扬声器 0 音量时 `/sys/class/speaker/mute` 是否必须写 1 才能消除底噪。
 - 耳机插入后扬声器是否物理静音。
+- 声音页声道交换、扬声器/耳机增益、麦克风开关：确认对应 ALSA 控件名存在且
+  写入后 `amixer` 读回一致；不存在时设置页显示“不可用”而不是假装成功。
 - 蓝牙 A2DP：`bluealsa` control 名、`amixer -D bluealsa` 是否可调、切回扬声器是否恢复。
 - USB DAC：卡名、`PCM/Playback + Volume` 控件、OTG 供电是否足够。
 - `led_anim` 完整节点：`m/lr/f1/f2/rear` 对应哪颗物理灯；`effect_*` 编号；
@@ -336,7 +338,23 @@ adb shell 'ls /sys/class/devfreq/ 2>/dev/null'
 
 - Wi-Fi 是 XR829 还是 RTL8821CS；`lsmod`/`modalias`/`dmesg` 三者一致。
 - 蓝牙 `hciattach` 还是 `hciattach_aic` 能起 `hci0`；`rfkill0/state` 极性。
+- 设置页“连接”的蓝牙段：开关电源、扫描、pair/trust/connect 一个手柄和一副
+  耳机；断开/忘记后状态行和设备列表同步；`bluealsa` 是否出现 A2DP sink。
+- 深睡前后 `bd_bt_suspend/resume`：`bluetoothd`/`bluealsa` 被停/重启，
+  `hciconfig hci0 up` 成功，唤醒后能自动重连；蓝牙原本关闭时不会被 resume 打开。
 - `wpa_supplicant` 的 `ctrl_interface` 路径；`udhcpc` 是否自动拿 IP。
+- 设置页“网络”：关/开 Wi-Fi，确认 `wlan0` operstate、`wpa_cli status` 和状态行一致；
+  扫描后选择加密 AP，用屏幕键盘输密码，确认 `wpa_cli save_config` 写入
+  supplicant 配置并拿到 IP；重启 inputd/桌面后已保存网络仍可重连。
+- 热点：打开 `net.hotspot_enabled`，确认 `hostapd`/`dnsmasq` 进程、`192.168.4.1`
+  地址和 DHCP 租约；手机连接后能访问外网；关闭后进程和地址都清掉。
+- 深睡前后 `bd_net_suspend/resume`：wpa_supplicant 与 udhcpc 被停/重启，唤醒后
+  自动重连；Wi-Fi 原本关闭时不会被 resume 重新打开。
+- 设置页“连接”底部：逐个打开 SSH/FTP/Samba/ADB，确认进程、端口和 IP 地址；
+  关闭后进程消失。USB 模式切 host/dock/data，确认厂商 `usbmode` 脚本存在且
+  主机能识别对应设备。
+- 设置页“系统”的时间段：手动输入日期时间、切换时区、开/关 NTP、立即同步、
+  写 RTC；顶栏时钟在 12h/24h、秒显示切换后立即更新，断电重启后保持。
 - CPU policy 数量、可用 governor/频率、`cpu1..3/online` 是否可写；写
   `scaling_min_freq`/`max_freq` 的顺序是否造成瞬时超频。
 - thermal zone 0/1/2 分别是什么；满载是否降频；GPU 是否有 devfreq 或

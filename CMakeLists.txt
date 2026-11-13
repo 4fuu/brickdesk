@@ -166,7 +166,12 @@ add_library(brickdesk_device STATIC
   src/device/audio_alsa.c
   src/device/brightness.c
   src/device/brightness_common.c
+  src/device/bt.c
   src/device/display.c
+  src/device/net.c
+  src/device/process.c
+  src/device/share.c
+  src/device/time.c
 )
 target_include_directories(brickdesk_device
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -386,7 +391,7 @@ target_include_directories(brickdesk_settings
 )
 target_link_libraries(brickdesk_settings
   PUBLIC brickdesk_core brickdesk_config brickdesk_input brickdesk_plugin
-  PRIVATE brickdesk_perf brickdesk_battery brickdesk_sysinfo brickdesk_warnings
+  PRIVATE brickdesk_device brickdesk_perf brickdesk_battery brickdesk_sysinfo brickdesk_warnings
 )
 
 target_link_libraries(brickdesk_shell PUBLIC brickdesk_settings)

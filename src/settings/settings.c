@@ -133,7 +133,9 @@ static const char *const APPEARANCE_SECTIONS[] = {"theme", "ui", NULL};
 static const char *const APPEARANCE_SKIP[] = {
     "theme.mode", "ui.language", "ui.time_format", "ui.clock_seconds",
     "ui.cover_cache_mb", NULL};
-static const char *const SOUND_KEYS[] = {"audio.volume", "audio.mute", NULL};
+static const char *const SOUND_KEYS[] = {
+    "audio.volume", "audio.mute", "audio.channel_swap", "audio.speaker_gain",
+    "audio.headphone_gain", "audio.mic", NULL};
 static const char *const SOUND_SECTIONS[] = {"audio", NULL};
 static const char *const DISPLAY_KEYS[] = {
     "display.brightness",       "display.color_temperature",
@@ -147,7 +149,8 @@ static const char *const DISPLAY_SKIP[] = {"display.width", "display.height",
 static const char *const INPUT_KEYS[] = {
     "input.fn_switch_action", "input.home_action", "input.f1_action",
     "input.f1_app", "input.f2_action", "input.f2_app",
-    "input.dpad_to_joystick", "input.turbo", NULL};
+    "input.dpad_to_joystick", "input.turbo", "input.stick_deadzone",
+    "input.remap_a", "input.remap_b", "input.remap_x", "input.remap_y", NULL};
 static const char *const LIGHTS_KEYS[] = {
     "led.enabled",
     "led.m.brightness", "led.m.color", "led.m.effect",
@@ -183,6 +186,8 @@ const bd_settings_page_def BD_SETTINGS_PAGES[BD_SETTINGS_CATEGORY_COUNT] = {
      BACKGROUND_KEYS, BACKGROUND_SECTIONS, BACKGROUND_SKIP},
     {"插件", "插件列表与设置", "A 打开插件声明式设置；B 返回。", NULL, NULL,
      NULL},
+    {"连接", "Wi-Fi、热点与蓝牙",
+     "A 连接网络/设备；密码用屏幕键盘输入。", NULL, NULL, NULL},
     {"系统", "版本、存储与关于", "设置会即时保存到 local.ini。", NULL, NULL,
      NULL},
 };
@@ -194,6 +199,10 @@ static const bd_settings_label LABELS[] = {
     {"ui.blur", "界面模糊", "顶栏与提示栏的窄条模糊；关闭后改为渐变", NULL, 0},
     {"audio.volume", "音量", "系统输出音量", NULL, 1},
     {"audio.mute", "静音", "关闭全部系统声音", NULL, 1},
+    {"audio.channel_swap", "声道交换", "左右声道互换（ALSA 可选控件）", NULL, 1},
+    {"audio.speaker_gain", "扬声器增益", "ALSA Speaker Volume", "%", 5},
+    {"audio.headphone_gain", "耳机增益", "ALSA Headphone Volume", "%", 5},
+    {"audio.mic", "麦克风", "内置麦克风开关", NULL, 1},
     {"display.brightness", "亮度", "屏幕背光", NULL, 1},
     {"display.color_temperature", "色温", "负值偏冷，正值偏暖", NULL, 10},
     {"display.contrast", "对比度", "厂商 enhance_contrast", NULL, 5},
@@ -764,6 +773,221 @@ static bool build_hotkey_page(bd_settings *settings) {
   return true;
 }
 
+static const char *net_state_label(bd_net_state state) {
+  switch (state) {
+    case BD_NET_STATE_CONNECTED:
+      return "已连接";
+    case BD_NET_STATE_CONNECTING:
+      return "正在连接";
+    case BD_NET_STATE_SCANNING:
+      return "扫描中";
+    case BD_NET_STATE_DISCONNECTED:
+      return "未连接";
+    case BD_NET_STATE_DISABLED:
+      return "已关闭";
+    case BD_NET_STATE_UNKNOWN:
+    default:
+      return "状态未知";
+  }
+}
+
+static const char *bt_state_label(bd_bt_state state) {
+  switch (state) {
+    case BD_BT_STATE_CONNECTED:
+      return "已连接";
+    case BD_BT_STATE_ENABLED:
+      return "已开启";
+    case BD_BT_STATE_DISABLED:
+      return "已关闭";
+    case BD_BT_STATE_UNKNOWN:
+    default:
+      return "状态未知";
+  }
+}
+
+static bool build_network_page(bd_settings *settings) {
+  bd_settings_row *row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    copy_text(row->key, sizeof(row->key), "net.wifi_enabled");
+    copy_text(row->label, sizeof(row->label), "Wi-Fi");
+    copy_text(row->description, sizeof(row->description),
+              "开关 wlan0、wpa_supplicant 与 DHCP");
+    row->type = BD_CONFIG_BOOL;
+  }
+
+  char description[224];
+  if (settings->net_status_known) {
+    if (settings->net_status.state == BD_NET_STATE_CONNECTED) {
+      snprintf(description, sizeof(description), "%s · %s",
+               settings->net_status.ssid[0] != '\0' ? settings->net_status.ssid
+                                                     : "已连接",
+               settings->net_status.ip[0] != '\0' ? settings->net_status.ip
+                                                   : "等待地址");
+    } else {
+      snprintf(description, sizeof(description), "%s",
+               net_state_label(settings->net_status.state));
+    }
+  } else {
+    snprintf(description, sizeof(description), "尚未读取网络状态");
+  }
+  add_info_row(settings, "!net.status", "状态", description, "");
+
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!net.scan");
+    copy_text(row->label, sizeof(row->label), "扫描网络");
+    copy_text(row->description, sizeof(row->description),
+              settings->net_scan_pending ? "正在扫描…" : "A 扫描附近的 Wi-Fi");
+    snprintf(row->value, sizeof(row->value), "%zu",
+             settings->net_scan_count);
+    row->index = -1;
+  }
+
+  for (size_t i = 0; i < settings->net_scan_count; ++i) {
+    const bd_net_network *entry = &settings->net_scan[i];
+    row = append_row(settings);
+    if (row == NULL) {
+      break;
+    }
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!net.scan");
+    copy_trimmed(row->label, sizeof(row->label), entry->ssid);
+    snprintf(row->description, sizeof(row->description), "%s · 信号 %d",
+             entry->secured ? "已加密" : "开放", entry->signal);
+    copy_text(row->value, sizeof(row->value), "连接");
+    row->index = (int)i;
+    row->bullet_slot = true;
+  }
+
+  if (settings->net_saved_count > 0) {
+    add_info_row(settings, "!net.saved.title", "已保存网络", "", "");
+  }
+  for (size_t i = 0; i < settings->net_saved_count; ++i) {
+    const bd_net_network *entry = &settings->net_saved[i];
+    row = append_row(settings);
+    if (row == NULL) {
+      break;
+    }
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!net.saved");
+    copy_trimmed(row->label, sizeof(row->label), entry->ssid);
+    copy_text(row->description, sizeof(row->description),
+              entry->current ? "已保存 · 当前网络" : "已保存");
+    copy_text(row->value, sizeof(row->value), "连接");
+    row->index = entry->id;
+    row->bullet_slot = true;
+  }
+
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    copy_text(row->key, sizeof(row->key), "net.hotspot_enabled");
+    copy_text(row->label, sizeof(row->label), "热点");
+    copy_text(row->description, sizeof(row->description),
+              "hostapd + dnsmasq，地址 192.168.4.1");
+    row->type = BD_CONFIG_BOOL;
+  }
+  add_info_row(settings, "!net.hotspot", "热点配置",
+               "SSID/密码可在 local.ini 的 net.hotspot_ssid / net.hotspot_psk 修改",
+               settings->net_status.hotspot ? "运行中" : "");
+
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    copy_text(row->key, sizeof(row->key), "bt.enabled");
+    copy_text(row->label, sizeof(row->label), "蓝牙");
+    copy_text(row->description, sizeof(row->description),
+              "bluetoothctl 电源与 bluealsa 音频输出");
+    row->type = BD_CONFIG_BOOL;
+  }
+  if (settings->bt_status_known &&
+      settings->bt_status.state == BD_BT_STATE_CONNECTED) {
+    snprintf(description, sizeof(description), "%s · %s",
+             settings->bt_status.connected_name[0] != '\0'
+                 ? settings->bt_status.connected_name
+                 : "已连接",
+             settings->bt_status.connected_addr);
+  } else {
+    snprintf(description, sizeof(description), "%s",
+             settings->bt_status_known
+                 ? bt_state_label(settings->bt_status.state)
+                 : "尚未读取蓝牙状态");
+  }
+  add_info_row(settings, "!bt.status", "蓝牙状态", description, "");
+
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!bt.scan");
+    copy_text(row->label, sizeof(row->label), "扫描蓝牙设备");
+    copy_text(row->description, sizeof(row->description),
+              settings->bt_scan_pending ? "正在扫描…" : "A 扫描附近的蓝牙设备");
+    snprintf(row->value, sizeof(row->value), "%zu", settings->bt_count);
+    row->index = -1;
+  }
+  for (size_t i = 0; i < settings->bt_count; ++i) {
+    const bd_bt_device *device = &settings->bt_devices[i];
+    row = append_row(settings);
+    if (row == NULL) {
+      break;
+    }
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!bt.device");
+    copy_trimmed(row->label, sizeof(row->label), device->name);
+    copy_text(row->description, sizeof(row->description),
+              device->connected ? "已连接" : device->addr);
+    copy_text(row->value, sizeof(row->value), device->connected ? "已连接" : "连接");
+    row->index = (int)i;
+    row->bullet_slot = true;
+  }
+  add_info_row(settings, "!bt.audio", "蓝牙音频",
+               "A2DP 输出经 bluealsa；连接后音量走 bluealsa 控件",
+               settings->bt_status_known &&
+                       settings->bt_status.state == BD_BT_STATE_CONNECTED
+                   ? "bluealsa"
+                   : "");
+  add_info_row(settings, "!share.ip", "IP 地址",
+               "SSH/FTP/Samba 使用该地址", settings->share_status.ip);
+
+  static const struct {
+    const char *key;
+    const char *label;
+    const char *description;
+  } SERVICES[] = {
+      {"share.ssh", "SSH", "sshd/dropbear，端口 22"},
+      {"share.ftp", "FTP", "vsftpd，端口 21"},
+      {"share.samba", "Samba", "smbd 文件共享"},
+      {"share.adb", "ADB", "adbd USB 调试"},
+  };
+  for (size_t i = 0; i < sizeof(SERVICES) / sizeof(SERVICES[0]); ++i) {
+    row = append_row(settings);
+    if (row == NULL) {
+      break;
+    }
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    copy_text(row->key, sizeof(row->key), SERVICES[i].key);
+    copy_text(row->label, sizeof(row->label), SERVICES[i].label);
+    copy_text(row->description, sizeof(row->description),
+              SERVICES[i].description);
+    row->type = BD_CONFIG_BOOL;
+  }
+  static const char *const USB_MODES[] = {"host", "dock", "data", NULL};
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ENUM;
+    copy_text(row->key, sizeof(row->key), "share.usb_mode");
+    copy_text(row->label, sizeof(row->label), "USB 模式");
+    copy_text(row->description, sizeof(row->description),
+              "host / dock / data；由厂商 usbmode 脚本切换");
+    row->type = BD_CONFIG_STRING;
+    row->enum_values = USB_MODES;
+    row->enum_count = 3;
+  }
+  return true;
+}
+
 static bool build_perf_page(bd_settings *settings) {
   if (settings->profile_count > 0) {
     bd_settings_row *row = append_row(settings);
@@ -888,6 +1112,70 @@ static void format_storage(const bd_settings *settings, char *buffer,
 }
 
 static bool build_system_page(bd_settings *settings) {
+  char now_text[48] = "未同步";
+  if (settings->time_status_known) {
+    struct tm local;
+    if (localtime_r(&settings->time_status.now, &local) != NULL) {
+      strftime(now_text, sizeof(now_text), "%Y-%m-%d %H:%M", &local);
+    }
+  }
+  add_info_row(settings, "!time.now", "日期时间", "本地时间；RTC 由 AXP2202 提供",
+               now_text);
+  bd_settings_row *row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!time.set");
+    copy_text(row->label, sizeof(row->label), "设置日期时间");
+    copy_text(row->description, sizeof(row->description),
+              "用屏幕键盘输入 YYYY-MM-DD HH:MM");
+    copy_text(row->value, sizeof(row->value), "修改");
+    row->index = -1;
+  }
+  static const char *const TIMEZONES[] = {
+      "UTC",            "Asia/Shanghai",  "Asia/Tokyo",    "Asia/Seoul",
+      "Asia/Singapore", "Europe/London",  "Europe/Berlin", "America/New_York",
+      "America/Los_Angeles", NULL};
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ENUM;
+    copy_text(row->key, sizeof(row->key), "time.timezone");
+    copy_text(row->label, sizeof(row->label), "时区");
+    copy_text(row->description, sizeof(row->description),
+              "写 uci system.zonename 与 /etc/localtime");
+    row->type = BD_CONFIG_STRING;
+    row->enum_values = TIMEZONES;
+    row->enum_count = 9;
+  }
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    copy_text(row->key, sizeof(row->key), "time.ntp");
+    copy_text(row->label, sizeof(row->label), "NTP 自动同步");
+    copy_text(row->description, sizeof(row->description),
+              "Wi-Fi 连接后由 ntpd 校时");
+    row->type = BD_CONFIG_BOOL;
+  }
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!time.sync");
+    copy_text(row->label, sizeof(row->label), "立即同步");
+    copy_text(row->description, sizeof(row->description),
+              "ntpd -q 后写 RTC");
+    copy_text(row->value, sizeof(row->value), "同步");
+    row->index = -1;
+  }
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!time.rtc");
+    copy_text(row->label, sizeof(row->label), "写入 RTC");
+    copy_text(row->description, sizeof(row->description),
+              "hwclock -u -w；断电后保持时间");
+    copy_text(row->value, sizeof(row->value), "写入");
+    row->index = -1;
+  }
+
   char version[96];
   snprintf(version, sizeof(version), "brickdesk %s (%s)", BRICKDESK_VERSION,
            BRICKDESK_BACKEND_NAME);
@@ -934,14 +1222,14 @@ static bool build_system_page(bd_settings *settings) {
   }
   add_info_row(settings, "!about", "关于 brickdesk",
                "为 TrimUI Brick Pro 设计的桌面 · 1024×768 · 仅手柄操作", "");
-  bd_settings_row *row = append_row(settings);
-  if (row != NULL) {
-    row->kind = BD_SETTINGS_ROW_RESET;
-    copy_text(row->key, sizeof(row->key), "!reset");
-    copy_text(row->label, sizeof(row->label), "恢复默认设置");
-    copy_text(row->description, sizeof(row->description),
+  bd_settings_row *reset_row = append_row(settings);
+  if (reset_row != NULL) {
+    reset_row->kind = BD_SETTINGS_ROW_RESET;
+    copy_text(reset_row->key, sizeof(reset_row->key), "!reset");
+    copy_text(reset_row->label, sizeof(reset_row->label), "恢复默认设置");
+    copy_text(reset_row->description, sizeof(reset_row->description),
               "清除本地修改，立即恢复默认值");
-    copy_text(row->value, sizeof(row->value), "重置");
+    copy_text(reset_row->value, sizeof(reset_row->value), "重置");
   }
   return true;
 }
@@ -992,6 +1280,8 @@ bool bd_settings_rebuild_rows(bd_settings *settings) {
       return build_perf_page(settings);
     case BD_SETTINGS_CATEGORY_PLUGINS:
       return build_plugin_page(settings);
+    case BD_SETTINGS_CATEGORY_NETWORK:
+      return build_network_page(settings);
     case BD_SETTINGS_CATEGORY_SYSTEM:
       return build_system_page(settings);
     default:
@@ -1282,6 +1572,42 @@ void bd_settings_row_value(const bd_settings *settings,
   }
   switch (row->kind) {
     case BD_SETTINGS_ROW_TOGGLE: {
+      if (strcmp(row->key, "net.wifi_enabled") == 0 &&
+          settings->net_status_known) {
+        snprintf(buffer, size, "%s",
+                 settings->net_status.enabled ? "开" : "关");
+        break;
+      }
+      if (strcmp(row->key, "net.hotspot_enabled") == 0 &&
+          settings->net_status_known) {
+        snprintf(buffer, size, "%s",
+                 settings->net_status.hotspot ? "开" : "关");
+        break;
+      }
+      if (strcmp(row->key, "bt.enabled") == 0 && settings->bt_status_known) {
+        snprintf(buffer, size, "%s",
+                 settings->bt_status.powered ? "开" : "关");
+        break;
+      }
+      if (strcmp(row->key, "time.ntp") == 0 &&
+          settings->time_status_known) {
+        snprintf(buffer, size, "%s",
+                 settings->time_status.ntp ? "开" : "关");
+        break;
+      }
+      if (strncmp(row->key, "share.", 6) == 0 &&
+          settings->share_status_known &&
+          strcmp(row->key, "share.usb_mode") != 0) {
+        bool on = strcmp(row->key, "share.ssh") == 0
+                      ? settings->share_status.ssh
+                      : (strcmp(row->key, "share.ftp") == 0
+                             ? settings->share_status.ftp
+                             : (strcmp(row->key, "share.samba") == 0
+                                    ? settings->share_status.samba
+                                    : settings->share_status.adb));
+        snprintf(buffer, size, "%s", on ? "开" : "关");
+        break;
+      }
       bd_config_value value;
       if (has_system_reader(settings, row->key)) {
         if (!read_system_value(settings, row->key, &value)) {
@@ -1382,6 +1708,21 @@ static bool adjust_slider(bd_settings *settings, bd_settings_row *row,
     bd_gfx_damage_all(settings->gfx);
     return true;
   }
+  if (strcmp(row->key, "audio.speaker_gain") == 0 ||
+      strcmp(row->key, "audio.headphone_gain") == 0) {
+    const char *control = strcmp(row->key, "audio.speaker_gain") == 0
+                              ? "Speaker Volume"
+                              : "Headphone Volume";
+    bd_av_error audio_error;
+    bd_av_error_clear(&audio_error);
+    if (settings->audio == NULL ||
+        !bd_av_audio_has_control(settings->audio, control) ||
+        bd_av_audio_set_percent_by_name(settings->audio, control, (int)value,
+                                        &audio_error) != BD_AV_OK) {
+      set_error(settings, "%s不可用", row->label);
+      return false;
+    }
+  }
   char text[32];
   snprintf(text, sizeof(text), "%ld", value);
   return set_config_value(settings, row, text);
@@ -1447,6 +1788,29 @@ static bool adjust_enum(bd_settings *settings, bd_settings_row *row,
   } else {
     next = (index + direction + row->enum_count) % row->enum_count;
   }
+  if (strcmp(row->key, "time.timezone") == 0) {
+    if (!set_config_value(settings, row, row->enum_values[next])) {
+      return false;
+    }
+    char error[160] = {0};
+    if (!bd_time_set_timezone(row->enum_values[next], error, sizeof(error))) {
+      set_error(settings, "%s", error[0] != '\0' ? error : "时区切换失败");
+    }
+    bd_settings_time_refresh(settings);
+    return true;
+  }
+  if (strcmp(row->key, "share.usb_mode") == 0) {
+    if (!set_config_value(settings, row, row->enum_values[next])) {
+      return false;
+    }
+    char error[160] = {0};
+    if (settings->share != NULL &&
+        !bd_share_set_usb_mode(settings->share, row->enum_values[next], error,
+                               sizeof(error))) {
+      set_error(settings, "%s", error[0] != '\0' ? error : "USB 模式切换失败");
+    }
+    return true;
+  }
   return set_config_value(settings, row, row->enum_values[next]);
 }
 
@@ -1470,7 +1834,157 @@ static bool adjust_accent(bd_settings *settings, bd_settings_row *row,
   return set_config_value(settings, row, row->enum_values[next]);
 }
 
+static bool adjust_net_toggle(bd_settings *settings, bd_settings_row *row) {
+  if (settings->net == NULL) {
+    set_error(settings, "网络后端不可用");
+    return false;
+  }
+  char error[160] = {0};
+  bool wifi = strcmp(row->key, "net.wifi_enabled") == 0;
+  bool enabled = wifi
+                     ? (settings->net_status_known ? settings->net_status.enabled
+                                                   : bd_config_get_bool(
+                                                         settings->config,
+                                                         row->key, true))
+                     : bd_config_get_bool(settings->config, row->key, false);
+  bool next = !enabled;
+  bool ok = false;
+  if (wifi) {
+    ok = bd_net_set_enabled(settings->net, next, error, sizeof(error));
+  } else if (next) {
+    const char *ssid = bd_config_get_string(settings->config,
+                                            "net.hotspot_ssid", "BrickDesk");
+    const char *psk = bd_config_get_string(settings->config,
+                                           "net.hotspot_psk", "brickdesk");
+    ok = bd_net_hotspot_start(settings->net, ssid, psk, error, sizeof(error));
+  } else {
+    ok = bd_net_hotspot_stop(settings->net, error, sizeof(error));
+  }
+  if (!ok) {
+    set_error(settings, "%s", error[0] != '\0' ? error : "网络操作失败");
+    return false;
+  }
+  if (!set_config_value(settings, row, next ? "true" : "false")) {
+    return false;
+  }
+  bd_settings_net_refresh(settings);
+  return true;
+}
+
+static bool adjust_audio_toggle(bd_settings *settings, bd_settings_row *row) {
+  if (settings->audio == NULL) {
+    set_error(settings, "音频后端不可用");
+    return false;
+  }
+  bool enabled = bd_config_get_bool(settings->config, row->key, false);
+  bool next = !enabled;
+  bd_av_error error;
+  bd_av_error_clear(&error);
+  bool ok = false;
+  if (strcmp(row->key, "audio.channel_swap") == 0) {
+    static const char *const CONTROLS[] = {"Speaker Channel Swap",
+                                           "Headphone Channel Swap"};
+    for (size_t i = 0; i < sizeof(CONTROLS) / sizeof(CONTROLS[0]); ++i) {
+      if (bd_av_audio_has_control(settings->audio, CONTROLS[i])) {
+        ok = bd_av_audio_set_switch_by_name(settings->audio, CONTROLS[i], next,
+                                            &error) == BD_AV_OK;
+        break;
+      }
+    }
+  } else {
+    static const char *const CONTROLS[] = {"Mic Switch", "Capture Switch",
+                                           "Mic Capture Switch"};
+    for (size_t i = 0; i < sizeof(CONTROLS) / sizeof(CONTROLS[0]); ++i) {
+      if (bd_av_audio_has_control(settings->audio, CONTROLS[i])) {
+        ok = bd_av_audio_set_switch_by_name(settings->audio, CONTROLS[i], next,
+                                            &error) == BD_AV_OK;
+        break;
+      }
+    }
+  }
+  if (!ok) {
+    set_error(settings, "%s不可用", row->label);
+    return false;
+  }
+  return set_config_value(settings, row, next ? "true" : "false");
+}
+
+static bool adjust_share_toggle(bd_settings *settings, bd_settings_row *row) {
+  if (settings->share == NULL) {
+    set_error(settings, "共享后端不可用");
+    return false;
+  }
+  bd_share_service service = BD_SHARE_SSH;
+  if (strcmp(row->key, "share.ftp") == 0) {
+    service = BD_SHARE_FTP;
+  } else if (strcmp(row->key, "share.samba") == 0) {
+    service = BD_SHARE_SAMBA;
+  } else if (strcmp(row->key, "share.adb") == 0) {
+    service = BD_SHARE_ADB;
+  }
+  bool enabled = bd_config_get_bool(settings->config, row->key, false);
+  char error[160] = {0};
+  if (!bd_share_set_service(settings->share, service, !enabled, error,
+                            sizeof(error))) {
+    set_error(settings, "%s", error[0] != '\0' ? error : "服务切换失败");
+    return false;
+  }
+  if (!set_config_value(settings, row, !enabled ? "true" : "false")) {
+    return false;
+  }
+  bd_settings_share_refresh(settings);
+  return true;
+}
+
+static bool adjust_bt_toggle(bd_settings *settings, bd_settings_row *row) {
+  if (settings->bt == NULL) {
+    set_error(settings, "蓝牙后端不可用");
+    return false;
+  }
+  bool enabled = settings->bt_status_known
+                     ? settings->bt_status.powered
+                     : bd_config_get_bool(settings->config, row->key, true);
+  char error[160] = {0};
+  if (!bd_bt_set_powered(settings->bt, !enabled, error, sizeof(error))) {
+    set_error(settings, "%s", error[0] != '\0' ? error : "蓝牙切换失败");
+    return false;
+  }
+  if (!set_config_value(settings, row, !enabled ? "true" : "false")) {
+    return false;
+  }
+  bd_settings_bt_refresh(settings);
+  return true;
+}
+
 static bool adjust_toggle(bd_settings *settings, bd_settings_row *row) {
+  if (strcmp(row->key, "net.wifi_enabled") == 0 ||
+      strcmp(row->key, "net.hotspot_enabled") == 0) {
+    return adjust_net_toggle(settings, row);
+  }
+  if (strcmp(row->key, "bt.enabled") == 0) {
+    return adjust_bt_toggle(settings, row);
+  }
+  if (strncmp(row->key, "share.", 6) == 0 &&
+      strcmp(row->key, "share.usb_mode") != 0) {
+    return adjust_share_toggle(settings, row);
+  }
+  if (strcmp(row->key, "audio.channel_swap") == 0 ||
+      strcmp(row->key, "audio.mic") == 0) {
+    return adjust_audio_toggle(settings, row);
+  }
+  if (strcmp(row->key, "time.ntp") == 0) {
+    bool enabled = bd_config_get_bool(settings->config, row->key, true);
+    char error[160] = {0};
+    if (!bd_time_set_ntp(!enabled, error, sizeof(error))) {
+      set_error(settings, "%s", error[0] != '\0' ? error : "NTP 切换失败");
+      return false;
+    }
+    if (!set_config_value(settings, row, !enabled ? "true" : "false")) {
+      return false;
+    }
+    bd_settings_time_refresh(settings);
+    return true;
+  }
   bool value = bd_config_get_bool(settings->config, row->key, false);
   if (has_system_reader(settings, row->key)) {
     bd_config_value current;
@@ -1894,6 +2408,225 @@ void bd_settings_set_app_ids(bd_settings *settings, const char *const *ids,
   }
 }
 
+void bd_settings_set_net(bd_settings *settings, bd_net *net,
+                         bd_settings_net_prompt_fn prompt, void *user) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->net = net;
+  settings->net_prompt = prompt;
+  settings->net_prompt_user = user;
+  settings->net_status_known = false;
+  settings->net_scan_count = 0;
+  settings->net_scan_pending = false;
+  settings->net_saved_count = 0;
+  bd_settings_net_refresh(settings);
+}
+
+void bd_settings_net_refresh(bd_settings *settings) {
+  if (settings == NULL || settings->net == NULL) {
+    return;
+  }
+  bd_net_status status;
+  if (bd_net_get_status(settings->net, &status)) {
+    settings->net_status = status;
+    settings->net_status_known = true;
+  }
+  size_t count = 0;
+  char error[128] = {0};
+  if (bd_net_list_saved(settings->net, settings->net_saved,
+                        BD_NET_MAX_NETWORKS, &count, error, sizeof(error))) {
+    settings->net_saved_count = count;
+  }
+  if (settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
+}
+
+void bd_settings_set_bt(bd_settings *settings, bd_bt *bt) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->bt = bt;
+  settings->bt_status_known = false;
+  settings->bt_count = 0;
+  settings->bt_scan_pending = false;
+  bd_settings_bt_refresh(settings);
+}
+
+void bd_settings_bt_refresh(bd_settings *settings) {
+  if (settings == NULL || settings->bt == NULL) {
+    return;
+  }
+  bd_bt_status status;
+  if (bd_bt_get_status(settings->bt, &status)) {
+    settings->bt_status = status;
+    settings->bt_status_known = true;
+  }
+  size_t count = 0;
+  char error[128] = {0};
+  if (bd_bt_list_devices(settings->bt, settings->bt_devices,
+                         BD_BT_MAX_DEVICES, &count, error, sizeof(error))) {
+    settings->bt_count = count;
+  }
+  if (settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
+}
+
+void bd_settings_set_share(bd_settings *settings, bd_share *share) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->share = share;
+  settings->share_status_known = false;
+  bd_settings_share_refresh(settings);
+}
+
+void bd_settings_share_refresh(bd_settings *settings) {
+  if (settings == NULL || settings->share == NULL) {
+    return;
+  }
+  bd_share_status status;
+  if (bd_share_get_status(settings->share, &status)) {
+    settings->share_status = status;
+    settings->share_status_known = true;
+  }
+  if (settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
+}
+
+void bd_settings_set_audio(bd_settings *settings, bd_av_audio *audio) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->audio = audio;
+  if (audio == NULL) {
+    return;
+  }
+  bd_av_error error;
+  bd_av_error_clear(&error);
+  bool swap = bd_config_get_bool(settings->config, "audio.channel_swap", false);
+  static const char *const SWAP_CONTROLS[] = {"Speaker Channel Swap",
+                                              "Headphone Channel Swap"};
+  for (size_t i = 0; i < sizeof(SWAP_CONTROLS) / sizeof(SWAP_CONTROLS[0]); ++i) {
+    if (bd_av_audio_has_control(audio, SWAP_CONTROLS[i])) {
+      bd_av_audio_set_switch_by_name(audio, SWAP_CONTROLS[i], swap, &error);
+      break;
+    }
+  }
+  bool mic = bd_config_get_bool(settings->config, "audio.mic", false);
+  static const char *const MIC_CONTROLS[] = {"Mic Switch", "Capture Switch",
+                                             "Mic Capture Switch"};
+  for (size_t i = 0; i < sizeof(MIC_CONTROLS) / sizeof(MIC_CONTROLS[0]); ++i) {
+    if (bd_av_audio_has_control(audio, MIC_CONTROLS[i])) {
+      bd_av_audio_set_switch_by_name(audio, MIC_CONTROLS[i], mic, &error);
+      break;
+    }
+  }
+  bd_av_audio_set_percent_by_name(
+      audio, "Speaker Volume",
+      (int)bd_config_get_int(settings->config, "audio.speaker_gain", 100),
+      &error);
+  bd_av_audio_set_percent_by_name(
+      audio, "Headphone Volume",
+      (int)bd_config_get_int(settings->config, "audio.headphone_gain", 100),
+      &error);
+}
+
+void bd_settings_set_time_prompt(bd_settings *settings,
+                                 bd_settings_time_prompt_fn prompt,
+                                 void *user) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->time_prompt = prompt;
+  settings->time_prompt_user = user;
+  bd_settings_time_refresh(settings);
+}
+
+void bd_settings_time_refresh(bd_settings *settings) {
+  if (settings == NULL) {
+    return;
+  }
+  bd_time_status status;
+  if (bd_time_get_status(&status)) {
+    settings->time_status = status;
+    settings->time_status_known = true;
+  }
+  if (settings->category == BD_SETTINGS_CATEGORY_SYSTEM &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
+}
+
+bool bd_settings_set_time_text(bd_settings *settings, const char *text) {
+  if (settings == NULL || text == NULL) {
+    return false;
+  }
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  if (sscanf(text, "%d-%d-%d %d:%d", &year, &month, &day, &hour, &minute) !=
+      5) {
+    set_error(settings, "时间格式应为 YYYY-MM-DD HH:MM");
+    return false;
+  }
+  struct tm local;
+  memset(&local, 0, sizeof(local));
+  local.tm_year = year - 1900;
+  local.tm_mon = month - 1;
+  local.tm_mday = day;
+  local.tm_hour = hour;
+  local.tm_min = minute;
+  local.tm_isdst = -1;
+  time_t epoch = mktime(&local);
+  if (epoch == (time_t)-1) {
+    set_error(settings, "时间无效");
+    return false;
+  }
+  char error[160] = {0};
+  if (!bd_time_set_epoch(epoch, error, sizeof(error))) {
+    set_error(settings, "%s", error[0] != '\0' ? error : "设置时间失败");
+    return false;
+  }
+  clear_error(settings);
+  bd_settings_time_refresh(settings);
+  return true;
+}
+
+bool bd_settings_net_connect(bd_settings *settings, const char *psk) {
+  if (settings == NULL || settings->net == NULL ||
+      settings->net_pending_ssid[0] == '\0') {
+    return false;
+  }
+  char error[160] = {0};
+  bool ok = bd_net_connect(settings->net, settings->net_pending_ssid, psk, error,
+                           sizeof(error));
+  if (!ok) {
+    set_error(settings, "%s", error[0] != '\0' ? error : "连接失败");
+  } else {
+    clear_error(settings);
+  }
+  settings->net_pending_ssid[0] = '\0';
+  bd_settings_net_refresh(settings);
+  return ok;
+}
+
 void bd_settings_set_status(bd_settings *settings,
                             const bd_settings_status *status) {
   if (settings == NULL) {
@@ -2312,6 +3045,116 @@ static bool switch_category(bd_settings *settings, int direction) {
   return bd_settings_open(settings, next);
 }
 
+static bool net_connect_ssid(bd_settings *settings, const char *ssid,
+                            bool secured) {
+  if (settings->net == NULL || ssid == NULL || ssid[0] == '\0') {
+    set_error(settings, "网络后端不可用");
+    return false;
+  }
+  snprintf(settings->net_pending_ssid, sizeof(settings->net_pending_ssid),
+           "%s", ssid);
+  if (secured && settings->net_prompt != NULL) {
+    settings->net_prompt(settings->net_prompt_user, ssid);
+    return true;
+  }
+  return bd_settings_net_connect(settings, NULL);
+}
+
+static bool activate_net_row(bd_settings *settings, bd_settings_row *row) {
+  char error[160] = {0};
+  if (strcmp(row->key, "!net.scan") == 0) {
+    if (row->index >= 0) {
+      if ((size_t)row->index >= settings->net_scan_count) {
+        return false;
+      }
+      const bd_net_network *entry = &settings->net_scan[row->index];
+      return net_connect_ssid(settings, entry->ssid, entry->secured);
+    }
+    if (settings->net == NULL ||
+        !bd_net_scan_start(settings->net, error, sizeof(error))) {
+      set_error(settings, "%s",
+                error[0] != '\0' ? error : "无法开始扫描");
+      return false;
+    }
+    settings->net_scan_pending = true;
+    settings->net_scan_deadline = settings->now_ms + 1500;
+    rebuild_and_damage(settings);
+    return true;
+  }
+  if (strcmp(row->key, "!time.set") == 0) {
+    if (settings->time_prompt == NULL) {
+      set_error(settings, "文本输入不可用");
+      return false;
+    }
+    time_t now = settings->time_status_known ? settings->time_status.now
+                                             : time(NULL);
+    struct tm local;
+    char initial[32] = "";
+    if (localtime_r(&now, &local) != NULL) {
+      strftime(initial, sizeof(initial), "%Y-%m-%d %H:%M", &local);
+    }
+    settings->time_prompt(settings->time_prompt_user, initial);
+    return true;
+  }
+  if (strcmp(row->key, "!time.sync") == 0) {
+    if (!bd_time_sync_now(error, sizeof(error))) {
+      set_error(settings, "%s", error[0] != '\0' ? error : "NTP 同步失败");
+      return false;
+    }
+    bd_settings_time_refresh(settings);
+    return true;
+  }
+  if (strcmp(row->key, "!time.rtc") == 0) {
+    if (!bd_time_write_rtc(error, sizeof(error))) {
+      set_error(settings, "%s", error[0] != '\0' ? error : "写 RTC 失败");
+      return false;
+    }
+    return true;
+  }
+  if (strcmp(row->key, "!bt.scan") == 0) {
+    if (settings->bt == NULL ||
+        !bd_bt_scan_start(settings->bt, 6, error, sizeof(error))) {
+      set_error(settings, "%s",
+                error[0] != '\0' ? error : "无法开始蓝牙扫描");
+      return false;
+    }
+    settings->bt_scan_pending = true;
+    settings->bt_scan_deadline = settings->now_ms + 6500;
+    rebuild_and_damage(settings);
+    return true;
+  }
+  if (strcmp(row->key, "!bt.device") == 0) {
+    if ((size_t)row->index >= settings->bt_count || settings->bt == NULL) {
+      return false;
+    }
+    const bd_bt_device *device = &settings->bt_devices[row->index];
+    bool ok = device->connected
+                  ? bd_bt_disconnect(settings->bt, device->addr, error,
+                                     sizeof(error))
+                  : bd_bt_connect(settings->bt, device->addr, error,
+                                  sizeof(error));
+    if (!ok) {
+      set_error(settings, "%s",
+                error[0] != '\0' ? error : "蓝牙操作失败");
+      return false;
+    }
+    bd_settings_bt_refresh(settings);
+    return true;
+  }
+  if (strcmp(row->key, "!net.saved") == 0) {
+    if (settings->net == NULL ||
+        !bd_net_select_saved(settings->net, row->index, error,
+                             sizeof(error))) {
+      set_error(settings, "%s",
+                error[0] != '\0' ? error : "无法连接已保存网络");
+      return false;
+    }
+    bd_settings_net_refresh(settings);
+    return true;
+  }
+  return false;
+}
+
 static bool activate_row(bd_settings *settings, bd_settings_row *row) {
   switch (row->kind) {
     case BD_SETTINGS_ROW_TOGGLE:
@@ -2325,6 +3168,11 @@ static bool activate_row(bd_settings *settings, bd_settings_row *row) {
       open_plugin_subpage(settings, row->index);
       return true;
     case BD_SETTINGS_ROW_ACTION:
+      if (strncmp(row->key, "!net.", 5) == 0 ||
+          strncmp(row->key, "!bt.", 4) == 0 ||
+          strncmp(row->key, "!time.", 6) == 0) {
+        return activate_net_row(settings, row);
+      }
       if (strcmp(row->key, "!hotkey.combo") == 0) {
         settings->capture_active = true;
         settings->capture_wait_release = true;
@@ -2528,6 +3376,50 @@ void bd_settings_update(bd_settings *settings, uint64_t now_ms) {
   }
   settings->now_ms = now_ms;
   settings->has_time = true;
+  if (settings->net != NULL &&
+      settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    if (settings->net_scan_pending && now_ms >= settings->net_scan_deadline) {
+      size_t count = 0;
+      char error[128] = {0};
+      if (bd_net_scan_results(settings->net, settings->net_scan,
+                              BD_NET_MAX_SCAN, &count, error,
+                              sizeof(error))) {
+        settings->net_scan_count = count;
+        clear_error(settings);
+      } else {
+        set_error(settings, "%s",
+                  error[0] != '\0' ? error : "扫描失败");
+      }
+      settings->net_scan_pending = false;
+      bd_settings_net_refresh(settings);
+      settings->net_status_deadline = now_ms + 5000;
+    } else if (!settings->net_scan_pending &&
+               now_ms >= settings->net_status_deadline) {
+      bd_settings_net_refresh(settings);
+      settings->net_status_deadline = now_ms + 5000;
+    }
+  }
+  if (settings->bt != NULL &&
+      settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE) {
+    if (settings->bt_scan_pending && now_ms >= settings->bt_scan_deadline) {
+      settings->bt_scan_pending = false;
+      bd_settings_bt_refresh(settings);
+      settings->bt_status_deadline = now_ms + 5000;
+    } else if (!settings->bt_scan_pending &&
+               now_ms >= settings->bt_status_deadline) {
+      bd_settings_bt_refresh(settings);
+      settings->bt_status_deadline = now_ms + 5000;
+    }
+  }
+  if (settings->share != NULL &&
+      settings->category == BD_SETTINGS_CATEGORY_NETWORK &&
+      settings->subpage == BD_SETTINGS_SUBPAGE_NONE &&
+      now_ms >= settings->share_status_deadline) {
+    bd_settings_share_refresh(settings);
+    settings->share_status_deadline = now_ms + 5000;
+  }
   if (!settings->held || settings->next_repeat_ms == 0) {
     return;
   }

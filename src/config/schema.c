@@ -24,6 +24,12 @@ static const char *const g_accents[] = {"persimmon", "coral", "teal", "blue",
 static const char *const g_led_colors[] = {
     "white", "red", "orange", "yellow", "green",
     "cyan",  "blue", "violet", "magenta", "off", NULL};
+static const char *const g_usb_modes[] = {"host", "dock", "data", NULL};
+static const char *const g_remap_keys[] = {"A", "B", "X", "Y", NULL};
+static const char *const g_timezones[] = {
+    "UTC",           "Asia/Shanghai", "Asia/Tokyo",    "Asia/Seoul",
+    "Asia/Singapore", "Europe/London", "Europe/Berlin", "America/New_York",
+    "America/Los_Angeles", NULL};
 static const char *const g_fn_actions[] = {
     "none", "mute", "led_off", "performance", "powersave", "turbo",
     "dpad_joystick", NULL};
@@ -68,6 +74,10 @@ const bd_config_spec bd_config_specs[] = {
     /* audio */
     {"audio", "volume", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
     {"audio", "mute", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"audio", "channel_swap", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"audio", "speaker_gain", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"audio", "headphone_gain", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"audio", "mic", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
 
     /* input */
     {"input", "repeat_delay_ms", BD_CONFIG_INT, "400", 0, 2000, NULL, 0, 0, 0},
@@ -77,6 +87,11 @@ const bd_config_spec bd_config_specs[] = {
     {"input", "double_tap_ms", BD_CONFIG_INT, "300", 100, 1000, NULL, 0, 0, 0},
     {"input", "haptics", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
     {"input", "haptic_strength", BD_CONFIG_INT, "60", 0, 100, NULL, 0, 0, 0},
+    {"input", "stick_deadzone", BD_CONFIG_INT, "8", 0, 30, NULL, 0, 0, 0},
+    {"input", "remap_a", BD_CONFIG_ENUM, "A", 0, 0, g_remap_keys, 0, 0, 0},
+    {"input", "remap_b", BD_CONFIG_ENUM, "B", 0, 0, g_remap_keys, 0, 0, 0},
+    {"input", "remap_x", BD_CONFIG_ENUM, "X", 0, 0, g_remap_keys, 0, 0, 0},
+    {"input", "remap_y", BD_CONFIG_ENUM, "Y", 0, 0, g_remap_keys, 0, 0, 0},
     {"input", "haptic_duration_ms", BD_CONFIG_INT, "35", 5, 500, NULL, 0, 0, 0},
     {"input", "fn_switch_action", BD_CONFIG_ENUM, "mute", 0, 0, g_fn_actions, 0,
      0, 0},
@@ -124,6 +139,26 @@ const bd_config_spec bd_config_specs[] = {
     {"power", "low_battery_percent", BD_CONFIG_INT, "5", 0, 100, NULL, 0, 0, 0},
     {"power", "shutdown_on_low_battery", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0,
      0, 0},
+
+    /* net */
+    {"net", "wifi_enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"net", "hotspot_enabled", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"net", "hotspot_ssid", BD_CONFIG_STRING, "BrickDesk", 0, 0, NULL, 32, 0, 0},
+    {"net", "hotspot_psk", BD_CONFIG_STRING, "brickdesk", 0, 0, NULL, 63, 0, 0},
+
+    /* bt */
+    {"bt", "enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+
+    /* time */
+    {"time", "ntp", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"time", "timezone", BD_CONFIG_ENUM, "UTC", 0, 0, g_timezones, 0, 0, 0},
+
+    /* share */
+    {"share", "ssh", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"share", "ftp", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"share", "samba", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"share", "adb", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"share", "usb_mode", BD_CONFIG_ENUM, "host", 0, 0, g_usb_modes, 0, 0, 0},
 
     /* plugins */
     {"plugins", "enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},

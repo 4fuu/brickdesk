@@ -2061,6 +2061,25 @@ static bool quick_adjust(bd_home *home, int delta) {
   return true;
 }
 
+static bool quick_toggle(bd_home *home, bd_home_quick_control control) {
+  if (home->quick_backend.toggle == NULL) {
+    return false;
+  }
+  bool enabled = control == BD_HOME_QUICK_WIFI
+                     ? home->status.wifi_known && home->status.wifi
+                     : false;
+  if (!home->quick_backend.toggle(home->quick_backend.user, control,
+                                  &enabled)) {
+    return false;
+  }
+  if (control == BD_HOME_QUICK_WIFI) {
+    home->status.wifi_known = true;
+    home->status.wifi = enabled;
+  }
+  damage_quick_panel(home);
+  return true;
+}
+
 static bool quick_option_toggle(bd_home *home) {
   if (home->quick_sel < home->running_count) {
     return false;
@@ -2071,9 +2090,9 @@ static bool quick_option_toggle(bd_home *home) {
     case 1:
       return quick_adjust(home, 1);
     case 2:
+      return quick_toggle(home, BD_HOME_QUICK_WIFI);
     case 3:
-      /* No Wi-Fi/BT connection manager is wired this round. */
-      return false;
+      return quick_toggle(home, BD_HOME_QUICK_BLUETOOTH);
     default:
       return false;
   }

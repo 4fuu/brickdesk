@@ -370,6 +370,13 @@ it and shows a startup notice; the event is not replayed after handshake.
 - 离开设置页时桌面重新加载 `hotkeys.ini`/`local.ini` 并向 inputd 发送
   `reload`，新绑定立即生效。
 
+### 6.5 死区与重映射
+
+`input.stick_deadzone` 作用于 `ABS_X`/`ABS_Y`（0..30%）；`input.remap_a` 等把
+物理 A/B/X/Y 换成另一个逻辑键，在 inputd 的 `apply_key()` 里生效，因此热键、
+桌面和 inputd 客户端都看到重映射后的键。SDL 应用直接读 evdev 时不受影响；
+全局内核级重映射仍需厂商 `gpio_keys_polled button_config`，不在本层写入。
+
 ## 7. Known deviations / device checks
 
 - `suppress=true` creates one uinput mirror per grabbed device.  The mirror

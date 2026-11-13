@@ -1250,11 +1250,13 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                            bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
     } else if (i == 3) {
-      const char *value = "不可用";
+      const char *value = !home->status.bt_known
+                              ? "未知"
+                              : (home->status.bt ? "开" : "关");
       bd_gfx_draw_text(gfx, home->fonts.body14,
                        row.x + row.w - QUICK_ROW_RIGHT_PAD -
                            bd_font_measure_text(home->fonts.body14, value),
-                       row.y + 29, palette->ink3, value);
+                       row.y + 29, palette->ink2, value);
     }
   }
 

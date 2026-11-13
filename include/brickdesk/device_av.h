@@ -346,6 +346,18 @@ bd_av_result bd_av_audio_set_route(bd_av_audio *audio, bd_av_route route,
 bd_av_result bd_av_audio_set_jack(bd_av_audio *audio, bool plugged,
                                   bd_av_error *error);
 
+/* Generic helpers for optional controls (channel swap, gains, mic switch). */
+bool bd_av_audio_has_control(const bd_av_audio *audio, const char *name);
+bd_av_result bd_av_audio_set_switch_by_name(bd_av_audio *audio,
+                                            const char *name, bool value,
+                                            bd_av_error *error);
+bd_av_result bd_av_audio_set_percent_by_name(bd_av_audio *audio,
+                                             const char *name, int percent,
+                                             bd_av_error *error);
+bd_av_result bd_av_audio_get_percent_by_name(const bd_av_audio *audio,
+                                             const char *name, int *percent,
+                                             bd_av_error *error);
+
 #ifdef __cplusplus
 }
 #endif

@@ -255,12 +255,14 @@ static void test_rows(bd_settings *settings) {
 
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_SOUND),
         "open sound");
-  CHECK(bd_settings_row_count(settings) == 2, "sound rows %d",
+  CHECK(bd_settings_row_count(settings) == 6, "sound rows %d",
         bd_settings_row_count(settings));
   CHECK(strcmp(bd_settings_row_key(settings, 0), "audio.volume") == 0,
         "sound row 0 %s", bd_settings_row_key(settings, 0));
   CHECK(strcmp(bd_settings_row_key(settings, 1), "audio.mute") == 0,
         "sound row 1 %s", bd_settings_row_key(settings, 1));
+  CHECK(strcmp(bd_settings_row_key(settings, 2), "audio.channel_swap") == 0,
+        "sound row 2 %s", bd_settings_row_key(settings, 2));
 
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_DISPLAY),
         "open display");
@@ -512,6 +514,12 @@ static void test_pages(bd_settings *settings, bd_config *config) {
   CHECK(menu >= 0, "hotkey.menu row");
   CHECK(find_row(settings, "!hotkey.screenshot") >= 0,
         "hotkey.screenshot row");
+
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_NETWORK),
+        "open network");
+  CHECK(find_row(settings, "net.wifi_enabled") >= 0, "wifi toggle row");
+  CHECK(find_row(settings, "!net.scan") >= 0, "scan row");
+  CHECK(find_row(settings, "net.hotspot_enabled") >= 0, "hotspot row");
 
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_PERFORMANCE),
         "open performance");

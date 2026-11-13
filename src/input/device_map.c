@@ -589,6 +589,16 @@ bool bd_device_map_load(bd_device_map *map, const struct bd_config *config) {
     override_entry(mapping, logical, type, code, direction, file, line);
   }
 
+  long deadzone = bd_config_get_int(config, "input.stick_deadzone", 8);
+  if (deadzone < 0) {
+    deadzone = 0;
+  } else if (deadzone > 30) {
+    deadzone = 30;
+  }
+  map->deadzone = (int)deadzone;
+  for (size_t i = 0; i < map->count; ++i) {
+    map->devices[i].deadzone = (int)deadzone;
+  }
   return true;
 }
 
@@ -611,6 +621,7 @@ bool bd_device_map_match(const bd_device_map *map, const bd_evdev *device,
     }
   }
   builtin_mapping(out);
+  out->deadzone = map->deadzone;
   return true;
 }
 
@@ -636,6 +647,11 @@ int bd_device_map_translate_abs(const bd_device_mapping *mapping, unsigned code,
     return 0;
   }
   int count = 0;
+  if (mapping->deadzone > 0 &&
+      (code == ABS_X || code == ABS_Y) &&
+      abs(value) < mapping->deadzone * 127 / 100) {
+    value = 0;
+  }
   for (int i = 0; i < mapping->entry_count && (size_t)count < max; ++i) {
     const bd_device_map_entry *entry = &mapping->entries[i];
     if (entry->type != BD_DEVICE_MAP_ABS || entry->code != code) {

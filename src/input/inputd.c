@@ -77,6 +77,7 @@ typedef struct inputd {
   bd_device_map map;
   int double_tap_ms;
   char scope[BD_HOTKEY_SCOPE_MAX];
+  bd_key remap[BD_KEY_COUNT];
   bool suppress_mask[BD_KEY_COUNT];
   bool suppress_active;
   bool uinput_error_logged;
@@ -387,6 +388,27 @@ typedef struct output_context {
 
 static void dispatch_output(void *user, const bd_input_output *event);
 
+static void load_remap(inputd *daemon) {
+  memset(daemon->remap, 0, sizeof(daemon->remap));
+  static const struct {
+    const char *key;
+    bd_key physical;
+  } MAP[] = {{"input.remap_a", BD_KEY_A},
+             {"input.remap_b", BD_KEY_B},
+             {"input.remap_x", BD_KEY_X},
+             {"input.remap_y", BD_KEY_Y}};
+  for (size_t i = 0; i < sizeof(MAP) / sizeof(MAP[0]); ++i) {
+    const char *name = bd_config_get_string(daemon->config, MAP[i].key, NULL);
+    if (name == NULL || name[0] == '\0') {
+      continue;
+    }
+    bd_key target = bd_key_from_name(name);
+    if (target > BD_KEY_UNKNOWN && target < BD_KEY_COUNT) {
+      daemon->remap[MAP[i].physical] = target;
+    }
+  }
+}
+
 static void suppress_compute(inputd *daemon) {
   memset(daemon->suppress_mask, 0, sizeof(daemon->suppress_mask));
   daemon->suppress_active = false;
@@ -531,6 +553,7 @@ static bool daemon_reload(inputd *daemon, uint64_t now_ms, char *error,
   daemon->config = config;
   daemon->hotkeys = hotkeys;
   daemon->map = map;
+  load_remap(daemon);
   daemon->double_tap_ms =
       (int)bd_config_get_int(daemon->config, "input.double_tap_ms", 300);
   if (daemon->double_tap_ms <= 0) {
@@ -553,6 +576,9 @@ static bool suppress_drop_key(const inputd *daemon,
     bd_key key = BD_KEY_UNKNOWN;
     if (bd_device_map_translate_key(&device->mapping, event->code, &key) &&
         key > BD_KEY_UNKNOWN && key < BD_KEY_COUNT) {
+      if (daemon->remap[key] != BD_KEY_UNKNOWN) {
+        key = daemon->remap[key];
+      }
       return daemon->suppress_mask[key];
     }
     return false;
@@ -743,6 +769,9 @@ static void apply_key(inputd *daemon, inputd_device *device, bd_key key,
                       bool pressed, uint64_t now_ms) {
   if (key <= BD_KEY_UNKNOWN || key >= BD_KEY_COUNT) {
     return;
+  }
+  if (daemon->remap[key] != BD_KEY_UNKNOWN) {
+    key = daemon->remap[key];
   }
   if (bd_input_state_is_pressed(&device->state, key) == pressed) {
     return;
@@ -2029,6 +2058,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "brickdesk-inputd: %zu config diagnostic(s)\n",
             bd_config_diagnostic_count(daemon.config));
   }
+  load_remap(&daemon);
   if (!bd_hotkey_table_load(&daemon.hotkeys, daemon.config)) {
     fprintf(stderr, "brickdesk-inputd: cannot load hotkeys\n");
     daemon_cleanup(&daemon);

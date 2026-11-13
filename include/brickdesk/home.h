@@ -64,6 +64,8 @@ typedef struct bd_home_status {
   const char *clock;         /* "22:26"; NULL keeps the default */
   bool wifi_known;           /* false: wireless state is unknown */
   bool wifi;                 /* valid only when wifi_known */
+  bool bt_known;             /* false: Bluetooth state is unknown */
+  bool bt;                   /* valid only when bt_known */
   int battery_percent;       /* 0..100, or -1 when unknown */
   int max_background;        /* quick panel "N / M"; 0 means 3 */
 } bd_home_status;
@@ -189,7 +191,9 @@ void bd_home_set_live(bd_home *home, const bd_home_live *live);
  */
 typedef enum bd_home_quick_control {
   BD_HOME_QUICK_BRIGHTNESS = 0,
-  BD_HOME_QUICK_VOLUME
+  BD_HOME_QUICK_VOLUME,
+  BD_HOME_QUICK_WIFI,
+  BD_HOME_QUICK_BLUETOOTH
 } bd_home_quick_control;
 
 typedef struct bd_home_quick_backend {
@@ -202,6 +206,8 @@ typedef struct bd_home_quick_backend {
    */
   bool (*adjust)(void *user, bd_home_quick_control control, int delta,
                  int *percent);
+  /* Toggles Wi-Fi/Bluetooth; returns the new enabled state. */
+  bool (*toggle)(void *user, bd_home_quick_control control, bool *enabled);
 } bd_home_quick_backend;
 
 void bd_home_set_quick_backend(bd_home *home,

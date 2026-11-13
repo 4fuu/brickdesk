@@ -5,6 +5,11 @@
 #include <stdint.h>
 
 #include "brickdesk/config.h"
+#include "brickdesk/device_av.h"
+#include "brickdesk/device_bt.h"
+#include "brickdesk/device_net.h"
+#include "brickdesk/device_share.h"
+#include "brickdesk/device_time.h"
 #include "brickdesk/battery_history.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/input.h"
@@ -42,6 +47,7 @@ typedef enum bd_settings_category {
   BD_SETTINGS_CATEGORY_PERFORMANCE,
   BD_SETTINGS_CATEGORY_BACKGROUND,
   BD_SETTINGS_CATEGORY_PLUGINS,
+  BD_SETTINGS_CATEGORY_NETWORK,
   BD_SETTINGS_CATEGORY_SYSTEM,
   BD_SETTINGS_CATEGORY_COUNT
 } bd_settings_category;
@@ -152,6 +158,27 @@ bool bd_settings_sync_system(bd_settings *settings, char *error,
 void bd_settings_set_perf(bd_settings *settings,
                           const bd_settings_perf *perf);
 void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host);
+/*
+ * Network page integration.  The page borrows the backend and asks the shell
+ * to open the on-screen keyboard for a secured network through prompt.
+ */
+typedef void (*bd_settings_net_prompt_fn)(void *user, const char *ssid);
+void bd_settings_set_net(bd_settings *settings, bd_net *net,
+                         bd_settings_net_prompt_fn prompt, void *user);
+/* Called by the shell after the password keyboard closes. */
+bool bd_settings_net_connect(bd_settings *settings, const char *psk);
+void bd_settings_net_refresh(bd_settings *settings);
+void bd_settings_set_bt(bd_settings *settings, bd_bt *bt);
+void bd_settings_bt_refresh(bd_settings *settings);
+void bd_settings_set_share(bd_settings *settings, bd_share *share);
+void bd_settings_share_refresh(bd_settings *settings);
+typedef void (*bd_settings_time_prompt_fn)(void *user, const char *initial);
+void bd_settings_set_time_prompt(bd_settings *settings,
+                                 bd_settings_time_prompt_fn prompt,
+                                 void *user);
+bool bd_settings_set_time_text(bd_settings *settings, const char *text);
+void bd_settings_time_refresh(bd_settings *settings);
+void bd_settings_set_audio(bd_settings *settings, bd_av_audio *audio);
 /*
  * Supplies installed app ids for the hotkey scope picker.  The page copies the
  * ids, so the caller may free its list after the call.

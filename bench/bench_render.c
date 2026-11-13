@@ -373,7 +373,6 @@ static bool ensure_desktop_world(bench_world *world) {
   }
   bd_desktop_theme theme;
   memset(&theme, 0, sizeof(theme));
-  theme.dark = true;
   theme.ambient_baked = true;
   theme.accent = bd_color_rgb(224, 122, 95);
   world->desktop = bd_desktop_create(world->gfx, &theme);

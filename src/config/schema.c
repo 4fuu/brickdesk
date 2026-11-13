@@ -10,7 +10,7 @@
 
 #define BD_CONFIG_TEXT_MAX 256
 
-static const char *const g_theme_modes[] = {"dark", "light", "auto", NULL};
+static const char *const g_theme_modes[] = {"dark", NULL};
 static const char *const g_ambient_modes[] = {"baked", "solid", NULL};
 static const char *const g_languages[] = {"zh-CN", "en-US", NULL};
 static const char *const g_time_formats[] = {"24h", "12h", NULL};
@@ -225,6 +225,16 @@ static bool parse_duration_value(const char *value, int default_unit_ms,
 static bool normalize_enum(const bd_config_spec *spec, const char *value,
                            char *out, size_t out_size, char *error,
                            size_t error_size) {
+  /*
+   * The desktop is dark-only.  Keep old local.ini files working by accepting
+   * the retired light/auto values as aliases for dark instead of emitting a
+   * diagnostic and leaving the retired value effective.
+   */
+  if (strcmp(spec->section, "theme") == 0 && strcmp(spec->key, "mode") == 0 &&
+      (ascii_equal_ci(value, "light") || ascii_equal_ci(value, "auto"))) {
+    snprintf(out, out_size, "dark");
+    return true;
+  }
   for (size_t i = 0; spec->enum_values[i] != NULL; ++i) {
     if (ascii_equal_ci(value, spec->enum_values[i])) {
       snprintf(out, out_size, "%s", spec->enum_values[i]);

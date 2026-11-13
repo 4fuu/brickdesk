@@ -47,7 +47,6 @@ int main(void) {
     return 1;
   }
   bd_desktop_theme theme;
-  theme.dark = false;
   theme.ambient_baked = true;
   if (!bd_color_from_hex("#ae432b", &theme.accent)) {
     fprintf(stderr, "dirty: invalid test accent\n");

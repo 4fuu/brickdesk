@@ -20,7 +20,6 @@ typedef struct bd_desktop bd_desktop;
 typedef struct bd_plugin bd_plugin;
 
 typedef struct bd_desktop_theme {
-  bool dark;
   bool ambient_baked;
   bd_color accent;
 } bd_desktop_theme;

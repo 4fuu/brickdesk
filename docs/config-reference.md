@@ -96,22 +96,22 @@ schema_version = 1
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
-| `mode` | enum | `dark` | `dark`、`light`、`auto` | 主题模式；`auto` 目前等同 `dark`，等系统/环境光信号接入后再解析 |
+| `mode` | enum | `dark` | `dark` | 桌面为深色专用；旧配置中的 `light`/`auto` 会按 `dark` 加载 |
 | `accent` | accent | `persimmon` | 预设名或 `#RRGGBB` | 强调色；焦点、开关、进度、当前标记使用 |
 | `ambient` | enum | `baked` | `baked`、`solid` | 背景：预烘焙封面底图 + 纱层，或纯色 |
 
-强调色预设（主题层可用 `bd_config_accent_hex()` 解析）：
+强调色预设（深色桌面，可用 `bd_config_accent_hex()` 解析）：
 
-| 预设 | 深色 | 浅色 |
-|---|---|---|
-| `persimmon`（柿红，默认） | `#e07a5f` | `#ae432b` |
-| `coral` | `#fd5c47` | `#c23b2a` |
-| `teal` | `#4fb3a9` | `#1f6f68` |
-| `blue` | `#6c9bd1` | `#2f6690` |
-| `green` | `#86b36b` | `#4a7a3a` |
-| `violet` | `#a98bd6` | `#6a4c9c` |
+| 预设 | 值 |
+|---|---|
+| `persimmon`（柿红，默认） | `#e07a5f` |
+| `coral` | `#fd5c47` |
+| `teal` | `#4fb3a9` |
+| `blue` | `#6c9bd1` |
+| `green` | `#86b36b` |
+| `violet` | `#a98bd6` |
 
-自定义 `#RRGGBB` 在深浅两个模式都使用同一个值；用户自己负责对比度。
+自定义 `#RRGGBB` 原样使用；用户自己负责对比度。
 
 ### 4.2 `[ui]`
 
@@ -606,8 +606,9 @@ bool bd_config_describe(const bd_config *, const char *key,
 
 与 `docs/research/architecture.md` 第 7 节相比的差异：
 
-1. 架构草案用 `[ui] theme = default`；按产品决定改成 `[theme] mode = dark|light|auto`，
-   并新增 `[theme] accent`、`[theme] ambient`。
+1. 架构草案用 `[ui] theme = default`；产品最终确定 `[theme] mode = dark`，
+   旧 `light`/`auto` 只作为兼容别名加载为 `dark`，并新增 `[theme] accent`、
+   `[theme] ambient`。
 2. 架构草案的 8 层覆盖只实现到“编译期 → 系统文件 → local.ini”；其余层
    在 M1-04 没有对应目录/生命周期，先不引入。
 3. 单个坏值采用“忽略该值、保留下一层有效值”而不是无条件重置编译默认值；

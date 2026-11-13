@@ -1376,7 +1376,7 @@ static void shell_plugin_tile_draw(void *user, bd_home *home, bd_gfx *gfx,
   memset(&style, 0, sizeof(style));
   style.fonts = shell->plugin_fonts_loaded ? &shell->plugin_fonts : NULL;
   style.accent = shell->plugin_accent;
-  style.dark = shell->home_style.dark;
+  style.dark = true;
   bd_plugin_tile_draw(shell->plugin_tile, gfx, rect, &style);
 }
 
@@ -1771,8 +1771,8 @@ static void shell_find_plugin_tile(bd_shell *shell, bd_gfx *gfx) {
               manifest->name[0] != '\0' ? manifest->name : "插件");
     shell->plugin_tile_span_w = manifest->tile.w > 1 ? 2 : 1;
     shell->plugin_tile_span_h = manifest->tile.h > 1 ? 2 : 1;
-    shell->plugin_accent = bd_accent_palette_from(
-        shell->home_style.accent_base, shell->home_style.dark);
+    shell->plugin_accent =
+        bd_accent_palette_from(shell->home_style.accent_base, true);
     shell->plugin_fonts_loaded = bd_ui_fonts_load(&shell->plugin_fonts, gfx);
     if (!shell->plugin_fonts_loaded) {
       fprintf(stderr, "brickdesk: cannot load plugin tile fonts\n");
@@ -1799,12 +1799,9 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->visible = true;
   shell->dirty = true;
 
-  const char *theme_mode =
-      bd_config_get_string(config->settings, "theme.mode", "dark");
-  bool dark = strcmp(theme_mode, "light") != 0;
   const char *accent_name =
       bd_config_get_string(config->settings, "theme.accent", "persimmon");
-  const char *accent_hex = bd_config_accent_hex(accent_name, dark);
+  const char *accent_hex = bd_config_accent_hex(accent_name, true);
   bd_color accent = bd_color_rgb(224, 122, 95);
   if (accent_hex == NULL || !bd_color_from_hex(accent_hex, &accent)) {
     fprintf(stderr, "brickdesk: config: invalid theme accent '%s'\n",
@@ -1813,7 +1810,6 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
   memset(&shell->home_style, 0, sizeof(shell->home_style));
   shell->home_style.accent_base = accent;
-  shell->home_style.dark = dark;
   shell->home_style.blur_enabled =
       bd_config_get_bool(config->settings, "ui.blur", true);
   shell->home_style.width = bd_gfx_width(config->gfx);

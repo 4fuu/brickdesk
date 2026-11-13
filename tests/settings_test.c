@@ -94,7 +94,7 @@ static void test_schema_describe(bd_config *config) {
   bd_config_schema_info info;
   CHECK(bd_config_describe(config, "theme.mode", &info), "describe theme.mode");
   CHECK(info.type == BD_CONFIG_ENUM, "theme.mode should be an enum");
-  CHECK(info.enum_count == 3, "theme.mode enum count %zu", info.enum_count);
+  CHECK(info.enum_count == 1, "theme.mode enum count %zu", info.enum_count);
   CHECK(!info.required, "theme.mode should not be required");
 
   CHECK(bd_config_describe(config, "display.brightness", &info),
@@ -124,12 +124,11 @@ static void test_schema_describe(bd_config *config) {
 static void test_rows(bd_settings *settings) {
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_APPEARANCE),
         "open appearance");
-  static const char *const EXPECTED[] = {"theme.mode", "theme.accent",
-                                         "theme.ambient", "ui.animations",
-                                         "ui.blur"};
-  CHECK(bd_settings_row_count(settings) == 5, "appearance rows %d",
+  static const char *const EXPECTED[] = {"theme.accent", "theme.ambient",
+                                         "ui.animations", "ui.blur"};
+  CHECK(bd_settings_row_count(settings) == 4, "appearance rows %d",
         bd_settings_row_count(settings));
-  for (int i = 0; i < 5 && i < bd_settings_row_count(settings); ++i) {
+  for (int i = 0; i < 4 && i < bd_settings_row_count(settings); ++i) {
     CHECK(strcmp(bd_settings_row_key(settings, i), EXPECTED[i]) == 0,
           "appearance row %d is %s", i, bd_settings_row_key(settings, i));
   }
@@ -172,7 +171,7 @@ static void test_focus_damage(bd_platform *platform, bd_gfx *gfx,
         (long long)full.damage_pixels);
 
   CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN),
-        "move focus to accent");
+        "move focus to ambient");
   render(platform, gfx, settings, 1016, false);
   bd_gfx_stats partial = bd_gfx_get_stats(gfx);
   CHECK(!partial.full_redraw, "focus move should not redraw the page");
@@ -553,7 +552,6 @@ int main(void) {
 
   bd_settings_style style;
   memset(&style, 0, sizeof(style));
-  style.dark = true;
   bd_color accent;
   if (!bd_color_from_hex(bd_config_accent_hex("persimmon", true), &accent)) {
     accent = bd_color_rgb(224, 122, 95);

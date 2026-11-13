@@ -224,7 +224,6 @@ int main(void) {
   bd_home_style style;
   memset(&style, 0, sizeof(style));
   style.accent_base = accent;
-  style.dark = true;
   style.blur_enabled = true;
   style.width = TEST_WIDTH;
   style.height = TEST_HEIGHT;

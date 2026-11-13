@@ -152,10 +152,8 @@ int main(int argc, char **argv) {
             bd_config_diagnostic_count(settings), bd_config_dir(settings));
   }
 
-  const char *theme_mode = bd_config_get_string(settings, "theme.mode", "dark");
-  bool dark = strcmp(theme_mode, "light") != 0;
   const char *accent_name = bd_config_get_string(settings, "theme.accent", "persimmon");
-  const char *accent_hex = bd_config_accent_hex(accent_name, dark);
+  const char *accent_hex = bd_config_accent_hex(accent_name, true);
   const char *ambient = bd_config_get_string(settings, "theme.ambient", "baked");
   bd_color theme_accent;
   if (accent_hex == NULL ||
@@ -164,7 +162,7 @@ int main(int argc, char **argv) {
     bd_config_free(settings);
     return 1;
   }
-  printf("theme: mode=%s accent=%s ambient=%s\n", theme_mode, accent_hex, ambient);
+  printf("theme: mode=dark accent=%s ambient=%s\n", accent_hex, ambient);
 
   bd_platform_config config;
   config.title = "brickdesk";
@@ -213,7 +211,7 @@ int main(int argc, char **argv) {
     plugin_config.limits = &limits;
     plugin_config.display_width = bd_platform_width(platform);
     plugin_config.display_height = bd_platform_height(platform);
-    plugin_config.dark = dark;
+    plugin_config.dark = true;
     plugin_config.accent = ((uint32_t)(theme_accent.r * 255.0f + 0.5f) << 16) |
                            ((uint32_t)(theme_accent.g * 255.0f + 0.5f) << 8) |
                            (uint32_t)(theme_accent.b * 255.0f + 0.5f);

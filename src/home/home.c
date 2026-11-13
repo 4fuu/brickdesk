@@ -179,39 +179,12 @@ static void palette_set_dark(bd_home_palette *palette) {
   palette->tile_shade_b = bd_color_rgba(9, 8, 11, 153);
 }
 
-static void palette_set_light(bd_home_palette *palette) {
-  palette->bg = bd_color_rgb(18, 16, 13);
-  palette->bg_deep = bd_color_rgb(11, 10, 8);
-  palette->surface = bd_color_rgb(247, 241, 230);
-  palette->surface2 = bd_color_rgb(239, 230, 215);
-  palette->surface3 = bd_color_rgb(226, 216, 200);
-  palette->ink = bd_color_rgb(30, 26, 21);
-  palette->ink2 = bd_color_rgb(92, 85, 74);
-  palette->ink3 = bd_color_rgb(111, 103, 91);
-  palette->line = bd_color_rgba(30, 26, 21, 28);
-  palette->line_strong = bd_color_rgba(30, 26, 21, 51);
-  /*
-   * The light chrome is a warm, translucent paper rather than the near-white
-   * band in the v3 reference: the dark wall underneath still shows through,
-   * so the top bar reads as a soft strip instead of a hard white block.
-   */
-  palette->chrome_strong = bd_color_rgba(228, 219, 202, 209);
-  palette->chrome_base = bd_color_rgba(228, 219, 202, 102);
-  palette->scrim = bd_color_rgba(26, 21, 16, 92);
-  palette->tile_shade_a = bd_color_rgba(20, 17, 14, 102);
-  palette->tile_shade_b = bd_color_rgba(20, 17, 14, 143);
-}
-
 void bd_home_palette_apply(bd_home *home) {
-  if (home->style.dark) {
-    palette_set_dark(&home->palette);
-  } else {
-    palette_set_light(&home->palette);
-  }
+  palette_set_dark(&home->palette);
   home->palette.cover_ink = COVER_INK;
   home->palette.cover_ink2 = COVER_INK_2;
   home->palette.focus_ring = FOCUS_RING;
-  home->accent = bd_accent_palette_from(home->style.accent_base, home->style.dark);
+  home->accent = bd_accent_palette_from(home->style.accent_base, true);
 }
 
 /*
@@ -514,10 +487,6 @@ int bd_home_query_indexed(bd_home *home, bd_rect rect, int *out, int capacity,
     *buckets_out = buckets;
   }
   return count;
-}
-
-static bool color_equal(bd_color a, bd_color b) {
-  return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 
 void bd_home_damage_rect(bd_home *home, bd_rect rect) {
@@ -928,7 +897,7 @@ bool bd_home_set_items(bd_home *home, const bd_home_item *items, int count) {
   home->stats.visible_items = 0;
   home->stats.drawn_items = 0;
   home->stats.buckets_visited = 0;
-  int max_selection = home->running_count + 4;
+  int max_selection = home->running_count + 3;
   if (home->quick_sel > max_selection) {
     home->quick_sel = max_selection;
   }
@@ -1267,20 +1236,6 @@ void bd_home_set_tab(bd_home *home, int tab) {
   bd_home_damage_all(home);
 }
 
-void bd_home_set_theme(bd_home *home, bool dark, bd_color accent_base) {
-  if (home == NULL) {
-    return;
-  }
-  if (home->style.dark == dark &&
-      color_equal(home->style.accent_base, accent_base)) {
-    return;
-  }
-  home->style.dark = dark;
-  home->style.accent_base = accent_base;
-  bd_home_palette_apply(home);
-  bd_home_damage(home);
-}
-
 void bd_home_set_blur_enabled(bd_home *home, bool enabled) {
   if (home == NULL || home->style.blur_enabled == enabled) {
     return;
@@ -1453,8 +1408,8 @@ void bd_home_clear_running(bd_home *home, const char *id) {
   if (home->quick_open || home->quick_anim) {
     damage_quick_panel(home);
   }
-  if (home->quick_sel > home->running_count + 4) {
-    home->quick_sel = home->running_count + 4;
+  if (home->quick_sel > home->running_count + 3) {
+    home->quick_sel = home->running_count + 3;
   }
   if (home->closing_active && home->closing_item == item) {
     home->closing_active = false;
@@ -1853,7 +1808,6 @@ static bool quick_adjust(bd_home *home, int delta) {
       break;
     case 2:
     case 3:
-    case 4:
       changed = false;
       break;
     default:
@@ -1880,9 +1834,6 @@ static bool quick_option_toggle(bd_home *home) {
     case 3:
       home->bluetooth = !home->bluetooth;
       damage_quick_panel(home);
-      return true;
-    case 4:
-      bd_home_set_theme(home, !home->style.dark, home->style.accent_base);
       return true;
     default:
       return false;
@@ -1920,7 +1871,7 @@ bool bd_home_input(bd_home *home, bd_home_action action) {
     if (home->quick_anim && !home->quick_open) {
       return false;
     }
-    int rows = home->running_count + 5;
+    int rows = home->running_count + 4;
     switch (action) {
       case BD_HOME_ACTION_UP:
         if (home->quick_sel > 0) {

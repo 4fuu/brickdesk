@@ -115,15 +115,15 @@ update once before starting an animation.
 - The caller passes one accent base (from `bd_config_accent_hex()`), and the
   module derives the palette with `bd_accent_palette_from()`. The focus ring is
   a fixed warm white, not an accent, so it reads on any cover.
-- The wall stays dark in both themes. The light theme changes the chrome,
-  quick panel and dialog. Its top bar is deliberately a warm translucent paper
-  with a softer fade than the near-white v3 reference.
-- The top bar keeps the "brickdesk" wordmark (16 px), category labels (18 px),
-  Wi-Fi and battery status glyphs, the clock (16 px) and the text running count
-  (13 px). Only the left four-square project mark was removed; there are no
-  search/gear/avatar buttons. When the platform exposes no battery or wireless
-  interface, the glyph gets a slash and the quick panel says "未知"; the shell
-  never substitutes 82% or an assumed connected state.
+- The desktop is dark-only. `theme.mode` has one effective value, `dark`; old
+  `light`/`auto` values in `local.ini` are normalized to `dark` on load. The
+  quick panel has no theme switch.
+- The top bar keeps category labels (18 px), Wi-Fi and battery status glyphs,
+  the clock (16 px) and the text running count (13 px). The left project mark
+  and "brickdesk" wordmark are both removed; there are no search/gear/avatar
+  buttons. When the platform exposes no battery or wireless interface, the
+  glyph gets a slash and the quick panel says "未知"; the shell never
+  substitutes 82% or an assumed connected state.
 - Type sizes are CSS pixels. The bundled Noto SC subsets report a 1.448 em
   ascent+descent span, so the module loads each face at 1.448× the nominal size.
   13 px is the smallest face used by badges, meta values and keycaps.
@@ -141,8 +141,7 @@ update once before starting an animation.
 
 ```c
 bd_home_style style = {
-    .accent_base = accent,          /* bd_config_accent_hex(..., dark) */
-    .dark = dark,
+    .accent_base = accent,          /* bd_config_accent_hex(..., true) */
     .blur_enabled = bd_config_get_bool(settings, "ui.blur", true),
 };
 bd_home *home = bd_home_create(gfx, &style);
@@ -189,7 +188,7 @@ event, and feeds the dialog result back into the session.
 - The quick panel follows the newer edge-panel direction: 402 px wide, full
   height, flush right, square outline, 5 px inner cards. The v3 mockup used a
   394 px floating panel with a 16 px radius and an 8 px margin.
-- The top bar drops only the v3 four-square brand mark. It keeps the wordmark,
+- The top bar drops the v3 four-square brand mark and the wordmark. It keeps
   category labels, Wi-Fi, battery, clock and text running count.
 - Quick-panel icons are small axis-aligned primitives instead of the prototype's
   SVG set. Their hit areas and labels match.
@@ -197,7 +196,6 @@ event, and feeds the dialog result back into the session.
   it. There is no per-frame realtime blur or full-screen FBO.
 - Demo covers in `assets/covers/home-*.jpg` are 256x256 crops generated from the
   existing `prototype/bg` reference images (about 70 KiB total).
-- The light top bar is intentionally softer/darker than `v3-home-light.jpg`.
 
 ## Plugin tile
 

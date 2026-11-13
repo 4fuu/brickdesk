@@ -13,6 +13,21 @@
 #include "brickdesk/settings.h"
 #include "settings_fixture.h"
 
+static bool accept_perf(void *user, const char *profile, char *error,
+                        size_t error_size) {
+  (void)user;
+  (void)profile;
+  (void)error;
+  (void)error_size;
+  return true;
+}
+
+static bool reject_brightness(void *user, int percent) {
+  (void)user;
+  (void)percent;
+  return false;
+}
+
 static bool save_frame(bd_platform *platform, bd_gfx *gfx,
                        bd_settings *settings, const char *dir, int index,
                        uint64_t now) {
@@ -175,6 +190,9 @@ int main(int argc, char **argv) {
   bd_settings_system system;
   bd_settings_system_stub_init(&stub, &system);
   bd_settings_set_system(settings, &system);
+  bd_settings_perf perf = {.user = NULL,
+                           .apply_global_profile = accept_perf};
+  bd_settings_set_perf(settings, &perf);
   bd_settings_status status;
   memset(&status, 0, sizeof(status));
   status.clock = "22:26";
@@ -236,6 +254,52 @@ int main(int argc, char **argv) {
     fprintf(stderr, "settings_demo: long plugin page not reached\n");
     ok = false;
   }
+
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 4);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_CATEGORY_NEXT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 8);
+  ok = ok && focus_key(settings, "!reset") &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 4);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 10);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 8);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 8);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 8);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 10);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 6);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 4);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 14);
+
+  {
+    char error[128] = {0};
+    (void)bd_config_set(config, "display.brightness", "80", error,
+                        sizeof(error));
+    (void)bd_config_set(config, "audio.volume", "40", error, sizeof(error));
+    (void)bd_config_set(config, "audio.mute", "true", error, sizeof(error));
+    (void)bd_config_set(config, "perf.global_profile", "balanced", error,
+                        sizeof(error));
+    bd_settings_system failing;
+    memset(&failing, 0, sizeof(failing));
+    failing.set_brightness = reject_brightness;
+    bd_settings_set_system(settings, &failing);
+  }
+  ok = ok && focus_key(settings, "!reset") &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 4);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 6);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 4);
+  ok = ok && bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       advance(platform, gfx, settings, out_dir, &index, &now, 20);
+  bd_settings_set_system(settings, &system);
 
   printf("settings_demo: frames=%d plugin_ready=%d\n", index, plugin_ready);
   bd_settings_destroy(settings);

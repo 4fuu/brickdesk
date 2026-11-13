@@ -642,7 +642,7 @@ static void draw_hint_layer(const bd_settings *settings, bd_gfx *gfx) {
 /* ------------------------------------------------------------- confirm */
 
 static void draw_button(bd_gfx *gfx, const bd_settings *settings, bd_rect rect,
-                        const char *label, bool primary, bool danger) {
+                        const char *label, bool primary, bool focused) {
   const bd_settings_palette *palette = &settings->palette;
   if (primary) {
     bd_gfx_fill_round_rect(gfx, rect, 4, settings->accent.accent);
@@ -650,14 +650,18 @@ static void draw_button(bd_gfx *gfx, const bd_settings *settings, bd_rect rect,
     bd_gfx_fill_round_rect(gfx, rect, 4, palette->surface2);
     bd_gfx_stroke_round_rect(gfx, rect, 4, 1, palette->line_strong);
   }
-  bd_color color = primary ? settings->accent.on_accent
-                          : (danger ? settings->accent.accent : palette->ink);
+  bd_color color = primary ? settings->accent.on_accent : palette->ink;
   int width = bd_font_measure_text(settings->fonts.title, label);
   bd_gfx_draw_text(gfx, settings->fonts.title,
                    rect.x + (rect.w - width) / 2,
                    rect.y + rect.h / 2 + bd_font_ascent(settings->fonts.title) / 2 -
                        2,
                    color, label);
+  if (focused) {
+    bd_rect outline =
+        bd_rect_make(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6);
+    bd_gfx_stroke_round_rect(gfx, outline, 6, 2, palette->ink);
+  }
 }
 
 void bd_settings_draw_confirm(bd_settings *settings, bd_gfx *gfx) {
@@ -691,10 +695,10 @@ void bd_settings_draw_confirm(bd_settings *settings, bd_gfx *gfx) {
                                 button_w, button_h);
   bd_rect reset = bd_rect_make(x + w - 24 - button_w, button_y, button_w,
                                button_h);
-  draw_button(gfx, settings, cancel, "取消", settings->confirm_focus == 0,
-              false);
-  draw_button(gfx, settings, reset, "恢复", settings->confirm_focus == 1,
-              true);
+  draw_button(gfx, settings, cancel, "取消", false,
+              settings->confirm_focus == 0);
+  draw_button(gfx, settings, reset, "恢复", true,
+              settings->confirm_focus == 1);
 }
 
 /* ---------------------------------------------------------------- draw */

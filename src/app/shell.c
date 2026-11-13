@@ -35,6 +35,18 @@
 #define BD_SHELL_SETTINGS_ITEM_ID "brickdesk-settings"
 #define BD_SHELL_PERF_TIMEOUT_MS 250
 #define BD_SHELL_BATTERY_RETRY_MS 60000
+#define BD_SHELL_INPUTD_BACKOFF_MIN_MS 250u
+#define BD_SHELL_INPUTD_BACKOFF_MAX_MS 5000u
+#define BD_SHELL_INPUTD_CONNECT_TIMEOUT_MS 1000u
+
+/*
+ * Sent once per accepted connection.  subscribe restores the action and key
+ * streams.  It is deliberately side-effect-free for other clients: the
+ * daemon's release_all command resets every device and broadcasts a release,
+ * which would drop another subscribed game or menu client's held input.
+ */
+static const char BD_SHELL_INPUTD_SUBSCRIBE[] =
+    "{\"cmd\":\"subscribe\",\"actions\":true,\"keys\":true}\n";
 
 typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
@@ -104,6 +116,11 @@ struct bd_shell {
 
   int inputd_fd;
   bool inputd_connected;
+  bool inputd_connecting;
+  uint64_t inputd_retry_ms;
+  uint64_t inputd_deadline_ms;
+  uint32_t inputd_backoff_ms;
+  size_t inputd_sent;
   char input_socket[sizeof(((struct sockaddr_un *)0)->sun_path)];
   char input_line[BD_SHELL_LINE_MAX];
   size_t input_length;
@@ -702,77 +719,207 @@ static const char *preferred_input_socket(void) {
   return "/run/brickdesk/inputd.sock";
 }
 
+static void inputd_release_switch_state(bd_shell *shell) {
+  bd_input_state_release_all(&shell->input, monotonic_ms(), local_emit, shell);
+  bd_home_set_hint_visible(shell->home, false);
+  if (shell->settings_page != NULL) {
+    bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
+    bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
+    bd_settings_set_hint_visible(shell->settings_page, false);
+  }
+  shell->dirty = true;
+}
+
 static void inputd_disconnect(bd_shell *shell, const char *reason) {
+  if (shell == NULL) {
+    return;
+  }
+  bool was_connected = shell->inputd_connected;
   if (shell->inputd_fd >= 0) {
     close(shell->inputd_fd);
     shell->inputd_fd = -1;
   }
+  shell->inputd_connected = false;
+  shell->inputd_connecting = false;
+  shell->inputd_retry_ms = 0;
+  shell->inputd_deadline_ms = 0;
+  shell->inputd_sent = 0;
+  shell->input_length = 0;
+  if (!was_connected) {
+    return;
+  }
+  if (shell->verbose) {
+    fprintf(stderr, "brickdesk: inputd disconnected (%s); using SDL keys\n",
+            reason != NULL ? reason : "eof");
+  }
+  /*
+   * The daemon owns its pressed/hold state; this side owns the state fed by
+   * SDL.  Release both views before the fallback becomes active so a hold or
+   * repeat cannot survive the source switch, and a key held over SDL cannot
+   * stay pressed when inputd returns.
+   */
+  inputd_release_switch_state(shell);
+}
+
+static void inputd_schedule_retry(bd_shell *shell, const char *reason) {
+  uint64_t now = monotonic_ms();
+  uint32_t delay = shell->inputd_backoff_ms;
+  if (delay < BD_SHELL_INPUTD_BACKOFF_MIN_MS ||
+      delay > BD_SHELL_INPUTD_BACKOFF_MAX_MS) {
+    delay = BD_SHELL_INPUTD_BACKOFF_MIN_MS;
+  }
+  inputd_disconnect(shell, reason);
+  shell->inputd_retry_ms = now + delay;
+  shell->inputd_backoff_ms =
+      delay > BD_SHELL_INPUTD_BACKOFF_MAX_MS / 2
+          ? BD_SHELL_INPUTD_BACKOFF_MAX_MS
+          : delay * 2;
+  if (shell->verbose) {
+    fprintf(stderr, "brickdesk: inputd retry in %u ms (%s)\n", delay,
+            reason != NULL ? reason : "disconnected");
+  }
+}
+
+/*
+ * Called once the subscription is fully queued on the socket.  SDL state is
+ * released before the daemon becomes authoritative; the reverse transition in
+ * inputd_disconnect() does the same before SDL resumes.  The daemon is not
+ * asked to release its devices: other clients may be holding keys or a menu.
+ */
+static void inputd_on_connected(bd_shell *shell) {
   if (shell->inputd_connected) {
-    shell->inputd_connected = false;
-    if (shell->verbose) {
-      fprintf(stderr, "brickdesk: inputd disconnected (%s); using SDL keys\n",
-              reason != NULL ? reason : "eof");
-    }
-    bd_home_set_hint_visible(shell->home, false);
-    if (shell->settings_page != NULL) {
-      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
-      bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
-      bd_settings_set_hint_visible(shell->settings_page, false);
-    }
-    shell->dirty = true;
+    return;
+  }
+  inputd_release_switch_state(shell);
+  shell->inputd_connected = true;
+  shell->inputd_connecting = false;
+  shell->inputd_retry_ms = 0;
+  shell->inputd_deadline_ms = 0;
+  shell->inputd_backoff_ms = BD_SHELL_INPUTD_BACKOFF_MIN_MS;
+  shell->input_length = 0;
+  shell->dirty = true;
+  if (shell->verbose) {
+    fprintf(stderr, "brickdesk: inputd connected at %s\n",
+            shell->input_socket);
   }
 }
 
-static bool send_all(int fd, const char *text) {
-  size_t length = strlen(text);
-  size_t sent = 0;
-  while (sent < length) {
-    ssize_t amount = send(fd, text + sent, length - sent, MSG_NOSIGNAL);
-    if (amount < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return false;
+static void inputd_flush_subscribe(bd_shell *shell) {
+  static const size_t length = sizeof(BD_SHELL_INPUTD_SUBSCRIBE) - 1;
+  while (shell->inputd_sent < length) {
+    ssize_t amount =
+        send(shell->inputd_fd, BD_SHELL_INPUTD_SUBSCRIBE + shell->inputd_sent,
+             length - shell->inputd_sent, MSG_NOSIGNAL);
+    if (amount > 0) {
+      shell->inputd_sent += (size_t)amount;
+      continue;
     }
-    sent += (size_t)amount;
+    if (amount < 0 && errno == EINTR) {
+      continue;
+    }
+    if (amount < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return;
+    }
+    inputd_schedule_retry(shell, amount < 0 ? strerror(errno) : "short write");
+    return;
   }
-  return true;
+  inputd_on_connected(shell);
 }
 
-static bool inputd_connect(bd_shell *shell) {
+static void inputd_finish_connect(bd_shell *shell, uint64_t now) {
+  int error = 0;
+  socklen_t length = sizeof(error);
+  if (getsockopt(shell->inputd_fd, SOL_SOCKET, SO_ERROR, &error, &length) !=
+      0) {
+    inputd_schedule_retry(shell, strerror(errno));
+    return;
+  }
+  if (error != 0) {
+    errno = error;
+    inputd_schedule_retry(shell, strerror(error));
+    return;
+  }
+  shell->inputd_connecting = false;
+  shell->inputd_sent = 0;
+  shell->inputd_deadline_ms = now + BD_SHELL_INPUTD_CONNECT_TIMEOUT_MS;
+  inputd_flush_subscribe(shell);
+}
+
+static void inputd_start_connect(bd_shell *shell, uint64_t now) {
   if (shell->input_socket[0] == '\0') {
-    return false;
+    return;
   }
+  shell->inputd_retry_ms = 0;
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
-    return false;
+    inputd_schedule_retry(shell, strerror(errno));
+    return;
   }
   int fd_flags = fcntl(fd, F_GETFD, 0);
-  if (fd_flags >= 0) {
-    fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC);
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (fd_flags < 0 || flags < 0 ||
+      fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC) != 0 ||
+      fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    int error = errno;
+    close(fd);
+    errno = error;
+    inputd_schedule_retry(shell, strerror(error));
+    return;
   }
   struct sockaddr_un address;
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
-  snprintf(address.sun_path, sizeof(address.sun_path), "%s", shell->input_socket);
-  if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+  size_t path_length = strlen(shell->input_socket);
+  if (path_length >= sizeof(address.sun_path)) {
     close(fd);
-    return false;
+    inputd_schedule_retry(shell, "socket path too long");
+    return;
   }
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags >= 0) {
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  memcpy(address.sun_path, shell->input_socket, path_length + 1);
+  if (connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0) {
+    shell->inputd_fd = fd;
+    shell->inputd_connecting = false;
+    shell->inputd_sent = 0;
+    shell->inputd_deadline_ms = now + BD_SHELL_INPUTD_CONNECT_TIMEOUT_MS;
+    inputd_flush_subscribe(shell);
+    return;
   }
-  static const char subscribe[] =
-      "{\"cmd\":\"subscribe\",\"actions\":true,\"keys\":true}\n";
-  if (!send_all(fd, subscribe)) {
-    close(fd);
-    return false;
+  int error = errno;
+  if (error == EINPROGRESS) {
+    shell->inputd_fd = fd;
+    shell->inputd_connecting = true;
+    shell->inputd_deadline_ms = now + BD_SHELL_INPUTD_CONNECT_TIMEOUT_MS;
+    return;
   }
-  shell->inputd_fd = fd;
-  shell->inputd_connected = true;
-  shell->input_length = 0;
-  return true;
+  close(fd);
+  errno = error;
+  inputd_schedule_retry(shell, strerror(error));
+}
+
+static void inputd_service(bd_shell *shell, uint64_t now) {
+  if (shell == NULL || shell->input_socket[0] == '\0') {
+    return;
+  }
+  if (shell->inputd_fd < 0) {
+    if (shell->inputd_retry_ms == 0 || now >= shell->inputd_retry_ms) {
+      inputd_start_connect(shell, now);
+    }
+    return;
+  }
+  if (shell->inputd_connecting) {
+    if (now >= shell->inputd_deadline_ms) {
+      inputd_schedule_retry(shell, "connect timeout");
+    }
+    return;
+  }
+  const size_t length = sizeof(BD_SHELL_INPUTD_SUBSCRIBE) - 1;
+  if (shell->inputd_sent < length) {
+    if (now >= shell->inputd_deadline_ms) {
+      inputd_schedule_retry(shell, "subscribe timeout");
+    } else {
+      inputd_flush_subscribe(shell);
+    }
+  }
 }
 
 static void inputd_handle_line(bd_shell *shell, const char *line) {
@@ -854,15 +1001,15 @@ static void inputd_read(bd_shell *shell) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         return;
       }
-      inputd_disconnect(shell, strerror(errno));
+      inputd_schedule_retry(shell, strerror(errno));
       return;
     }
     if (amount == 0) {
-      inputd_disconnect(shell, "closed");
+      inputd_schedule_retry(shell, "closed");
       return;
     }
     if (shell->input_length + (size_t)amount >= sizeof(shell->input_line)) {
-      inputd_disconnect(shell, "line too long");
+      inputd_schedule_retry(shell, "line too long");
       return;
     }
     memcpy(shell->input_line + shell->input_length, buffer, (size_t)amount);
@@ -884,6 +1031,40 @@ static void inputd_read(bd_shell *shell) {
       shell->input_line[shell->input_length] = '\0';
       newline = memchr(shell->input_line, '\n', shell->input_length);
     }
+  }
+}
+
+static void inputd_handle_poll(bd_shell *shell, short revents) {
+  if (shell->inputd_fd < 0) {
+    return;
+  }
+  uint64_t now = monotonic_ms();
+  if (revents & POLLNVAL) {
+    inputd_schedule_retry(shell, "invalid descriptor");
+    return;
+  }
+  if (shell->inputd_connecting) {
+    if ((revents & (POLLIN | POLLOUT | POLLERR | POLLHUP)) != 0) {
+      inputd_finish_connect(shell, now);
+    }
+    if (shell->inputd_fd < 0 || shell->inputd_connecting) {
+      return;
+    }
+  }
+  if ((revents & POLLOUT) != 0) {
+    inputd_flush_subscribe(shell);
+    if (shell->inputd_fd < 0) {
+      return;
+    }
+  }
+  if ((revents & POLLIN) != 0) {
+    inputd_read(shell);
+    if (shell->inputd_fd < 0) {
+      return;
+    }
+  }
+  if ((revents & (POLLERR | POLLHUP)) != 0) {
+    inputd_schedule_retry(shell, "hangup");
   }
 }
 
@@ -1357,6 +1538,7 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
 
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
+  inputd_service(shell, monotonic_ms());
   shell_update_home(shell, now);
   shell_refresh_status(shell, false);
   shell_battery_sample(shell, now);
@@ -2152,6 +2334,20 @@ static int shell_poll_timeout(bd_shell *shell) {
   if (shell->plugins != NULL) {
     best = merge_timeout(best, bd_plugin_host_next_timeout(shell->plugins));
   }
+  if (!shell->inputd_connected && shell->input_socket[0] != '\0') {
+    uint64_t now = monotonic_ms();
+    uint64_t deadline = 0;
+    if (shell->inputd_fd >= 0) {
+      deadline = shell->inputd_deadline_ms;
+    } else {
+      deadline = shell->inputd_retry_ms;
+    }
+    uint64_t remaining = deadline > now ? deadline - now : 0;
+    if (remaining > 60000) {
+      remaining = 60000;
+    }
+    best = merge_timeout(best, (int)remaining);
+  }
   if (!shell->inputd_connected) {
     uint64_t deadline = 0;
     if (bd_input_state_next_deadline(&shell->input, &deadline)) {
@@ -2213,6 +2409,10 @@ static int shell_build_fds(bd_shell *shell, struct pollfd *fds, int capacity,
   if (shell->inputd_fd >= 0 && count < capacity) {
     fds[count].fd = shell->inputd_fd;
     fds[count].events = POLLIN;
+    if (shell->inputd_connecting ||
+        shell->inputd_sent < sizeof(BD_SHELL_INPUTD_SUBSCRIBE) - 1) {
+      fds[count].events |= POLLOUT;
+    }
     fds[count].revents = 0;
     kinds[count] = 1;
     ++count;
@@ -2306,7 +2506,7 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
         }
       }
     } else if (kinds[i] == 1) {
-      inputd_read(shell);
+      inputd_handle_poll(shell, fds[i].revents);
       handled = true;
     } else {
       handled = true;
@@ -2403,6 +2603,7 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   shell->plugins = config->plugins;
   shell->verbose = config->verbose;
   shell->inputd_fd = -1;
+  shell->inputd_backoff_ms = BD_SHELL_INPUTD_BACKOFF_MIN_MS;
   shell->visible = true;
   shell->dirty = true;
   shell->status_battery = -1;
@@ -2548,11 +2749,12 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   copy_text(shell->input_socket, sizeof(shell->input_socket),
             config->input_socket != NULL ? config->input_socket
                                          : preferred_input_socket());
-  if (!inputd_connect(shell)) {
-    if (shell->verbose) {
-      fprintf(stderr, "brickdesk: inputd not reachable at %s; using SDL keys\n",
-              shell->input_socket);
-    }
+  inputd_service(shell, monotonic_ms());
+  if (!shell->inputd_connected && shell->verbose) {
+    fprintf(stderr,
+            "brickdesk: inputd not reachable at %s; using SDL keys and "
+            "retrying\n",
+            shell->input_socket);
   }
   if (config->menu_shim != NULL && file_readable(config->menu_shim)) {
     copy_text(shell->menu_shim, sizeof(shell->menu_shim), config->menu_shim);

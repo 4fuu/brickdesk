@@ -260,8 +260,43 @@ Enter, Escape) feed the same state machine when inputd is not running. Both
 sources converge on one dispatch path: reserved bindings become actions and
 unreserved keys become navigation.
 
-The 400 ms Select hold (`hotkey.hint` -> `ui.hint`) shows the hint bar and its
-release hides it; while Select is held, D-pad events still reach the desktop.
+Connection establishment is part of the desktop loop, not startup-only. The
+socket is non-blocking from `connect()` onward, and the subscription
+write is non-blocking too. If inputd is absent, a stale socket exists, or the
+listen backlog is full, the shell stays on SDL keys and retries after 250 ms,
+500 ms, 1 s, 2 s, 4 s, then every 5 s. The retry deadline is merged into the
+same `poll()` timeout as session, plugin and hotkey timers, so an unreachable
+daemon wakes the loop on that bounded cadence instead of busy-polling. A late
+daemon start, a dropped client connection and a daemon restart all reconnect
+without restarting the desktop.
+
+Each accepted connection sends one side-effect-free subscription:
+
+```json
+{"cmd":"subscribe","actions":true,"keys":true}
+```
+
+The subscription restores action and key delivery without touching daemon
+device state. The shell intentionally does not send `release_all` here: the
+daemon applies that command to every device and broadcasts it to every client,
+so it would release a game's or menu client's held input. `switch` lines
+(including `headphone`) and every other protocol message are unchanged.
+
+The shell still resets its own source-switch state. It releases the SDL hotkey
+state, releases settings slider holds, clears a partially received line and
+hides the hint strip on both directions of the switch. This prevents a hold,
+repeat or delayed tap from surviving the change and keeps SDL and inputd from
+driving the same key state at once, without affecting other inputd clients.
+
+`tests/shell_inputd_test.c` drives a forked Unix-socket peer and a real
+`brickdesk-inputd --replay` through late start, disconnect/restart, malformed
+and split lines, interrupted holds, a full accept queue and idle CPU. It also
+connects an independent subscriber directly to inputd while the shell uses a
+forwarding socket, and checks that
+the shell connecting and reconnecting never emits a `release_all` that would
+end that subscriber's held input. The 400 ms Select hold (`hotkey.hint` ->
+`ui.hint`) shows the hint bar and its release hides it; while Select is held,
+D-pad events still reach the desktop.
 `tests/harness` feeds scenario key events at `frame * fixed_dt_ms` through a
 separate test state so hold timing stays deterministic. `menu.open`,
 `perf.cycle` and `session.return_home` are forwarded by inputd; the desktop
@@ -279,6 +314,10 @@ executes `session.return_home` when an app owns the screen.
 - Hotplug and fd-loss recovery are implemented in the daemon, but real USB
   removal/reinsert, `udev` timing, suspend/resume fd invalidation and
   `EVIOCGRAB` against a running game still need hardware confirmation.
+- Shell reconnect, a late daemon start and a full socket accept queue are
+  host-tested with real processes. Boot ordering under the device init script,
+  systemd/socket activation and resume ordering still need confirmation on
+  hardware.
 - Real key codes, whether SDL's mali driver grabs devices, and the
   `EVIOCGRAB` effect on running games must be confirmed on hardware with
   `bd-input --list/--learn` and the checklist in

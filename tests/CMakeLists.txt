@@ -98,6 +98,33 @@ target_include_directories(bd_device_av_test PRIVATE
   "${PROJECT_SOURCE_DIR}/src/device")
 target_link_libraries(bd_device_av_test PRIVATE brickdesk_device brickdesk_warnings)
 
+add_executable(bd_device_feedback_test
+  device_feedback_test.c
+  "${PROJECT_SOURCE_DIR}/tools/bd-feedback-play.c"
+)
+target_include_directories(bd_device_feedback_test PRIVATE
+  "${PROJECT_SOURCE_DIR}/src/device"
+  "${PROJECT_SOURCE_DIR}/tools")
+target_link_libraries(bd_device_feedback_test PRIVATE brickdesk_feedback brickdesk_warnings)
+
+# Test-only LD_PRELOAD fake evdev plus a process-level CLI regression.  The
+# latter runs the real bd-feedback binary and checks that rumble play keeps the
+# event node open for the requested time before stop/erase/close.
+add_library(bd_fake_evdev_preload SHARED fake_evdev_preload.c)
+set_target_properties(bd_fake_evdev_preload PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "bd-fake-evdev-preload")
+target_link_libraries(bd_fake_evdev_preload PRIVATE
+  ${CMAKE_DL_LIBS}
+  brickdesk_warnings)
+
+add_executable(bd_feedback_cli_process_test bd_feedback_cli_process_test.c)
+target_compile_definitions(bd_feedback_cli_process_test PRIVATE
+  BD_FEEDBACK_CLI_BIN="$<TARGET_FILE:bd-feedback>"
+  BD_FAKE_EVDEV_PRELOAD_PATH="$<TARGET_FILE:bd_fake_evdev_preload>")
+target_link_libraries(bd_feedback_cli_process_test PRIVATE brickdesk_warnings)
+add_dependencies(bd_feedback_cli_process_test bd-feedback bd_fake_evdev_preload)
+
 add_executable(bd_settings_capture settings_capture.c)
 target_link_libraries(bd_settings_capture PRIVATE brickdesk_settings brickdesk_warnings)
 target_compile_definitions(bd_settings_capture PRIVATE
@@ -177,6 +204,12 @@ set_tests_properties(settings PROPERTIES
 
 add_test(NAME device_av COMMAND bd_device_av_test)
 set_tests_properties(device_av PROPERTIES TIMEOUT 120)
+
+add_test(NAME device_feedback COMMAND bd_device_feedback_test)
+set_tests_properties(device_feedback PROPERTIES TIMEOUT 120)
+
+add_test(NAME device_feedback_cli COMMAND bd_feedback_cli_process_test)
+set_tests_properties(device_feedback_cli PROPERTIES TIMEOUT 60)
 
 add_test(NAME smoke_render
   COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")

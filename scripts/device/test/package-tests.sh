@@ -78,7 +78,7 @@ make_desktop() {
 
 printf '== fake target build ==\n'
 mkdir -p "$FAKE_BUILD/dist/lib" "$FAKE_BUILD/bench" "$TMP/hello/bin"
-for name in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-power bd-battery display_probe bench_render brickdesk-demo; do
+for name in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-feedback bd-power bd-battery display_probe bench_render brickdesk-demo; do
     make_exit_script "$FAKE_BUILD/$name"
 done
 make_desktop "$FAKE_BUILD/brickdesk"
@@ -109,9 +109,11 @@ with zipfile.ZipFile(sys.argv[1]) as zf:
         "brickdesk-0.1.0-aarch64/install.sh",
         "brickdesk-0.1.0-aarch64/uninstall.sh",
         "brickdesk-0.1.0-aarch64/payload/bin/brickdesk",
+        "brickdesk-0.1.0-aarch64/payload/bin/bd-feedback",
         "brickdesk-0.1.0-aarch64/payload/bin/bd-power",
         "brickdesk-0.1.0-aarch64/payload/bin/bd-battery",
         "brickdesk-0.1.0-aarch64/payload/bin/bench_render",
+        "brickdesk-0.1.0-aarch64/docs/device-feedback.md",
         "brickdesk-0.1.0-aarch64/docs/device-power.md",
         "brickdesk-0.1.0-aarch64/docs/device-battery.md",
         "brickdesk-0.1.0-aarch64/payload/lib/libSDL2-2.0.so.0",
@@ -148,6 +150,7 @@ BRICKDESK_SD_ROOT=$SD BRICKDESK_SKIP_DEVICE_CHECK=1 sh "$PKG/install.sh" >"$TMP/
 [ -f "$SD/brickdesk/bin/bench_render" ] || die "bench_render was not installed"
 [ -x "$SD/brickdesk/bin/bd-power" ] || die "bd-power was not installed"
 [ -x "$SD/brickdesk/bin/bd-battery" ] || die "bd-battery was not installed"
+[ -x "$SD/brickdesk/bin/bd-feedback" ] || die "bd-feedback was not installed"
 [ -f "$SD/brickdesk/assets/fonts/NotoSansSC-500-subset.ttf" ] || die "fonts were not installed"
 [ -f "$SD/brickdesk/plugins/hello/bin/hello" ] || die "hello plugin was not installed"
 [ -f "$SD/brickdesk-uninstall.sh" ] || die "uninstaller copy was not installed"

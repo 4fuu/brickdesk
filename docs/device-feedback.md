@@ -1,13 +1,13 @@
 # LED 与震动设备后端（M4-LED/Rumble）
 
-> **状态：未在 Brick Pro / TG4040 真机验证。**
-> 宿主单元测试、故障注入测试和官方 aarch64 工具链交叉编译已通过；真实
-> `/sys/class/leds`、TG4040 的 `/sys/class/led_anim`、evdev FF 节点和马达
-> 都还没有真机证据。本文不声称任何未经真机验证的硬件行为。
+> **状态：宿主验证通过，未在 Brick Pro / TG4040 真机验证。**
+> 宿主单元测试、故障注入测试、LED 分区/马达假 sysfs 写入和官方 aarch64 工具链
+> 交叉编译已通过；真实 `/sys/class/leds`、TG4040 的 `/sys/class/led_anim`、
+> evdev FF 节点和马达都还没有真机证据。本文不声称任何未经真机验证的硬件行为。
 >
 > 本文覆盖 `include/brickdesk/device_feedback.h`、`src/device/feedback*`、
-> `tools/bd-feedback.c` 和 `tests/device_feedback_test.c`。不修改 home、settings、
-> app、输入守护进程、电源状态机或 UI。
+> `include/brickdesk/led.h`、`src/app/led.c`、`include/brickdesk/haptics.h`、
+> `src/app/haptics.c`、`tools/bd-feedback.c` 和 `tests/device_feedback_test.c`。
 
 ## 1. 结论与范围
 
@@ -21,23 +21,29 @@
   `/dev/input/eventN`，要求 `EV_FF`、`FF_RUMBLE` 和至少一个效果槽；用
   `EVIOCSFF` 上传 `FF_RUMBLE`，用一次 `EV_FF` 写入播放，用 `EV_FF` 0 +
   `EVIOCRMFF` 停止并删除。`close()` 自动停止和删除，避免效果残留。
-- **TG4040 厂商路径**：`/sys/class/led_anim/*` 和
-  `/sys/class/motor/voltage` + GPIO227 只做只读探测并填写 blocker。**不写**
-  这些节点，不猜 `max_scale` 范围、效果编号、马达安全电压或 GPIO 极性。
+- **TG4040 厂商 LED**：写 `/sys/class/led_anim/*` 的五个分区
+  （`m`、`lr`、`f1`、`f2`、`rear`）：`max_scale*` 亮度、`effect_*` 效果、
+  `effect_rgb_hex_*` 颜色、`effect_cycles_*` 循环次数、`effect_duration_*`
+  时长。写入顺序与 NextUI 一致：亮度、cycles、duration、颜色，最后写
+  `effect_*` 应用。
+- **TG4040 厂商马达**：写 `/sys/class/motor/voltage`（微伏）和
+  GPIO227 `value`。Brick Pro 上限 2.5 V，最小 0.5 V；0 写最大电压后
+  GPIO 0，与 NextUI 的 `PLAT_setRumble()` 一致。GPIO 未导出时尝试
+  export 并设为 output。
+- **产品层**：`bd_led` 把 `[led]` 配置和系统状态映射为 default/off/
+  low-battery/critical/charging/sleep/ambient 七种 profile；`bd_haptics`
+  只负责脉冲时间线，不阻塞事件循环。
 - 所有写操作都有配置上限。超过上限返回 `out-of-range`，**不做静默截断**，
-  也不写硬件。缺节点、缺能力、未选择节点和厂商路径未验证都是显式
-  `unsupported`，不会假成功。
+  也不写硬件。缺节点、缺能力或未选择节点都是显式 `unsupported`，不会假成功。
 
 明确不做：
 
 - 不实现 `/dev/i2c-*`、AXP2202 寄存器、PMIC 关机/上电顺序。
-- 不实现 `/sys/class/led_anim` 的效果、帧、分区颜色或 `max_scale` 写入。
-- 不实现 `/sys/class/motor/voltage`、GPIO227 export/direction/value 写入。
+- 不写 `frame_hex` / `anim_frames_enable` 帧动画；分区 effect 已覆盖需求。
 - 不实现 FF_PERIODIC/FF_CONSTANT 等其他效果，也不设置 `FF_GAIN`。
 - 不做事件节点自动猜测。选择错误的 event 节点可能让外接手柄震动，因此必须
   由调用方给出路径。
-- 不新增 INI key 或 settings 页面。配置是公开结构体和 `bd-feedback` 参数；
-  等 shell/插件真正消费后再接 `bd_config`，避免留下无人读取的死配置。
+- 不把 `effect_*` 编号猜成更多语义；产品层只用 NextUI 已使用的 1..15。
 
 ## 2. 能力矩阵
 
@@ -49,14 +55,17 @@
 | LED trigger 门禁 | 已实现，宿主测试 | `trigger` 可读 | probe 时及每次写前复查；活动 trigger 不是 `none` 时 `unsupported` |
 | LED 自动发现 | 已实现，宿主测试 | `allow_auto_discover=true` | 按名称排序，选第一个可用项；默认关闭 |
 | 标准 LED 多色 | 明确不支持 | — | 4.9.191 无 multicolor 文档；独立颜色 LED 可分别打开 |
-| `/sys/class/led_anim` | 只读探测/blocker | 目录存在 | 不写效果、帧、分区或 `max_scale` |
+| `/sys/class/led_anim` 分区 | 已实现，宿主假 sysfs | 目录和 `effect_<zone>` 存在 | 写亮度/效果/颜色/cycles/duration |
+| LED 分区 f1/f2 | 已实现，宿主假 sysfs | `max_scale_f1f2` 存在 | 共用亮度；f2 只写效果/颜色 |
+| 厂商 LED 关闭 | 已实现，宿主假 sysfs | 任一分区存在 | 所有分区 `max_scale*` 写 0 |
 | evdev FF 探测 | 已实现，宿主测试 | 显式 event 节点 | `EV_FF` + `FF_RUMBLE` + 效果槽 |
 | evdev FF 播放 | 已实现，宿主测试 | 同上 | 强度 0..100，时长 ms，效果为 `FF_RUMBLE` |
 | evdev FF 停止/清理 | 已实现，宿主测试 | 同上 | `EV_FF` 0 + `EVIOCRMFF`；`close()` 也执行 |
 | `FF_PERIODIC` 回退 | 明确不支持 | — | 只接受 `FF_RUMBLE`，避免猜波形语义 |
 | `FF_GAIN` | 明确不支持 | — | 不改变设备全局增益 |
-| `/sys/class/motor/voltage` | 只读探测/blocker | 节点存在 | 不写电压，不 export GPIO |
-| GPIO227 马达开关 | 只读探测/blocker | 节点存在 | 极性、export 状态和热限制未验证 |
+| `/sys/class/motor/voltage` | 已实现，宿主假 sysfs | 节点可写 | 0.5–2.5 V 线性映射，写后 GPIO |
+| GPIO227 马达开关 | 已实现，宿主假 sysfs | `value` 可写 | 未导出时写 `export`，再写 `direction=out` |
+| 马达脉冲时间线 | 已实现，宿主测试 | 马达可用 | 8 步 pattern；shell 负责 deadline |
 
 ## 3. 公开 API、单位与配置
 
@@ -115,7 +124,78 @@ LED 没有 `close()`，也不会在进程退出时自动恢复。原因是节点
 进程共享，自动写回可能覆盖别人的状态。调用方如果“拥有”该 LED，应在退出前
 显式 `bd_feedback_led_set(led, 0)` 或写回保存的值；本文和测试都按这个契约执行。
 
-### 3.3 震动
+### 3.3 TG4040 厂商 LED 分区
+
+```c
+typedef enum bd_feedback_led_zone {
+  BD_FEEDBACK_LED_ZONE_M = 0,  /* 顶栏 / Logo */
+  BD_FEEDBACK_LED_ZONE_LR,     /* Brick Pro 摇杆环 */
+  BD_FEEDBACK_LED_ZONE_F1,
+  BD_FEEDBACK_LED_ZONE_F2,
+  BD_FEEDBACK_LED_ZONE_REAR,   /* 扳机 */
+  BD_FEEDBACK_LED_ZONE_COUNT
+} bd_feedback_led_zone;
+
+bd_feedback_result bd_feedback_led_anim_probe(
+    bd_feedback_led_anim *led, const bd_feedback_led_anim_config *config,
+    bd_feedback_error *error);
+bd_feedback_result bd_feedback_led_anim_apply(
+    bd_feedback_led_anim *led, bd_feedback_led_zone zone,
+    const bd_feedback_led_anim_settings *settings, bd_feedback_error *error);
+bd_feedback_result bd_feedback_led_anim_apply_all(
+    bd_feedback_led_anim *led,
+    const bd_feedback_led_anim_settings settings[BD_FEEDBACK_LED_ZONE_COUNT],
+    bd_feedback_error *error);
+bd_feedback_result bd_feedback_led_anim_off(bd_feedback_led_anim *led,
+                                            bd_feedback_error *error);
+```
+
+| 字段 | 范围 | 说明 |
+|---|---|---|
+| `brightness` | 0..100 | 写 `max_scale` / `max_scale_lr` / `max_scale_f1f2` / `max_scale_rear` |
+| `effect` | 0..255 | 厂商编号；产品层只用 1 linear / 2 breathe / 3 interval-breathe / 4 static 及 5..15 |
+| `cycles` | -1..65535 | `-1` 无限循环 |
+| `duration_ms` | 1..60000 | 写 `effect_duration_*` |
+| `rgb` | 0x00RRGGBB | 写 `effect_rgb_hex_*` |
+
+`f2` 不写亮度，因为 Brick Pro 的 f1/f2 共用 `max_scale_f1f2`；f2 的颜色、
+效果、cycles、duration 仍然独立。probe 只检查 `effect_<zone>` 是否存在，
+不写任何节点。缺分区返回 `unsupported`；值越界返回 `out-of-range` 且不写。
+
+产品层 `bd_led`（`include/brickdesk/led.h`）负责 profile：
+
+| profile | 行为 |
+|---|---|
+| default | 按 `[led.<zone>]` 的 brightness/color/effect 应用 |
+| off | 所有分区亮度 0 |
+| low battery | interval-breathe 0xFF3300，无限 |
+| critical battery | interval-breathe 0xFF0000，无限 |
+| charging | breathe 0x00FF00，无限 |
+| sleep | breathe，用户颜色，5 个 cycle |
+| ambient | static，调用方颜色，按 `led.ambient_brightness` |
+
+### 3.4 TG4040 厂商马达
+
+```c
+bd_feedback_result bd_feedback_motor_open(
+    bd_feedback_motor *motor, const bd_feedback_motor_config *config,
+    bd_feedback_error *error);
+bd_feedback_result bd_feedback_motor_set(bd_feedback_motor *motor,
+                                         int percent,
+                                         bd_feedback_error *error);
+bd_feedback_result bd_feedback_motor_stop(bd_feedback_motor *motor,
+                                          bd_feedback_error *error);
+bd_feedback_result bd_feedback_motor_close(bd_feedback_motor *motor,
+                                           bd_feedback_error *error);
+```
+
+默认 `min_voltage_uv=500000`、`max_voltage_uv=2500000`、`max_percent=100`、
+`gpio=227`。`percent` 0..100 线性映射到电压；0 和 100 都写最大电压，
+GPIO 分别写 0/1。写入顺序是先电压、后 GPIO，避免第一次脉冲沿用上一个
+电压。`bd_haptics` 在其上实现最多 8 步的 pattern，shell 用
+`bd_haptics_next_deadline()` 唤醒并在 deadline 写 0。
+
+### 3.5 震动
 
 ```c
 bd_feedback_result bd_feedback_rumble_probe(
@@ -135,7 +215,7 @@ bd_feedback_result bd_feedback_rumble_close(
 | 字段 | 默认 | 用途 |
 |---|---|---|
 | `event` | NULL | 显式 `/dev/input/eventN`；NULL 直接 `unsupported`，不自动猜 |
-| `sysfs_root` | `""`（真实 `/sys`） | 只用于只读厂商马达探测，不写 |
+| `sysfs_root` | `""`（真实 `/sys`） | 仅用于 `bd_feedback_rumble.vendor_*` 的只读探测；写马达用 `bd_feedback_motor` |
 | `max_percent` | 0（按 100） | 强度上限 1..100；超限直接拒绝 |
 | `max_duration_ms` | 0（按 1000） | 时长上限 1..60000 ms；超限直接拒绝 |
 | `backend` | `AUTO` | `AUTO`/`EVDEV` 走 evdev；`NONE` 显式禁用 |
@@ -253,21 +333,20 @@ trigger 控制。本模块**不写** trigger。
   NextUI 的默认 `brightness` 是 100，但代码没有证明 `max_scale` 的合法范围是
   0..100 还是 0..255，也没有证明 effect 编号语义。
 
-这些事实足以确认“TG4040 有厂商 LED 和马达 sysfs 路径”，但**不足以**安全地
-写它们：
+这些事实足以确认 TG4040 的节点路径和 NextUI 的实际取值。本实现直接采用：
 
-- `max_scale` 的范围和分区映射未在真机确认；调研文档的待确认项明确列出
-  `0–255/0–100` 未定。
-- `effect_*` 编号是厂商定义；没有公开枚举表，不能把“呼吸/闪烁”猜成某个整数。
-- 马达电压的安全范围、GPIO227 极性、export 状态、长时间震动热/掉压行为都未
-  真机确认。NextUI 的 2.5 V 是它的策略，不是 Brick Pro 的硬件安全证书。
-- 原厂 `hardwareservice` 字符串出现过 2.0/2.5/3.0/3.3/3.5 V，说明不同机型/
-  固件策略不同，不能用单一常量跨机型写。
+- 分区：`m`、`lr`、`f1`、`f2`、`rear`；Brick Pro 的 `lr` 是摇杆环，
+  `rear` 是扳机。
+- 亮度：NextUI 默认 `brightness=100`、`inbrightness=100`，本实现按 0..100
+  写入；如果真机范围是 0..255，`max_scale` 会按比例偏暗，需在真机验收时确认。
+- 效果：NextUI 的 profile 明确使用 2=breathe、3=blink/interval-breathe、
+  4=static；其余 1、5..15 来自 LedControl 的名称表，作为可选效果。
+- 马达：Brick Pro 使用 2.5 V 上限（`is_brickpro ? 2500000 : 3300000`），
+  最小 0.5 V；这是 NextUI 在 tg5040 上的实际策略，不是硬件安全证书。
 
-因此本实现只读探测这些节点，并在 `bd_feedback_led.vendor_led_blocker` /
-`bd_feedback_rumble.vendor_blocker` 中返回固定 blocker 文本。写入统一走标准
-`/sys/class/leds` 和 evdev FF；如果真机没有这两个标准接口，能力就是
-`unsupported`，这是正确结果，不是缺陷掩藏。
+真机仍需确认：`max_scale` 实际范围、`effect_*` 编号 0–N 的视觉效果、
+`frame_hex` 语义、GPIO227 极性和长时间震动的热/掉压。完成前不把本文
+状态改成“已验证”。
 
 ### 5.3 其他项目
 
@@ -426,8 +505,10 @@ NEEDED: libc.so.6
       raw range 和当前百分比。
 - [ ] 依次 `led set 100/50/10/0`，确认实际亮度、是否闪、0 是否全黑；
       对 `max_brightness=1` 的 LED 记录 0/1 语义。
-- [ ] 如果标准 class 不存在，记录 `led.vendor_led_anim=present` 和 blocker；
-      在确认 `max_scale` 范围、分区映射、effect 编号前不要写 `/sys/class/led_anim`。
+- [ ] 标准 class 不存在时，确认 `led.vendor_led_anim=present`，然后从设置页
+      “灯光”逐区测试：亮度 0/50/100、颜色 white/red/green/blue、效果
+      static/breathe/interval-breathe；记录 `max_scale*` 实际范围（0..100 还是
+      0..255）和每个 effect 编号的视觉效果。
 - [ ] 关闭 brickdesk 回原厂 UI 后，LED 是否停在原厂状态；是否与
       `/tmp/system/enable_led`、原厂 `hardwareservice` 冲突。
 
@@ -449,13 +530,17 @@ NEEDED: libc.so.6
 
 ### 8.3 厂商马达路径
 
-- [ ] 只读执行 `bd-feedback probe`，确认 `vendor_motor_voltage=present`、
-      `vendor_motor_enable=present` 和 blocker 文本。
-- [ ] 用万用表/示波器确认 GPIO227 极性、马达电压与 PWM/占空比、2.5 V/3.3 V
-      的实际强度/热/掉压；在完成前不写 `/sys/class/motor/voltage`，也不 export
-      或改 GPIO direction。
-- [ ] 如果未来要支持该路径，必须先补充：安全电压表、极性、export 归谁管理、
-      与原厂 `keymon`/`hardwareservice` 的互斥、关闭/崩溃清理和真机 20 轮测试。
+- [ ] 确认 `/sys/class/motor/voltage` 和 GPIO227 存在；记录是否已 export、
+      `direction` 当前值。
+- [ ] 从设置页把菜单触觉强度设为 20、时长 20 ms，触发一次导航；记录实际
+      强度/噪音。逐步升到 60、100，确认 2.5 V 下的发热和掉压。
+- [ ] 用万用表/示波器确认 GPIO227 极性；如果 0/1 反了，记录后修正
+      `bd_feedback_motor_set()` 的 value 写入。
+- [ ] 验证 8 步 pattern（启动/睡眠双脉冲）在最后一步后 GPIO 归 0；
+      进程被杀、桌面退出、重启后不持续震动。
+- [ ] 连续短震 20 次、2 秒长震、低电量下各记录一次；确认没有重启/掉压。
+- [ ] 与原厂 `keymon`/`hardwareservice` 同时运行时，确认谁最后写值；必要时
+      在安装器里停用原厂马达/LED 服务。
 
 ### 8.4 生命周期与共存
 

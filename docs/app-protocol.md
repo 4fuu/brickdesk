@@ -273,7 +273,18 @@ App → host:
 | `app.toast` | request a toast |
 | `app.state` | report a state change |
 | `app.log` | structured log |
+| `led.ambient` / `led.set` | push an ambient LED colour: `{"color":"#RRGGBB"}` or `{"rgb":16711680}`; `{"off":true}` restores the user profile |
+| `rumble.play` | play a motor pulse: `{"strength":60,"duration_ms":60}` (0..100, 1..1000) |
+| `rumble.stop` | stop the current motor pulse |
 | `app.perf.request` | running perf-profile request; M1 replies with “unsupported” |
+
+`led.*` and `rumble.*` are notifications: the session forwards them to the
+desktop, which owns the vendor LED/motor nodes.  They are accepted only while
+the sending app is foreground.  `led.ambient` requires `led.ambient=true` and
+the per-app `[led.app.<id>] ambient` key (default true); the desktop restores
+the user profile on app exit or switch.  When the app publishes a last frame,
+the desktop also samples its average colour every 500 ms and applies it as the
+ambient colour.
 
 Requests carry an integer `id`; responses use `result` or `error`. Error codes
 are the architecture.md 3.5 set: `-32600`, `-32601`, `-32602`, `-32001`,

@@ -152,8 +152,39 @@ stub，M4 接入设备后端。
 | `chord_window_ms` | int | `50` | 10..500 | chord 判定窗口 |
 | `long_press_ms` | int | `500` | 100..3000 | 应用内长按阈值；热键用各自的 `hold_ms`，不读这个值 |
 | `double_tap_ms` | int | `300` | 100..1000 | 双击判定窗口 |
+| `haptics` | bool | `true` | — | 菜单/系统触觉总开关 |
+| `haptic_strength` | int | `60` | 0..100 | 菜单触觉强度（马达百分比） |
+| `haptic_duration_ms` | int | `35` | 5..500 | 单次菜单触觉时长 |
 
-### 4.6 `[power]`
+### 4.6 `[led]`
+
+Brick Pro 的厂商 LED 分区。`m` 是顶栏/Logo，`lr` 是摇杆环，`f1`/`f2`
+是 FN 键（共用亮度），`rear` 是扳机。所有亮度为 0..100。
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `enabled` | bool | `true` | — | 灯光总开关；关闭后所有分区熄灭 |
+| `duration_ms` | int | `1000` | 100..60000 | 效果单次时长，也是睡眠脉冲 5 次的单次时长 |
+| `indicator_brightness` | int | `100` | 0..100 | 低电量/充电/睡眠指示亮度 |
+| `ambient` | bool | `false` | — | 按前台应用推送/末帧颜色驱动灯光 |
+| `ambient_brightness` | int | `100` | 0..100 | 氛围灯亮度 |
+| `m.brightness` / `m.color` / `m.effect` | int/enum/enum | `100`/`white`/`static` | 0..100 / 颜色表 / 效果表 | 顶栏分区 |
+| `lr.brightness` / `lr.color` / `lr.effect` | 同上 | 同上 | 同上 | 摇杆环分区 |
+| `f1.brightness` / `f1.color` / `f1.effect` | 同上 | 同上 | 同上 | FN 1 分区；F2 共用亮度 |
+| `f2.color` / `f2.effect` | enum/enum | `white`/`static` | 同上 | FN 2 分区 |
+| `rear.brightness` / `rear.color` / `rear.effect` | 同上 | 同上 | 同上 | 扳机分区 |
+
+颜色表：`white`、`red`、`orange`、`yellow`、`green`、`cyan`、`blue`、
+`violet`、`magenta`、`off`。效果表：`linear`、`breathe`、
+`interval_breathe`、`static`、`blink1`、`blink2`、`blink3`、`rainbow`、
+`twinkle`、`fire`、`glitter`、`neonglow`、`firefly`、`aurora`、`reactive`，
+对应厂商 effect 编号 1..15。
+
+按应用关闭氛围灯：在 `local.ini` 增加 `[led.app.<app-id>] ambient = false`。
+应用也可以通过 IPC 通知 `led.ambient` / `led.set` 推送颜色（见
+[docs/app-protocol.md](app-protocol.md)）。
+
+### 4.7 `[power]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -164,7 +195,7 @@ stub，M4 接入设备后端。
 | `low_battery_percent` | int | `5` | 0..100 | 低电量关机阈值 |
 | `shutdown_on_low_battery` | bool | `true` | — | 临界电量倒计时结束后是否自动关机 |
 
-### 4.7 `[plugins]`
+### 4.8 `[plugins]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|

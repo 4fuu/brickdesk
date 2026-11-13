@@ -94,6 +94,7 @@ needs a rebuild just to show a new number.
 | 外观 | `theme.accent` (+ custom RGB sub-page), `theme.ambient`, `ui.animations`, `ui.blur` |
 | 声音 | `audio.volume`, `audio.mute` |
 | 显示 | `display.brightness` |
+| 灯光 | `led.enabled`, per-zone brightness/color/effect for `m`/`lr`/`f1`/`f2`/`rear`, `led.indicator_brightness`, `led.ambient`, `led.ambient_brightness` |
 | 按键 | one conflict summary plus every `[hotkey.<id>]` combo, action, trigger and warning marker |
 | 性能 | `perf.global_profile` and every `[app.<id>] profile` override, both cycled through perf.ini profile names |
 | 后台 | `session.max_background`, `session.memory_budget_mb` |
@@ -104,7 +105,16 @@ New config keys added for this page:
 
 - `[audio] volume` (0..100, default 70) and `[audio] mute` (bool, false);
 - `[session] memory_budget_mb` (128..1024, default 560);
-- `[perf] global_profile` (string, default `default`).
+- `[perf] global_profile` (string, default `default`);
+- `[led]` master/indicator/ambient keys and per-zone `brightness`/`color`/`effect`
+  (see [docs/config-reference.md](config-reference.md) 4.6);
+- `[input] haptics`, `haptic_strength`, `haptic_duration_ms`.
+
+The Lights page uses the same schema rows as every other config page: sliders
+for brightness, enum rows for the colour/effect tables.  It does not add a new
+widget type or a new layout.  Changes are persisted immediately and the shell's
+config callback re-applies the LED profile; the page itself never writes
+`/sys/class/led_anim`.
 
 The keys page reads the table through `bd_hotkey_table_load()`, so duplicates,
 prefixes and first-key overlaps come from the input layer rather than being

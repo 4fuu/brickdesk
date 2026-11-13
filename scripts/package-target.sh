@@ -81,6 +81,7 @@ BIN_INPUTD=$(resolve brickdesk-inputd "$BUILD_DIR/brickdesk-inputd")
 BIN_PERFD=$(resolve brickdesk-perfd "$BUILD_DIR/brickdesk-perfd")
 BIN_BD_INPUT=$(resolve bd-input "$BUILD_DIR/bd-input")
 BIN_CONFIG=$(resolve brickdesk-config "$BUILD_DIR/brickdesk-config")
+BIN_BD_AV=$(resolve bd-av "$BUILD_DIR/bd-av")
 BIN_PROBE=$(resolve display_probe "$BUILD_DIR/display_probe" "$BUILD_DIR/bin/display_probe")
 BIN_BENCH=$(resolve bench_render "$BUILD_DIR/bench/bench_render" "$BUILD_DIR/bench_render")
 BIN_DEMO=$(resolve brickdesk-demo "$BUILD_DIR/brickdesk-demo")
@@ -128,6 +129,7 @@ copy_bin "$BIN_INPUTD" "$STAGE/payload/bin/brickdesk-inputd"
 copy_bin "$BIN_PERFD" "$STAGE/payload/bin/brickdesk-perfd"
 copy_bin "$BIN_BD_INPUT" "$STAGE/payload/bin/bd-input"
 copy_bin "$BIN_CONFIG" "$STAGE/payload/bin/brickdesk-config"
+copy_bin "$BIN_BD_AV" "$STAGE/payload/bin/bd-av"
 copy_bin "$BIN_PROBE" "$STAGE/payload/bin/display_probe"
 copy_bin "$BIN_BENCH" "$STAGE/payload/bin/bench_render"
 copy_bin "$BIN_DEMO" "$STAGE/payload/bin/brickdesk-demo"
@@ -169,6 +171,9 @@ chmod 0755 "$STAGE/install.sh" "$STAGE/uninstall.sh" 2>/dev/null || true
 if [ -f "$REPO_ROOT/docs/install.md" ]; then
     cp "$REPO_ROOT/docs/install.md" "$STAGE/docs/install.md" || die "cannot copy docs/install.md"
 fi
+if [ -f "$REPO_ROOT/docs/device-av.md" ]; then
+    cp "$REPO_ROOT/docs/device-av.md" "$STAGE/docs/device-av.md" || die "cannot copy docs/device-av.md"
+fi
 
 check_aarch64() {
     # Reject host ELF binaries in a device package. Shell scripts are allowed
@@ -187,8 +192,8 @@ check_aarch64() {
 }
 
 for artifact in "$BIN_BRICKDESK" "$BIN_INPUTD" "$BIN_PERFD" "$BIN_BD_INPUT" \
-    "$BIN_CONFIG" "$BIN_PROBE" "$BIN_BENCH" "$BIN_DEMO" "$LIB_MENU" "$LIB_SDL2" \
-    "$HELLO_BIN"; do
+    "$BIN_CONFIG" "$BIN_BD_AV" "$BIN_PROBE" "$BIN_BENCH" "$BIN_DEMO" \
+    "$LIB_MENU" "$LIB_SDL2" "$HELLO_BIN"; do
     check_aarch64 "$artifact"
 done
 
@@ -198,6 +203,7 @@ for rel in \
     payload/bin/brickdesk-perfd \
     payload/bin/bd-input \
     payload/bin/brickdesk-config \
+    payload/bin/bd-av \
     payload/bin/display_probe \
     payload/bin/bench_render \
     payload/bin/brickdesk-demo \

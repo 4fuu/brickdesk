@@ -156,6 +156,23 @@ target_link_libraries(brickdesk_config
   PRIVATE brickdesk_warnings
 )
 
+# --- device capabilities ------------------------------------------------
+# Brightness (sysfs and /dev/disp) and ALSA volume/mute/path control.  The
+# library has no SDL or config dependency so the settings page, the in-app
+# menu and the bd-av diagnostic tool can share it.  ALSA controls are reached
+# through the kernel control UAPI; no libasound is required on the target.
+add_library(brickdesk_device STATIC
+  src/device/audio.c
+  src/device/audio_alsa.c
+  src/device/brightness.c
+  src/device/brightness_common.c
+)
+target_include_directories(brickdesk_device
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/device"
+)
+target_link_libraries(brickdesk_device PRIVATE brickdesk_warnings)
+
 # --- performance --------------------------------------------------------
 # Profile resolution, lease arbitration, sysfs probing and write
 # transactions.  Kept free of SDL so brickdesk-perfd can run without a
@@ -351,6 +368,9 @@ target_link_libraries(brickdesk-perfd PRIVATE brickdesk_perf brickdesk_config br
 # --- tools --------------------------------------------------------------
 add_executable(brickdesk-config tools/brickdesk-config.c)
 target_link_libraries(brickdesk-config PRIVATE brickdesk_config brickdesk_warnings)
+
+add_executable(bd-av tools/bd-av.c)
+target_link_libraries(bd-av PRIVATE brickdesk_device brickdesk_warnings)
 
 # --- tests --------------------------------------------------------------
 include(CTest)

@@ -81,10 +81,11 @@ jobs:
               test -x build-target/brickdesk-perfd
               test -x build-target/bd-input
               test -x build-target/brickdesk-config
+              test -x build-target/bd-av
               test -x build-target/brickdesk-demo
               test -x build-target/bench/bench_render
               test -f build-target/libbrickdesk-menu.so
-              file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input build-target/brickdesk-config build-target/brickdesk-demo build-target/bench/bench_render build-target/libbrickdesk-menu.so
+              file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input build-target/brickdesk-config build-target/bd-av build-target/brickdesk-demo build-target/bench/bench_render build-target/libbrickdesk-menu.so
               if readelf -d build-target/libbrickdesk-menu.so | grep -Eq "NEEDED.*(libSDL2|libEGL|libGLESv2)"; then
                 echo "libbrickdesk-menu.so must not link SDL/EGL/GLES directly" >&2
                 exit 1
@@ -95,6 +96,7 @@ jobs:
                 build-target/brickdesk-perfd \
                 build-target/bd-input \
                 build-target/brickdesk-config \
+                build-target/bd-av \
                 build-target/brickdesk-demo \
                 build-target/bench/bench_render \
                 build-target/libbrickdesk-menu.so \

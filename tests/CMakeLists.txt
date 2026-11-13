@@ -50,6 +50,9 @@ target_link_libraries(bd_gfx_capture PRIVATE brickdesk_core brickdesk_warnings)
 target_compile_definitions(bd_gfx_capture PRIVATE
   BRICKDESK_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
+add_executable(bd_keyboard_test keyboard_test.c)
+target_link_libraries(bd_keyboard_test PRIVATE brickdesk_core brickdesk_warnings)
+
 add_executable(bd_hotkey_test hotkey_test.c)
 target_link_libraries(bd_hotkey_test PRIVATE brickdesk_input brickdesk_config brickdesk_warnings)
 
@@ -211,6 +214,7 @@ add_test(NAME key_names COMMAND bd_key_names_test)
 add_test(NAME sysinfo COMMAND bd_sysinfo_test)
 add_test(NAME config COMMAND bd_config_test)
 add_test(NAME hotkeys COMMAND bd_hotkey_test)
+add_test(NAME keyboard COMMAND bd_keyboard_test)
 add_test(NAME perf_policy COMMAND bd_perf_policy_test)
 add_test(NAME device_power COMMAND bd_device_power_test)
 add_test(NAME input_controls COMMAND bd_input_controls_test)

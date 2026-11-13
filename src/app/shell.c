@@ -1702,12 +1702,13 @@ static void shell_plugin_hotkey(bd_shell *shell, const bd_hotkey *hotkey,
     }
     return;
   }
-  if (pressed && shell_plugin_menu_declared(plugin, action)) {
-    bd_plugin_menu_activate(plugin, action);
-    return;
-  }
   if (shell_plugin_menu_declared(plugin, action)) {
-    return;
+    if (!pressed) {
+      return;
+    }
+    if (bd_plugin_menu_activate(plugin, action)) {
+      return;
+    }
   }
   bd_plugin_hotkey_event(plugin, action, pressed);
 }

@@ -14,7 +14,12 @@ if(NOT BRICKDESK_BACKEND STREQUAL "host" AND NOT BRICKDESK_BACKEND STREQUAL "tar
 endif()
 
 option(BRICKDESK_BUILD_HARNESS "Build the screenshot/input replay harness" ON)
-option(BRICKDESK_BUILD_BENCH "Build the host renderer benchmark" ON)
+option(BRICKDESK_BUILD_BENCH "Build the renderer benchmark" ON)
 
-set(BRICKDESK_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets" CACHE PATH
+if(BRICKDESK_BACKEND STREQUAL "target")
+  set(_bd_default_asset_dir "/mnt/SDCARD/brickdesk/assets")
+else()
+  set(_bd_default_asset_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+endif()
+set(BRICKDESK_ASSET_DIR "${_bd_default_asset_dir}" CACHE PATH
     "Directory containing fonts and demo assets at runtime")

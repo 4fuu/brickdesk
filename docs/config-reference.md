@@ -570,12 +570,13 @@ Power/Volume 通常属于独立的 `gpio-keys` 设备，即使 `input.ini` 没�
 brickdesk-config check                      # 校验所有文件，打印 file:line
 brickdesk-config get theme.mode             # 打印有效值
 brickdesk-config set theme.accent coral     # 写 local.ini
+brickdesk-config unset theme.accent         # 删除用户覆盖，回到低层/默认
 brickdesk-config dump                       # 每个 key 的值和来源层/文件/行
 brickdesk-config --config-dir ./config dump
 ```
 
-`get`/`set`/`dump` 会在需要时迁移旧文件；`check` 不会写文件。
-`set` 只能修改已经存在的 key（包括系统文件里定义的动态 section）；要新增
+`get`/`set`/`unset`/`dump` 会在需要时迁移旧文件；`check` 不会写文件。
+`set`/`unset` 只能修改已经存在的 key（包括系统文件里定义的动态 section）；要新增
 热键或设备映射，先在对应 INI 文件里写好 section，再用 `set` 覆盖字段。
 
 退出码：

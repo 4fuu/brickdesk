@@ -15,6 +15,7 @@ static void print_usage(FILE *stream) {
           "  check                 validate every configuration file\n"
           "  get KEY               print an effective value\n"
           "  set KEY VALUE         write one user override to local.ini\n"
+          "  unset KEY             remove a user override and save local.ini\n"
           "  dump                  print every effective value and its source\n"
           "\n"
           "options:\n"
@@ -205,6 +206,7 @@ int main(int argc, char **argv) {
   bool known_command = strcmp(command, "check") == 0 ||
                        strcmp(command, "get") == 0 ||
                        strcmp(command, "set") == 0 ||
+                       strcmp(command, "unset") == 0 ||
                        strcmp(command, "dump") == 0;
   if (!known_command) {
     fprintf(stderr, "brickdesk-config: unknown command '%s'\n", command);
@@ -222,6 +224,10 @@ int main(int argc, char **argv) {
   }
   if (strcmp(command, "set") == 0 && argument_count != 2) {
     fprintf(stderr, "brickdesk-config: set needs a key and a value\n");
+    return 2;
+  }
+  if (strcmp(command, "unset") == 0 && argument_count != 1) {
+    fprintf(stderr, "brickdesk-config: unset needs one key\n");
     return 2;
   }
   if (strcmp(command, "dump") == 0 && argument_count != 0) {
@@ -257,6 +263,16 @@ int main(int argc, char **argv) {
   } else if (strcmp(command, "set") == 0) {
     if (!bd_config_set(config, arguments[0], arguments[1], error,
                        sizeof(error))) {
+      fprintf(stderr, "brickdesk-config: %s\n", error);
+      result = 1;
+    } else if (!bd_config_save(config, error, sizeof(error))) {
+      fprintf(stderr, "brickdesk-config: cannot save: %s\n", error);
+      result = 1;
+    } else {
+      result = print_value(config, arguments[0]);
+    }
+  } else if (strcmp(command, "unset") == 0) {
+    if (!bd_config_unset(config, arguments[0], error, sizeof(error))) {
       fprintf(stderr, "brickdesk-config: %s\n", error);
       result = 1;
     } else if (!bd_config_save(config, error, sizeof(error))) {

@@ -81,7 +81,7 @@ static int count_lines(const char *text) {
 
 static int measure_node(const bd_plugin_ui *ui, int index, int width,
                         int depth) {
-  if (ui == NULL || index < 0 || index >= ui->node_count || depth > 12) {
+  if (ui == NULL || index < 0 || index >= ui->node_count || depth > BD_PLUGIN_UI_MAX_DEPTH) {
     return 0;
   }
   const bd_plugin_ui_node *node = &ui->nodes[index];
@@ -405,7 +405,7 @@ static void draw_row(ui_draw_context *context, const bd_plugin_ui_node *node,
 
 static void draw_node(ui_draw_context *context, int index, bd_rect rect) {
   if (context->ui == NULL || index < 0 || index >= context->ui->node_count ||
-      context->depth > 12 || rect.w <= 0 || rect.h <= 0) {
+      context->depth > BD_PLUGIN_UI_MAX_DEPTH || rect.w <= 0 || rect.h <= 0) {
     return;
   }
   ++context->depth;
@@ -478,7 +478,7 @@ int bd_plugin_ui_measure(const bd_plugin_ui *ui, int width) {
 
 static bool layout_find(const bd_plugin_ui *ui, int index, bd_rect rect,
                         int target, bd_rect *out, int depth) {
-  if (ui == NULL || index < 0 || index >= ui->node_count || depth > 12 ||
+  if (ui == NULL || index < 0 || index >= ui->node_count || depth > BD_PLUGIN_UI_MAX_DEPTH ||
       rect.w <= 0 || rect.h <= 0) {
     return false;
   }

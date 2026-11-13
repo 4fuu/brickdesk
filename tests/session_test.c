@@ -1012,6 +1012,52 @@ static void test_command_hooks(void) {
   bd_session_destroy(session);
 }
 
+static void test_command_hook_timeout(void) {
+  event_log log;
+  memset(&log, 0, sizeof(log));
+  bd_session_timeouts timeouts;
+  memset(&timeouts, 0, sizeof(timeouts));
+  timeouts.term_ms = 200;
+  timeouts.kill_ms = 300;
+  bd_session *session = create_session("hooktimeout", 2, &log, timeouts,
+                                       (bd_session_perf_ops){0});
+  check(session != NULL, "hook timeout session");
+  if (session == NULL) {
+    return;
+  }
+  bd_app app;
+  check(make_app("hooktimeout", "dev.command.timeout", "HookTimeout",
+                 g_child_path, "idle",
+                 "\"pause\":{\"type\":\"command\",\"exec\":["
+                 "\"/bin/sh\",\"-c\",\"sleep 2\"],"
+                 "\"timeout_ms\":100}",
+                 "\"pause\":true", NULL, NULL, &app),
+        "make hook timeout app");
+  check(bd_session_launch(session, &app, NULL, 0) == BD_SESSION_OK,
+        "hook timeout launch");
+  check(wait_for_state(session, "dev.command.timeout", BD_SESSION_FOREGROUND,
+                       2000),
+        "hook timeout foreground");
+  check(bd_session_background(session, "dev.command.timeout") == BD_SESSION_OK,
+        "hook timeout background");
+  check(wait_for_state(session, "dev.command.timeout", BD_SESSION_BACKGROUND,
+                       2000),
+        "hook timeout background state");
+  bool ok = true;
+  check(find_hook_event(&log, "dev.command.timeout", "pause", &ok) && !ok,
+        "hook timeout was not reported as a failure");
+  bd_session_app_info info;
+  check(bd_session_find(session, "dev.command.timeout", &info) &&
+            info.stopped_by_session,
+        "hook timeout did not fall back to SIGSTOP");
+  check(bd_session_terminate(session, "dev.command.timeout") == BD_SESSION_OK,
+        "hook timeout terminate");
+  check(wait_for_state(session, "dev.command.timeout", BD_SESSION_EXITED, 3000),
+        "hook timeout did not exit");
+  bd_app_destroy(&app);
+  bd_session_destroy(session);
+}
+
 static void test_terminate_escalation(void) {
   event_log log;
   memset(&log, 0, sizeof(log));
@@ -1740,6 +1786,7 @@ int main(int argc, char **argv) {
   test_crash();
   test_background_limit();
   test_command_hooks();
+  test_command_hook_timeout();
   test_terminate_escalation();
   test_perf_calls();
   test_session_freeze();

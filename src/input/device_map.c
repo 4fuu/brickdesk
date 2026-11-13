@@ -596,8 +596,16 @@ bool bd_device_map_load(bd_device_map *map, const struct bd_config *config) {
     deadzone = 30;
   }
   map->deadzone = (int)deadzone;
+  map->abs_min_x = (int)bd_config_get_int(config, "input.stick_x_min", -128);
+  map->abs_max_x = (int)bd_config_get_int(config, "input.stick_x_max", 127);
+  map->abs_min_y = (int)bd_config_get_int(config, "input.stick_y_min", -128);
+  map->abs_max_y = (int)bd_config_get_int(config, "input.stick_y_max", 127);
   for (size_t i = 0; i < map->count; ++i) {
     map->devices[i].deadzone = (int)deadzone;
+    map->devices[i].abs_min_x = map->abs_min_x;
+    map->devices[i].abs_max_x = map->abs_max_x;
+    map->devices[i].abs_min_y = map->abs_min_y;
+    map->devices[i].abs_max_y = map->abs_max_y;
   }
   return true;
 }
@@ -622,6 +630,10 @@ bool bd_device_map_match(const bd_device_map *map, const bd_evdev *device,
   }
   builtin_mapping(out);
   out->deadzone = map->deadzone;
+  out->abs_min_x = map->abs_min_x;
+  out->abs_max_x = map->abs_max_x;
+  out->abs_min_y = map->abs_min_y;
+  out->abs_max_y = map->abs_max_y;
   return true;
 }
 
@@ -647,6 +659,20 @@ int bd_device_map_translate_abs(const bd_device_mapping *mapping, unsigned code,
     return 0;
   }
   int count = 0;
+  if (code == ABS_X && mapping->abs_max_x > mapping->abs_min_x) {
+    value = (value - mapping->abs_min_x) * 254 /
+                (mapping->abs_max_x - mapping->abs_min_x) -
+            127;
+  } else if (code == ABS_Y && mapping->abs_max_y > mapping->abs_min_y) {
+    value = (value - mapping->abs_min_y) * 254 /
+                (mapping->abs_max_y - mapping->abs_min_y) -
+            127;
+  }
+  if (value < -127) {
+    value = -127;
+  } else if (value > 127) {
+    value = 127;
+  }
   if (mapping->deadzone > 0 &&
       (code == ABS_X || code == ABS_Y) &&
       abs(value) < mapping->deadzone * 127 / 100) {

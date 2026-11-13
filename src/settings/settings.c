@@ -695,6 +695,16 @@ static bool build_hotkey_page(bd_settings *settings) {
   for (size_t i = 0; INPUT_KEYS[i] != NULL; ++i) {
     add_config_row(settings, INPUT_KEYS[i]);
   }
+  bd_settings_row *calibrate = append_row(settings);
+  if (calibrate != NULL) {
+    calibrate->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(calibrate->key, sizeof(calibrate->key), "!input.calibrate");
+    copy_text(calibrate->label, sizeof(calibrate->label), "摇杆校准");
+    copy_text(calibrate->description, sizeof(calibrate->description),
+              "按 A 后转动左右摇杆 5 秒，记录 X/Y 范围");
+    copy_text(calibrate->value, sizeof(calibrate->value), "开始");
+    calibrate->index = -1;
+  }
   if (!settings->hotkeys_loaded) {
     add_info_row(settings, "!hotkeys", "按键不可用",
                  "hotkeys.ini 加载失败，请检查文件", "");
@@ -803,6 +813,41 @@ static const char *bt_state_label(bd_bt_state state) {
     default:
       return "状态未知";
   }
+}
+
+static void usb_dac_name(char *out, size_t size) {
+  out[0] = '\0';
+  FILE *file = fopen("/proc/asound/cards", "r");
+  if (file == NULL) {
+    return;
+  }
+  char line[256];
+  while (fgets(line, sizeof(line), file) != NULL) {
+    char *bracket = strchr(line, '[');
+    char *colon = strchr(line, ':');
+    if (bracket == NULL || colon == NULL || colon < bracket) {
+      continue;
+    }
+    *colon = '\0';
+    const char *name = bracket + 1;
+    if (strstr(name, "audiocodec") != NULL ||
+        strstr(name, "Loopback") != NULL) {
+      continue;
+    }
+    copy_text(out, size, name);
+    break;
+  }
+  fclose(file);
+}
+
+static bool build_sound_page(bd_settings *settings) {
+  bool ok = build_config_page(settings, &BD_SETTINGS_PAGES[settings->category]);
+  char dac[64];
+  usb_dac_name(dac, sizeof(dac));
+  add_info_row(settings, "!audio.usb_dac", "USB DAC",
+               "检测到的非 audiocodec 声卡；音量需在应用内选择",
+               dac[0] != '\0' ? dac : "未检测到");
+  return ok;
 }
 
 static bool build_network_page(bd_settings *settings) {
@@ -1269,7 +1314,9 @@ bool bd_settings_rebuild_rows(bd_settings *settings) {
   }
   switch (settings->category) {
     case BD_SETTINGS_CATEGORY_APPEARANCE:
+      return build_config_page(settings, &BD_SETTINGS_PAGES[settings->category]);
     case BD_SETTINGS_CATEGORY_SOUND:
+      return build_sound_page(settings);
     case BD_SETTINGS_CATEGORY_DISPLAY:
     case BD_SETTINGS_CATEGORY_LIGHTS:
     case BD_SETTINGS_CATEGORY_BACKGROUND:
@@ -2506,6 +2553,15 @@ void bd_settings_share_refresh(bd_settings *settings) {
   }
 }
 
+void bd_settings_set_calibrate(bd_settings *settings,
+                               bd_settings_calibrate_fn calibrate, void *user) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->calibrate = calibrate;
+  settings->calibrate_user = user;
+}
+
 void bd_settings_set_audio(bd_settings *settings, bd_av_audio *audio) {
   if (settings == NULL) {
     return;
@@ -3081,6 +3137,14 @@ static bool activate_net_row(bd_settings *settings, bd_settings_row *row) {
     rebuild_and_damage(settings);
     return true;
   }
+  if (strcmp(row->key, "!input.calibrate") == 0) {
+    if (settings->calibrate == NULL) {
+      set_error(settings, "校准需要桌面输入后端");
+      return false;
+    }
+    settings->calibrate(settings->calibrate_user);
+    return true;
+  }
   if (strcmp(row->key, "!time.set") == 0) {
     if (settings->time_prompt == NULL) {
       set_error(settings, "文本输入不可用");
@@ -3170,7 +3234,8 @@ static bool activate_row(bd_settings *settings, bd_settings_row *row) {
     case BD_SETTINGS_ROW_ACTION:
       if (strncmp(row->key, "!net.", 5) == 0 ||
           strncmp(row->key, "!bt.", 4) == 0 ||
-          strncmp(row->key, "!time.", 6) == 0) {
+          strncmp(row->key, "!time.", 6) == 0 ||
+          strcmp(row->key, "!input.calibrate") == 0) {
         return activate_net_row(settings, row);
       }
       if (strcmp(row->key, "!hotkey.combo") == 0) {

@@ -167,6 +167,8 @@ stub，M4 接入设备后端。
 | `haptics` | bool | `true` | — | 菜单/系统触觉总开关 |
 | `haptic_strength` | int | `60` | 0..100 | 菜单触觉强度（马达百分比） |
 | `stick_deadzone` | int | `8` | 0..30 | ABS_X/ABS_Y 死区百分比 |
+| `stick_x_min/max` | int | `-128`/`127` | -4096..4096 | 摇杆校准后的 X 原始范围 |
+| `stick_y_min/max` | int | `-128`/`127` | -4096..4096 | 摇杆校准后的 Y 原始范围 |
 | `remap_a`/`b`/`x`/`y` | enum | 同名 | `A`/`B`/`X`/`Y` | 物理键输出的逻辑键；只影响 inputd/桌面，不改变 SDL 应用直读的 evdev |
 | `haptic_duration_ms` | int | `35` | 5..500 | 单次菜单触觉时长 |
 | `fn_switch_action` | enum | `mute` | `none`/`mute`/`led_off`/`performance`/`powersave`/`turbo`/`dpad_joystick` | FN 拨动开关动作 |

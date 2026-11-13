@@ -372,6 +372,9 @@ it and shows a startup notice; the event is not replayed after handshake.
 
 ### 6.5 死区与重映射
 
+设置页“按键”的“摇杆校准”按 A 后直接读 `/dev/input` 5 秒，记录 `ABS_X`/
+`ABS_Y` 的 min/max 到 `input.stick_x_min/max`、`input.stick_y_min/max`；之后
+`bd_device_map_translate_abs()` 先把原始值归一到 -127..127 再套死区。
 `input.stick_deadzone` 作用于 `ABS_X`/`ABS_Y`（0..30%）；`input.remap_a` 等把
 物理 A/B/X/Y 换成另一个逻辑键，在 inputd 的 `apply_key()` 里生效，因此热键、
 桌面和 inputd 客户端都看到重映射后的键。SDL 应用直接读 evdev 时不受影响；

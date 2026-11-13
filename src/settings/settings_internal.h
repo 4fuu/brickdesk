@@ -189,6 +189,8 @@ struct bd_settings {
   uint64_t share_status_deadline;
 
   bd_av_audio *audio;
+  bd_settings_calibrate_fn calibrate;
+  void *calibrate_user;
 
   bd_time_status time_status;
   bool time_status_known;

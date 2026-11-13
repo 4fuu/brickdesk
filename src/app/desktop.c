@@ -318,13 +318,8 @@ static void draw_top_bar(bd_desktop *desktop, bd_gfx *gfx) {
                                   BD_BLUR_EDGE_BOTTOM, 24);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, BD_TOP_BAR_HEIGHT - 1, width, 1), desktop->line);
 
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(32, 29, 14, 14), 4,
-                         desktop->accent.accent);
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(39, 36, 7, 7), 2, desktop->bg);
-  bd_gfx_draw_text(gfx, desktop->fonts.latin, 56, 43, desktop->ink2, "brickdesk");
-
   static const char *const TABS[] = {"全部", "游戏", "应用", "收藏"};
-  int x = 240;
+  int x = 24;
   for (int i = 0; i < 4; ++i) {
     bd_color color = i == 0 ? desktop->ink : desktop->ink3;
     bd_gfx_draw_text(gfx, desktop->fonts.title, x, 45, color, TABS[i]);

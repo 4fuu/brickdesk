@@ -646,14 +646,10 @@ static void draw_top_bar(bd_home *home, bd_gfx *gfx) {
   }
 
   /*
-   * The four-square project mark is gone; the wordmark, categories, Wi-Fi,
-   * battery and clock stay.  There are no search/gear/avatar buttons.
+   * The left brand mark and wordmark are gone.  Categories, Wi-Fi, battery and
+   * clock stay; there are no search/gear/avatar buttons.
    */
-  int brand_x = 24;
-  int brand_width = bd_font_measure_text(home->fonts.body16, "brickdesk");
-  bd_gfx_draw_text(gfx, home->fonts.body16, brand_x, 41, palette->ink2,
-                   "brickdesk");
-  int x = brand_x + brand_width + 28;
+  int x = 24;
   for (int i = 0; i < BD_HOME_TAB_COUNT; ++i) {
     bd_color color = i == home->tab ? palette->ink : palette->ink3;
     bd_gfx_draw_text(gfx, home->fonts.tab18, x, 41, color, TAB_NAMES[i]);

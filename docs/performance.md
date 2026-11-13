@@ -1,10 +1,11 @@
 # Performance and memory
 
-`bench/bench_render` is the single host-side benchmark for the desktop. It
+`bench/bench_render` is the single renderer benchmark for the desktop. It
 drives real renderer, wall, font, image-cache and desktop code paths, emits a
 stable JSON document for scripts, and prints a short human summary. It replaces
 the old four-scenario loop in the same binary rather than adding a second bench
-program.
+program. The same binary is cross-compiled for the Brick Pro and shipped in the
+release package.
 
 ## Running
 
@@ -225,10 +226,12 @@ bytes are 2.2 MiB against the default 96 MiB budget.
 
 ## Device measurements to take first
 
-The bench is host-only today (`BRICKDESK_BUILD_BENCH` is skipped when
-cross-compiling). To use the same tool on the device, cross-build `bench_render`
-for aarch64, stage it next to `brickdesk`, and add it to the target glibc check;
-the JSON schema and scenario names are already device-ready.
+`bench_render` is cross-compiled for aarch64 and shipped in the release package
+as `/mnt/SDCARD/brickdesk/bin/bench_render`; the package also ships
+`assets/` so the baked `BRICKDESK_ASSET_DIR` resolves. The target workflow adds
+`bench_render` to its `GLIBC <= 2.23` check. `scripts/device/bench.sh` runs the
+installed binary and pulls its JSON; the JSON schema and scenario names are the
+same as on the host.
 
 On the real unit, measure in this order:
 
@@ -259,4 +262,5 @@ than treating bench frame time as vsync-to-photon latency.
   with `bench/budgets.ini` and writes `tests/artifacts/bench.json`.
 - `bench_smoke` remains a fast smoke test with 8 frames and a 500 ms idle.
 - Wall-clock frame times are recorded but never gate CI.
-- The target workflow is unchanged; no new cross-compiled binary was added.
+- The target workflow cross-builds `bench_render`, checks it against
+  `GLIBC <= 2.23`, and packages it with the release zip.

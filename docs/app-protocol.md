@@ -30,7 +30,7 @@ only coordinates the app side of the handoff.
 A target device scans:
 
 ```text
-/mnt/SDCARD/Apps/
+/mnt/SDCARD/brickdesk/apps/
   org.example.game/
     app.json
     art/
@@ -373,7 +373,8 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
     ./build-host/tests/bd_session_child
 ```
 
-`apps/demo/app.json` points at `/mnt/SDCARD/Apps/demo/brickdesk-demo` for the
+`apps/demo/app.json` points at
+`/mnt/SDCARD/brickdesk/apps/brickdesk-demo/brickdesk-demo` for the
 device. For a host run, copy `build-host/brickdesk-demo` next to a copy of
 `apps/demo/app.json`, or point a test manifest's `exec` at the host binary
 directly.

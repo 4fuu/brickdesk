@@ -1,9 +1,10 @@
 #!/bin/sh
 # Run the staged bench_render on the device and pull its JSON result.
 #
-# This does not deploy or cross-build bench_render yet. Build a target
-# bench_render, put it in $DEVICE_ROOT/bin, and deploy the asset tree under
-# $DEVICE_ROOT/assets first; see docs/performance.md.
+# The release package installs bench_render in $DEVICE_ROOT/bin and ships
+# assets/ next to it, so a packaged install needs no extra staging. For a
+# development tree, deploy the binary and assets manually; see
+# docs/performance.md.
 #
 # Usage: scripts/device/bench.sh [--scenario NAME] [--frames N] [--idle-ms N]
 # Environment: ADB, DEVICE_ROOT, DEVICE_TMP
@@ -27,10 +28,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 require_device
-DEST=${DEVICE_ROOT:-/mnt/SDCARD/Apps/brickdesk}
+DEST=${DEVICE_ROOT:-/mnt/SDCARD/brickdesk}
 BIN="$DEST/bin/bench_render"
 if ! "$ADB" shell "[ -x '$BIN' ]" >/dev/null 2>&1; then
-    die "$BIN is missing; cross-build and stage bench_render first (docs/performance.md)"
+    die "$BIN is missing; install the release package or stage bench_render first (docs/performance.md)"
 fi
 
 "$ADB" shell "mkdir -p '$DEVICE_TMP'"

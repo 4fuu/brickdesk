@@ -9,7 +9,7 @@ set(BENCH_HEADLESS_ENV
   "BRICKDESK_HEADLESS=1"
 )
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
   add_test(NAME bench_smoke
     COMMAND bench_render --frames 8 --idle-ms 500 --scenario all)
   set_tests_properties(bench_smoke PROPERTIES

@@ -6,7 +6,7 @@
   "version": "0.1.0",
   "type": "app",
   "category": "app",
-  "exec": ["/mnt/SDCARD/Apps/demo/brickdesk-demo"],
+  "exec": ["/mnt/SDCARD/brickdesk/apps/brickdesk-demo/brickdesk-demo"],
   "cwd": ".",
   "env": {},
   "accent": "#7B5A8C",

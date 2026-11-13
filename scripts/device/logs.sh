@@ -10,7 +10,7 @@ REPO_ROOT=$(CDPATH="" cd -- "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=scripts/device/common.sh
 . "$SCRIPT_DIR/common.sh"
 
-DEST=${DEVICE_ROOT:-/mnt/SDCARD/Apps/brickdesk}
+DEST=${DEVICE_ROOT:-/mnt/SDCARD/brickdesk}
 OUT=${OUT:-$REPO_ROOT/build-device/logs}
 
 while [ "$#" -gt 0 ]; do

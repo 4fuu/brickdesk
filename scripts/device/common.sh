@@ -6,7 +6,7 @@
 # ANDROID_SERIAL to select a device when several are attached.
 
 ADB=${ADB:-adb}
-DEVICE_ROOT=${DEVICE_ROOT:-/mnt/SDCARD/Apps/brickdesk}
+DEVICE_ROOT=${DEVICE_ROOT:-/mnt/SDCARD/brickdesk}
 DEVICE_TMP=${DEVICE_TMP:-/tmp/brickdesk}
 APP_NAME=${APP_NAME:-brickdesk}
 PROBE_NAME=${PROBE_NAME:-display_probe}

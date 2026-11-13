@@ -200,6 +200,15 @@
 
 **对 brickdesk 的直接结论**
 
+- 公开的 TrimUI Smart Pro rootfs 说明指出：`/usr/trimui/bin/runtrimui.sh` 会执行
+  `/mnt/SDCARD/System/starts` 下的脚本；CrossMix 也把固件检查和更新脚本放在这个
+  目录（`System/starts/_FirmwareCheck.sh`、`°post_starts.sh` 等）。
+- 本文从 Brick Pro 1.1.1 固件提取的 `runtrimui.sh` 没有单独保留/反编译该循环，
+  因此以下语义仍需真机确认：目录遍历顺序、脚本是否同步执行、脚本返回 0/非 0 后
+  是否继续启动 MainUI、以及脚本阻塞时后续脚本是否被延后。
+- brickdesk 的安装器因此只新增 `/mnt/SDCARD/System/starts/zz_brickdesk.sh`，不修改
+  原厂 `runtrimui.sh`；回退依赖“钩子返回后原厂继续启动 MainUI”这一未验证假设。
+
 - 采用与 NextUI/原厂相同的“桌面进程 → 写命令 → 退出 → 启动器循环执行 → 重新启动桌面”模型，避免桌面和 GLES 游戏争用 framebuffer/EGL 上下文。
 - 启动应用前保存桌面状态（选中项、滚动位置、设置），退出后恢复；不要假设应用会返回某个退出码。
 - 应用退出后必须做清理：恢复背光/亮度、音量、LED profile、输入模式、CPU governor；否则会出现“回到桌面黑屏/无声/按键错乱”。

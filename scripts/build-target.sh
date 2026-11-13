@@ -5,8 +5,10 @@
 # has the toolchain and SDK unpacked. Builds (in order):
 #   1. the patched SDL2 runtime into the target sysroot, unless it is present;
 #   2. tools/display_probe;
-#   3. the project's CMake target, once CMakeLists.txt exists (M1-A skeleton);
-#   4. a distributable lib/ directory and SHA256SUMS.
+#   3. the project's CMake target, including bench/bench_render;
+#   4. a distributable lib/ + bin/ directory and SHA256SUMS.
+#
+# scripts/package-target.sh turns this tree into the versioned release zip.
 #
 # Environment:
 #   TRIMUI_TOOLCHAIN  toolchain root (default /opt/trimui/toolchain)
@@ -91,6 +93,11 @@ if [ "$SKIP_CMAKE" -eq 0 ] && [ -f "$REPO_ROOT/CMakeLists.txt" ]; then
         -S "$REPO_ROOT" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchain-aarch64.cmake" \
         -DBRICKDESK_BACKEND=target \
+        -DBRICKDESK_CONFIG_DIR=/mnt/SDCARD/brickdesk/config \
+        -DBRICKDESK_APPS_DIR=/mnt/SDCARD/brickdesk/apps \
+        -DBRICKDESK_STATE_DIR=/mnt/SDCARD/brickdesk/state \
+        -DBRICKDESK_PLUGIN_DIR=/mnt/SDCARD/brickdesk/plugins \
+        -DBRICKDESK_ASSET_DIR=/mnt/SDCARD/brickdesk/assets \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake --build "$BUILD_DIR"
 fi
@@ -103,9 +110,15 @@ if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
     cp -a "$BUILD_DIR/libbrickdesk-menu.so" "$BUILD_DIR/dist/lib/"
 fi
 cp -a "$BUILD_DIR/display_probe" "$BUILD_DIR/dist/bin/"
-for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config brickdesk-demo; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         cp -a "$BUILD_DIR/$binary" "$BUILD_DIR/dist/bin/"
+    fi
+done
+for candidate in "$BUILD_DIR/bench/bench_render" "$BUILD_DIR/bench_render"; do
+    if [ -e "$candidate" ]; then
+        cp -a "$candidate" "$BUILD_DIR/dist/bin/bench_render"
+        break
     fi
 done
 
@@ -122,9 +135,15 @@ CHECK_TARGETS="$BUILD_DIR/display_probe"
 if [ -e "$BUILD_DIR/libbrickdesk-menu.so" ]; then
     CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/libbrickdesk-menu.so"
 fi
-for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input; do
+for binary in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config brickdesk-demo; do
     if [ -e "$BUILD_DIR/$binary" ]; then
         CHECK_TARGETS="$CHECK_TARGETS $BUILD_DIR/$binary"
+    fi
+done
+for candidate in "$BUILD_DIR/bench/bench_render" "$BUILD_DIR/bench_render"; do
+    if [ -e "$candidate" ]; then
+        CHECK_TARGETS="$CHECK_TARGETS $candidate"
+        break
     fi
 done
 # shellcheck disable=SC2086

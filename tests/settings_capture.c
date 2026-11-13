@@ -291,6 +291,23 @@ int main(int argc, char **argv) {
   ok = open_page(settings, BD_SETTINGS_CATEGORY_KEYS) &&
        capture(platform, gfx, settings, out_dir, "settings_keys", now) && ok;
   now += 16;
+  {
+    const char *app_ids[] = {"org.libretro.retroarch", "com.example.player"};
+    bd_settings_set_app_ids(settings, app_ids, 2);
+  }
+  ok = focus_key(settings, "!hotkey.menu") &&
+       bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       capture(platform, gfx, settings, out_dir, "settings_hotkey_editor",
+               now) &&
+       ok;
+  now += 16;
+  ok = bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+       capture(platform, gfx, settings, out_dir, "settings_hotkey_capture",
+               now) &&
+       ok;
+  now += 16;
+  bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL);
+  bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL);
   ok = open_page(settings, BD_SETTINGS_CATEGORY_PERFORMANCE) &&
        capture(platform, gfx, settings, out_dir, "settings_performance", now) &&
        ok;

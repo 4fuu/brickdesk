@@ -23,6 +23,7 @@
 #define BD_SETTINGS_CATEGORY_TOP 92
 #define BD_SETTINGS_CATEGORY_PITCH 43
 #define BD_SETTINGS_MAX_ROWS 96
+#define BD_SETTINGS_MAX_SCOPES 24
 #define BD_SETTINGS_MAX_PLUGINS BD_PLUGIN_MAX_PLUGINS
 #define BD_SETTINGS_MAX_PLUGIN_NODES 32
 #define BD_SETTINGS_ROW_MIN 62
@@ -107,7 +108,8 @@ extern const struct bd_settings_page_def BD_SETTINGS_PAGES[];
 typedef enum bd_settings_subpage_kind {
   BD_SETTINGS_SUBPAGE_NONE = 0,
   BD_SETTINGS_SUBPAGE_ACCENT,
-  BD_SETTINGS_SUBPAGE_PLUGIN
+  BD_SETTINGS_SUBPAGE_PLUGIN,
+  BD_SETTINGS_SUBPAGE_HOTKEY
 } bd_settings_subpage_kind;
 
 struct bd_settings {
@@ -146,6 +148,17 @@ struct bd_settings {
   bd_hotkey_table hotkeys;
   bool hotkeys_loaded;
   int conflict_count;
+  char edit_hotkey[BD_HOTKEY_ID_MAX];
+  bool capture_active;
+  bool capture_wait_release;
+  bd_key capture_keys[BD_HOTKEY_MAX_KEYS];
+  bool capture_pressed[BD_KEY_COUNT];
+  int capture_count;
+  char scope_options[BD_SETTINGS_MAX_SCOPES][BD_HOTKEY_SCOPE_MAX];
+  const char *scope_option_ptrs[BD_SETTINGS_MAX_SCOPES];
+  int scope_option_count;
+  char scope_app_ids[BD_SETTINGS_MAX_SCOPES][96];
+  int scope_app_count;
 
   bd_perf_policy perf;
   bool perf_loaded;

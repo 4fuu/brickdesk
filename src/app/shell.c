@@ -196,6 +196,13 @@ struct bd_shell {
   const bd_hotkey_table *hotkey_table;
   bool key_menu_down;
   bool key_select_down;
+  char input_scope[BD_HOTKEY_SCOPE_MAX];
+  char inputd_scope[BD_HOTKEY_SCOPE_MAX];
+  char inputd_scope_line[BD_HOTKEY_SCOPE_MAX + 64];
+  size_t inputd_scope_sent;
+  bool inputd_scope_pending;
+  char foreground_app[BD_APP_ID_MAX];
+  int input_double_tap_ms;
   char device_root[BD_SHELL_PATH_MAX];
 
   bool fn_switch_known;
@@ -1475,6 +1482,101 @@ static void local_emit(void *user, const bd_input_output *event) {
   }
 }
 
+static const char *shell_scope_desired(bd_shell *shell, char *buffer,
+                                       size_t size) {
+  if (shell->visible) {
+    return "mode:desktop";
+  }
+  if (shell->foreground_app[0] != '\0') {
+    snprintf(buffer, size, "app:%.59s", shell->foreground_app);
+    return buffer;
+  }
+  return "mode:game";
+}
+
+static void shell_flush_scope(bd_shell *shell) {
+  if (!shell->inputd_scope_pending || shell->inputd_fd < 0 ||
+      shell->inputd_connecting ||
+      shell->inputd_sent < sizeof(BD_SHELL_INPUTD_SUBSCRIBE) - 1) {
+    return;
+  }
+  size_t length = strlen(shell->inputd_scope_line);
+  while (shell->inputd_scope_sent < length) {
+    ssize_t amount =
+        send(shell->inputd_fd,
+             shell->inputd_scope_line + shell->inputd_scope_sent,
+             length - shell->inputd_scope_sent, MSG_NOSIGNAL);
+    if (amount > 0) {
+      shell->inputd_scope_sent += (size_t)amount;
+      continue;
+    }
+    if (amount < 0 && errno == EINTR) {
+      continue;
+    }
+    if (amount < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return;
+    }
+    return;
+  }
+  shell->inputd_scope_pending = false;
+  shell->inputd_scope_sent = 0;
+  snprintf(shell->inputd_scope, sizeof(shell->inputd_scope), "%s",
+           shell->input_scope);
+}
+
+static void shell_queue_scope(bd_shell *shell, bool reload) {
+  if (shell->inputd_fd < 0 || !shell->inputd_connected) {
+    return;
+  }
+  if (reload) {
+    snprintf(shell->inputd_scope_line, sizeof(shell->inputd_scope_line),
+             "{\"cmd\":\"reload\"}\n");
+  } else {
+    snprintf(shell->inputd_scope_line, sizeof(shell->inputd_scope_line),
+             "{\"cmd\":\"set_scope\",\"scope\":\"%.64s\"}\n", shell->input_scope);
+  }
+  shell->inputd_scope_sent = 0;
+  shell->inputd_scope_pending = true;
+  shell_flush_scope(shell);
+}
+
+static void shell_update_scope(bd_shell *shell) {
+  if (shell == NULL) {
+    return;
+  }
+  char buffer[BD_HOTKEY_SCOPE_MAX];
+  const char *scope = shell_scope_desired(shell, buffer, sizeof(buffer));
+  if (strcmp(scope, shell->input_scope) == 0) {
+    shell_flush_scope(shell);
+    return;
+  }
+  snprintf(shell->input_scope, sizeof(shell->input_scope), "%s", scope);
+  bd_input_state_set_scope(&shell->input, &shell->hotkeys, shell->input_scope,
+                           shell->input_double_tap_ms);
+  bd_input_state_set_scope(&shell->test_input, &shell->hotkeys,
+                           shell->input_scope, shell->input_double_tap_ms);
+  shell_queue_scope(shell, false);
+  shell->dirty = true;
+}
+
+static void shell_reload_hotkeys(bd_shell *shell) {
+  if (shell == NULL || shell->settings == NULL) {
+    return;
+  }
+  bd_hotkey_table_load(&shell->hotkeys, shell->settings);
+  shell->hotkey_table = &shell->hotkeys;
+  shell->input_double_tap_ms =
+      (int)bd_config_get_int(shell->settings, "input.double_tap_ms", 300);
+  if (shell->input_double_tap_ms <= 0) {
+    shell->input_double_tap_ms = 300;
+  }
+  bd_input_state_set_scope(&shell->input, &shell->hotkeys, shell->input_scope,
+                           shell->input_double_tap_ms);
+  bd_input_state_set_scope(&shell->test_input, &shell->hotkeys,
+                           shell->input_scope, shell->input_double_tap_ms);
+  shell_queue_scope(shell, true);
+}
+
 static const char *preferred_input_socket(void) {
   const char *env = getenv("BRICKDESK_INPUT_SOCKET");
   if (env != NULL && env[0] != '\0') {
@@ -1571,6 +1673,8 @@ static void inputd_on_connected(bd_shell *shell) {
   shell->inputd_deadline_ms = 0;
   shell->inputd_backoff_ms = BD_SHELL_INPUTD_BACKOFF_MIN_MS;
   shell->input_length = 0;
+  shell_update_scope(shell);
+  shell_queue_scope(shell, false);
   if (!shell_power_asleep(shell)) {
     shell->dirty = true;
   }
@@ -1695,6 +1799,9 @@ static void inputd_service(bd_shell *shell, uint64_t now) {
     } else {
       inputd_flush_subscribe(shell);
     }
+  }
+  if (shell->inputd_connected) {
+    shell_flush_scope(shell);
   }
 }
 
@@ -1850,6 +1957,9 @@ static void inputd_handle_poll(bd_shell *shell, short revents) {
     inputd_flush_subscribe(shell);
     if (shell->inputd_fd < 0) {
       return;
+    }
+    if (shell->inputd_connected) {
+      shell_flush_scope(shell);
     }
   }
   if ((revents & POLLIN) != 0) {
@@ -2170,6 +2280,7 @@ static void shell_update_home(bd_shell *shell, uint64_t now) {
     }
     shell->return_app[0] = '\0';
     shell->visible = true;
+    shell->foreground_app[0] = '\0';
     shell->dirty = true;
     return;
   }
@@ -2396,6 +2507,7 @@ static void shell_service(bd_shell *shell) {
   shell_memory_budget_check(shell, now);
   if (!asleep) {
     shell_update_home(shell, now);
+    shell_update_scope(shell);
     shell_refresh_status(shell, false);
     shell_battery_sample(shell, now);
     shell_led_ambient_sample(shell, now);
@@ -3191,10 +3303,27 @@ static bool shell_home_input(bd_shell *shell, bd_home_action action) {
   return changed;
 }
 
+static void shell_publish_app_ids(bd_shell *shell) {
+  if (shell == NULL || shell->settings_page == NULL || shell->apps == NULL) {
+    return;
+  }
+  const char *ids[64];
+  size_t count = 0;
+  size_t total = bd_app_list_count(shell->apps);
+  for (size_t i = 0; i < total && count < sizeof(ids) / sizeof(ids[0]); ++i) {
+    const bd_app *app = bd_app_list_at(shell->apps, i);
+    if (app != NULL && app->id[0] != '\0') {
+      ids[count++] = app->id;
+    }
+  }
+  bd_settings_set_app_ids(shell->settings_page, ids, count);
+}
+
 bool bd_shell_open_settings(bd_shell *shell, int category) {
   if (shell == NULL || shell->home == NULL || shell->settings_page == NULL) {
     return false;
   }
+  shell_publish_app_ids(shell);
   if (!bd_settings_open(shell->settings_page, category)) {
     return false;
   }
@@ -3220,6 +3349,7 @@ static void shell_close_settings(bd_shell *shell) {
   }
   if (was_open) {
     shell_home_quick_refresh(shell);
+    shell_reload_hotkeys(shell);
     shell->dirty = true;
   }
 }
@@ -3431,6 +3561,12 @@ static void shell_input_action(bd_shell *shell, const char *slot) {
   }
 }
 
+static bool shell_settings_capturing(const bd_shell *shell) {
+  return shell != NULL && shell->settings_page != NULL &&
+         bd_settings_is_open(shell->settings_page) &&
+         bd_settings_hotkey_capturing(shell->settings_page);
+}
+
 static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
                                uint64_t time_ms) {
   if (pressed) {
@@ -3448,6 +3584,17 @@ static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
   }
   if (shell->power_swallow || shell->power_input_suspended ||
       shell_power_asleep(shell)) {
+    return;
+  }
+  if (shell_settings_capturing(shell)) {
+    /* The hotkey editor consumes raw edges so a bound combo cannot fire. */
+    bd_settings_capture_key(shell->settings_page, key, pressed);
+    if (!shell_settings_capturing(shell)) {
+      bd_input_state_release_all(&shell->input, time_ms, local_emit, shell);
+      bd_input_state_release_all(&shell->test_input, time_ms, local_emit,
+                                 shell);
+    }
+    shell->dirty = true;
     return;
   }
   if (key == BD_KEY_VOLUME_UP || key == BD_KEY_VOLUME_DOWN) {
@@ -3908,6 +4055,7 @@ static bool shell_launch_app(bd_shell *shell, const char *app_id) {
   if (!shell_home_begin_launch(shell, app_id)) {
     return false;
   }
+  copy_text(shell->foreground_app, sizeof(shell->foreground_app), app_id);
   shell_record_app_use(shell, app_id);
   if (shell->verbose) {
     const char *shim = menu_shim_path(shell, NULL);
@@ -4255,8 +4403,13 @@ static void shell_handle_platform_event(bd_shell *shell, const bd_event *event) 
         break;
       }
       if (!shell->inputd_connected) {
-        bd_input_state_feed(&shell->input, event->key, event->pressed,
-                            monotonic_ms(), local_emit, shell);
+        if (shell_settings_capturing(shell)) {
+          shell_dispatch_key(shell, event->key, event->pressed,
+                             monotonic_ms());
+        } else {
+          bd_input_state_feed(&shell->input, event->key, event->pressed,
+                              monotonic_ms(), local_emit, shell);
+        }
       }
       break;
     default:
@@ -4823,12 +4976,16 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     fprintf(stderr, "brickdesk: %zu hotkey diagnostic(s), %zu conflict(s)\n",
             shell->hotkeys.diagnostic_count, shell->hotkeys.conflict_count);
   }
-  bd_input_state_init(&shell->input, &shell->hotkeys, "global",
-                      (int)bd_config_get_int(config->settings,
-                                             "input.double_tap_ms", 300));
-  bd_input_state_init(&shell->test_input, &shell->hotkeys, "global",
-                      (int)bd_config_get_int(config->settings,
-                                             "input.double_tap_ms", 300));
+  shell->input_double_tap_ms =
+      (int)bd_config_get_int(config->settings, "input.double_tap_ms", 300);
+  if (shell->input_double_tap_ms <= 0) {
+    shell->input_double_tap_ms = 300;
+  }
+  snprintf(shell->input_scope, sizeof(shell->input_scope), "mode:desktop");
+  bd_input_state_init(&shell->input, &shell->hotkeys, shell->input_scope,
+                      shell->input_double_tap_ms);
+  bd_input_state_init(&shell->test_input, &shell->hotkeys, shell->input_scope,
+                      shell->input_double_tap_ms);
 
   shell_load_apps(shell, config->apps_dir);
 
@@ -5022,6 +5179,10 @@ void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,
   }
   if (key != BD_KEY_POWER &&
       (shell->power_input_suspended || shell_power_asleep(shell))) {
+    return;
+  }
+  if (shell_settings_capturing(shell)) {
+    shell_dispatch_key(shell, key, pressed, time_ms);
     return;
   }
   bd_input_state_feed(&shell->test_input, key, pressed, time_ms, local_emit,

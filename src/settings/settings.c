@@ -254,6 +254,23 @@ static void copy_text(char *dst, size_t size, const char *src) {
   snprintf(dst, size, "%s", src);
 }
 
+/* Combo strings may be longer than a row label; truncate without a warning. */
+static void copy_trimmed(char *dst, size_t size, const char *src) {
+  if (dst == NULL || size == 0) {
+    return;
+  }
+  if (src == NULL) {
+    dst[0] = '\0';
+    return;
+  }
+  size_t length = strlen(src);
+  if (length >= size) {
+    length = size - 1;
+  }
+  memcpy(dst, src, length);
+  dst[length] = '\0';
+}
+
 static const char *fallback_label(char *buffer, size_t size, const char *key) {
   const char *dot = strrchr(key, '.');
   const char *name = dot != NULL ? dot + 1 : key;
@@ -294,6 +311,17 @@ static const char *enum_label(const char *key, const char *value) {
     }
     if (strcmp(value, "never") == 0) {
       return "从不";
+    }
+  } else if (strncmp(key, "hotkey.", 7) == 0 &&
+             strstr(key, ".scope") != NULL) {
+    if (strcmp(value, "global") == 0) {
+      return "全局";
+    }
+    if (strcmp(value, "mode:desktop") == 0) {
+      return "桌面";
+    }
+    if (strcmp(value, "mode:game") == 0) {
+      return "前台应用";
     }
   }
   return value;
@@ -540,6 +568,120 @@ static const char *hotkey_trigger_label(const bd_hotkey *hotkey, char *buffer,
   return "单击";
 }
 
+static const bd_hotkey *find_hotkey(const bd_settings *settings,
+                                    const char *id) {
+  if (id == NULL) {
+    return NULL;
+  }
+  for (size_t i = 0; i < settings->hotkeys.count; ++i) {
+    if (strcmp(settings->hotkeys.items[i].id, id) == 0) {
+      return &settings->hotkeys.items[i];
+    }
+  }
+  return NULL;
+}
+
+/* Two single-step chords with the same keys are duplicates regardless of the
+ * order the user pressed them in.  Sequences and modifiers compare as text. */
+static bool hotkey_same_chord(const bd_hotkey *a, const bd_hotkey *b) {
+  if (a->step_count != 1 || b->step_count != 1) {
+    return strcmp(a->combo, b->combo) == 0;
+  }
+  if (a->steps[0].hold_ms != b->steps[0].hold_ms ||
+      a->steps[0].double_tap != b->steps[0].double_tap) {
+    return false;
+  }
+  return a->steps[0].key_mask == b->steps[0].key_mask;
+}
+
+static void rebuild_scope_options(bd_settings *settings) {
+  int count = 0;
+  const char *fixed[] = {"global", "mode:desktop", "mode:game"};
+  for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); ++i) {
+    copy_text(settings->scope_options[count], BD_HOTKEY_SCOPE_MAX, fixed[i]);
+    settings->scope_option_ptrs[count] = settings->scope_options[count];
+    ++count;
+  }
+  for (int i = 0; i < settings->scope_app_count && count < BD_SETTINGS_MAX_SCOPES;
+       ++i) {
+    char option[BD_HOTKEY_SCOPE_MAX];
+    snprintf(option, sizeof(option), "app:%s", settings->scope_app_ids[i]);
+    copy_text(settings->scope_options[count], BD_HOTKEY_SCOPE_MAX, option);
+    settings->scope_option_ptrs[count] = settings->scope_options[count];
+    ++count;
+  }
+  settings->scope_option_count = count;
+}
+
+static void rebuild_and_damage(bd_settings *settings) {
+  bd_settings_rebuild(settings);
+  bd_settings_mark_all(settings);
+  bd_gfx_damage_all(settings->gfx);
+}
+
+static void open_hotkey_subpage(bd_settings *settings, const char *id) {
+  if (id == NULL || id[0] == '\0') {
+    return;
+  }
+  copy_text(settings->edit_hotkey, sizeof(settings->edit_hotkey), id);
+  settings->subpage = BD_SETTINGS_SUBPAGE_HOTKEY;
+  settings->capture_active = false;
+  settings->capture_wait_release = false;
+  settings->capture_count = 0;
+  memset(settings->capture_pressed, 0, sizeof(settings->capture_pressed));
+  settings->focus = 0;
+  settings->scroll = 0;
+  rebuild_and_damage(settings);
+}
+
+static bool build_hotkey_edit_page(bd_settings *settings) {
+  const bd_hotkey *hotkey = find_hotkey(settings, settings->edit_hotkey);
+  if (hotkey == NULL) {
+    add_info_row(settings, "!hotkey.missing", "热键不存在",
+                 "重新打开按键页后再试", "");
+    return true;
+  }
+  bd_settings_row *row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ACTION;
+    copy_text(row->key, sizeof(row->key), "!hotkey.combo");
+    copy_text(row->label, sizeof(row->label), "组合键");
+    copy_text(row->description, sizeof(row->description),
+              settings->capture_active ? "按下组合键；B 取消"
+                                       : "按 A 重新录制；B 返回");
+    if (settings->capture_active) {
+      copy_text(row->value, sizeof(row->value), "按下…");
+    } else {
+      copy_trimmed(row->value, sizeof(row->value), hotkey->combo);
+    }
+    row->index = -1;
+  }
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_ENUM;
+    snprintf(row->key, sizeof(row->key), "hotkey.%s.scope", hotkey->id);
+    copy_text(row->label, sizeof(row->label), "作用域");
+    copy_text(row->description, sizeof(row->description),
+              "global 全局；模式与前台应用只在对应上下文生效");
+    row->type = BD_CONFIG_STRING;
+    row->enum_values = settings->scope_option_ptrs;
+    row->enum_count = settings->scope_option_count;
+  }
+  add_info_row(settings, "!hotkey.action", "动作", "由 hotkeys.ini 定义",
+               hotkey->action);
+  row = append_row(settings);
+  if (row != NULL) {
+    row->kind = BD_SETTINGS_ROW_TOGGLE;
+    snprintf(row->key, sizeof(row->key), "hotkey.%s.suppress", hotkey->id);
+    copy_text(row->label, sizeof(row->label), "独占输入");
+    copy_text(row->description, sizeof(row->description),
+              "grab 后经 uinput 转发；关闭时按键仍到达前台应用");
+    row->type = BD_CONFIG_BOOL;
+    row->index = 0;
+  }
+  return true;
+}
+
 static bool build_hotkey_page(bd_settings *settings) {
   for (size_t i = 0; INPUT_KEYS[i] != NULL; ++i) {
     add_config_row(settings, INPUT_KEYS[i]);
@@ -597,9 +739,9 @@ static bool build_hotkey_page(bd_settings *settings) {
     if (row == NULL) {
       break;
     }
-    row->kind = BD_SETTINGS_ROW_INFO;
+    row->kind = BD_SETTINGS_ROW_ACTION;
     snprintf(row->key, sizeof(row->key), "!hotkey.%s", hotkey->id);
-    copy_text(row->label, sizeof(row->label), hotkey->combo);
+    copy_trimmed(row->label, sizeof(row->label), hotkey->combo);
     char trigger[48];
     snprintf(row->description, sizeof(row->description), "%s · %s",
              hotkey->action,
@@ -833,6 +975,9 @@ bool bd_settings_rebuild_rows(bd_settings *settings) {
   }
   if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
     return true; /* the plugin renderer owns the table */
+  }
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY) {
+    return build_hotkey_edit_page(settings);
   }
   switch (settings->category) {
     case BD_SETTINGS_CATEGORY_APPEARANCE:
@@ -1430,6 +1575,10 @@ static void leave_subpage(bd_settings *settings) {
     close_plugin_settings(settings);
   }
   settings->subpage = BD_SETTINGS_SUBPAGE_NONE;
+  settings->capture_active = false;
+  settings->capture_wait_release = false;
+  settings->capture_count = 0;
+  memset(settings->capture_pressed, 0, sizeof(settings->capture_pressed));
   settings->focus = 0;
   settings->scroll = 0;
   bd_settings_rebuild_rows(settings);
@@ -1621,6 +1770,7 @@ bd_settings *bd_settings_create(bd_gfx *gfx, bd_config *config,
   settings->plugin_fonts.latin = settings->fonts.body;
   settings->plugin_fonts.fallback_full = settings->fonts.fallback;
   bd_settings_apply_theme(settings);
+  rebuild_scope_options(settings);
   bd_settings_rebuild(settings);
   settings->full_dirty = true;
   return settings;
@@ -1716,6 +1866,32 @@ void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host) {
   clamp_scroll(settings);
   bd_settings_mark_all(settings);
   bd_gfx_damage_all(settings->gfx);
+}
+
+void bd_settings_set_app_ids(bd_settings *settings, const char *const *ids,
+                             size_t count) {
+  if (settings == NULL) {
+    return;
+  }
+  settings->scope_app_count = 0;
+  if (ids != NULL) {
+    for (size_t i = 0;
+         i < count && settings->scope_app_count < BD_SETTINGS_MAX_SCOPES;
+         ++i) {
+      if (ids[i] == NULL || ids[i][0] == '\0') {
+        continue;
+      }
+      copy_text(settings->scope_app_ids[settings->scope_app_count],
+                sizeof(settings->scope_app_ids[0]), ids[i]);
+      ++settings->scope_app_count;
+    }
+  }
+  rebuild_scope_options(settings);
+  if (settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY) {
+    bd_settings_rebuild_rows(settings);
+    bd_settings_mark_all(settings);
+    bd_gfx_damage_all(settings->gfx);
+  }
 }
 
 void bd_settings_set_status(bd_settings *settings,
@@ -1897,6 +2073,118 @@ bd_color bd_settings_accent(const bd_settings *settings) {
   return settings->accent.accent;
 }
 
+bool bd_settings_hotkey_capturing(const bd_settings *settings) {
+  return settings != NULL && settings->open &&
+         settings->subpage == BD_SETTINGS_SUBPAGE_HOTKEY &&
+         settings->capture_active;
+}
+
+static void cancel_hotkey_capture(bd_settings *settings) {
+  settings->capture_active = false;
+  settings->capture_wait_release = false;
+  settings->capture_count = 0;
+  memset(settings->capture_pressed, 0, sizeof(settings->capture_pressed));
+  rebuild_and_damage(settings);
+}
+
+bool bd_settings_capture_key(bd_settings *settings, bd_key key, bool pressed) {
+  if (!bd_settings_hotkey_capturing(settings)) {
+    return false;
+  }
+  if (key == BD_KEY_B && pressed) {
+    cancel_hotkey_capture(settings);
+    return true;
+  }
+  if (settings->capture_wait_release) {
+    if (!pressed) {
+      settings->capture_wait_release = false;
+    }
+    return true;
+  }
+  if (key <= BD_KEY_UNKNOWN || key >= BD_KEY_COUNT) {
+    return true;
+  }
+  if (pressed) {
+    if (!settings->capture_pressed[key]) {
+      settings->capture_pressed[key] = true;
+      if (settings->capture_count < BD_HOTKEY_MAX_KEYS) {
+        settings->capture_keys[settings->capture_count++] = key;
+      }
+    }
+    return true;
+  }
+  settings->capture_pressed[key] = false;
+  for (int i = 0; i < (int)BD_KEY_COUNT; ++i) {
+    if (settings->capture_pressed[i]) {
+      return true;
+    }
+  }
+  if (settings->capture_count == 0) {
+    return true;
+  }
+
+  char combo[BD_HOTKEY_COMBO_MAX] = "";
+  size_t used = 0;
+  for (int i = 0; i < settings->capture_count; ++i) {
+    const char *name = bd_key_name(settings->capture_keys[i]);
+    int written = snprintf(combo + used, sizeof(combo) - used, "%s%s",
+                           i == 0 ? "" : "+", name);
+    if (written < 0 || (size_t)written >= sizeof(combo) - used) {
+      set_error(settings, "组合键太长");
+      cancel_hotkey_capture(settings);
+      return true;
+    }
+    used += (size_t)written;
+  }
+
+  bd_hotkey parsed;
+  char error[128] = {0};
+  if (!bd_hotkey_parse(&parsed, combo, error, sizeof(error))) {
+    set_error(settings, "组合键无效：%s", error);
+    cancel_hotkey_capture(settings);
+    return true;
+  }
+  for (size_t i = 0; i < settings->hotkeys.count; ++i) {
+    const bd_hotkey *other = &settings->hotkeys.items[i];
+    if (strcmp(other->id, settings->edit_hotkey) != 0 &&
+        hotkey_same_chord(other, &parsed)) {
+      set_error(settings, "与 %s 的 %s 重复", other->id, other->combo);
+      cancel_hotkey_capture(settings);
+      return true;
+    }
+  }
+
+  const bd_hotkey *current = find_hotkey(settings, settings->edit_hotkey);
+  char previous[BD_HOTKEY_COMBO_MAX] = "";
+  if (current != NULL) {
+    copy_text(previous, sizeof(previous), current->combo);
+  }
+  char config_key[160];
+  snprintf(config_key, sizeof(config_key), "hotkey.%s.combo",
+           settings->edit_hotkey);
+  if (!bd_config_set(settings->config, config_key, parsed.combo, error,
+                     sizeof(error))) {
+    set_error(settings, "无法保存组合键：%s", error);
+    cancel_hotkey_capture(settings);
+    return true;
+  }
+  if (!bd_config_save(settings->config, error, sizeof(error))) {
+    bd_config_set(settings->config, config_key, previous, error,
+                  sizeof(error));
+    set_error(settings, "保存组合键失败：%s", error);
+    cancel_hotkey_capture(settings);
+    return true;
+  }
+  clear_error(settings);
+  settings->capture_active = false;
+  settings->capture_wait_release = false;
+  settings->capture_count = 0;
+  memset(settings->capture_pressed, 0, sizeof(settings->capture_pressed));
+  load_hotkeys(settings);
+  rebuild_and_damage(settings);
+  return true;
+}
+
 bd_settings_stats bd_settings_get_stats(const bd_settings *settings) {
   bd_settings_stats stats;
   memset(&stats, 0, sizeof(stats));
@@ -2036,6 +2324,23 @@ static bool activate_row(bd_settings *settings, bd_settings_row *row) {
     case BD_SETTINGS_ROW_PLUGIN:
       open_plugin_subpage(settings, row->index);
       return true;
+    case BD_SETTINGS_ROW_ACTION:
+      if (strcmp(row->key, "!hotkey.combo") == 0) {
+        settings->capture_active = true;
+        settings->capture_wait_release = true;
+        settings->capture_count = 0;
+        memset(settings->capture_pressed, 0,
+               sizeof(settings->capture_pressed));
+        rebuild_and_damage(settings);
+        return true;
+      }
+      if (row->index >= 0 &&
+          (size_t)row->index < settings->hotkeys.count) {
+        open_hotkey_subpage(settings,
+                            settings->hotkeys.items[row->index].id);
+        return true;
+      }
+      return false;
     case BD_SETTINGS_ROW_RESET:
       settings->confirm_open = true;
       settings->confirm_focus = 0;
@@ -2134,9 +2439,15 @@ bool bd_settings_input(bd_settings *settings, bd_settings_action action) {
       }
       {
         bd_settings_row *row = &settings->rows[settings->focus];
+        int direction = action == BD_SETTINGS_ACTION_RIGHT ? 1 : -1;
         if (row->kind == BD_SETTINGS_ROW_SLIDER) {
-          return adjust_slider(settings, row,
-                               action == BD_SETTINGS_ACTION_RIGHT ? 1 : -1);
+          return adjust_slider(settings, row, direction);
+        }
+        if (row->kind == BD_SETTINGS_ROW_ENUM) {
+          return adjust_enum(settings, row, direction);
+        }
+        if (row->kind == BD_SETTINGS_ROW_TOGGLE) {
+          return adjust_toggle(settings, row);
         }
       }
       return false;

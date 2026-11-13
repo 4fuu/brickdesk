@@ -439,7 +439,7 @@ key 覆盖低优先级的同名 key，未写的 key 继续使用低层值。这�
 | `sequence_ms` | int | `800` | 100..5000 | 序列下一步的等待窗口 |
 | `action` | string | 必填 | ≤64 字符 | 动作名，如 `menu.open`、`builtin.screenshot` |
 | `scope` | string | `global` | ≤64 字符 | `global`、`app:<id>`、`mode:<mode>` |
-| `suppress` | bool | `false` | — | 预留给 grab + uinput 独占转发；M1-05 只记录警告 |
+| `suppress` | bool | `false` | — | 独占转发：grab 物理设备并创建 uinput 虚拟设备，该绑定使用的键不再到达前台应用 |
 | `confirm` | bool | `false` | — | 触发前是否二次确认 |
 | `repeat` | bool | `false` | — | 按住时重复；会隐含 hold 语义 |
 | `repeat_ms` | int | `100` | 20..1000 | 重复间隔 |
@@ -512,10 +512,12 @@ tap**。chord 完成会取消同键的 hold/tap；hold 触发会取消同键的 
 `Menu+X`（chord），`Select`（hold 400，提示栏）对 `Select+Up`（chord）。
 `brickdesk-inputd` 启动时会打印这两条 warning，`bd-input --check` 也会。
 
-`scope` 目前只实现“global 或与当前 scope 完全相同”的激活；`app:`、`mode:`
-字符串会被接受和检查冲突，但 M1-05 的桌面/inputd 还没有应用上下文切换。
-`suppress=true` 也尚未实现按绑定 grab+uinput 转发；inputd 只在菜单订阅者
-显式请求 `grab` 时独占设备。
+`scope` 按当前上下文激活：`global` 始终生效；`mode:desktop` 只在桌面生效；
+`mode:game` 在前台应用（`app:<id>`）生效；`app:<id>` 只在对应应用前台时生效。
+桌面启动时把当前上下文通过 inputd 的 `set_scope` 命令同步给守护进程；应用切换
+和回到桌面时自动更新。`suppress=true` 的绑定由 inputd 独占转发：grab 物理
+设备、创建 uinput 虚拟设备，除该绑定使用的键以外的输入照常转给前台应用。
+`/dev/uinput` 不可用时不 grab 设备并记录一次错误，避免没有替代节点时吞掉输入。
 
 默认绑定：
 

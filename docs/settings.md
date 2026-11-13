@@ -95,7 +95,7 @@ needs a rebuild just to show a new number.
 | 声音 | `audio.volume`, `audio.mute` |
 | 显示 | `display.brightness`, `color_temperature`, `contrast`, `saturation`, `exposure`, `white_point` + RGB gains |
 | 灯光 | `led.enabled`, per-zone brightness/color/effect for `m`/`lr`/`f1`/`f2`/`rear`, `led.indicator_brightness`, `led.ambient`, `led.ambient_brightness` |
-| 按键 | `input.fn_switch_action`, `home_action`, `f1_action`/`f1_app`, `f2_action`/`f2_app`, `dpad_to_joystick`, `turbo`; then one conflict summary plus every `[hotkey.<id>]` combo, action, trigger and warning marker |
+| 按键 | `input.fn_switch_action`, `home_action`, `f1_action`/`f1_app`, `f2_action`/`f2_app`, `dpad_to_joystick`, `turbo`; then one conflict summary plus every `[hotkey.<id>]` row. A opens an editor with combo recording, scope (`global`/`mode:desktop`/`mode:game`/`app:<id>`) and `suppress`; conflict rows are marked and a duplicate recording is rejected |
 | 性能 | `perf.global_profile` and every `[app.<id>] profile` override, both cycled through perf.ini profile names |
 | 后台 | `session.max_background`, `session.memory_budget_mb` |
 | 插件 | sorted plugin list; A opens the plugin host's declarative settings tree |

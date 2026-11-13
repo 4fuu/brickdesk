@@ -166,6 +166,12 @@ bool bd_hotkey_table_load(bd_hotkey_table *table, const struct bd_config *config
 /* Human-readable trigger name, e.g. "chord". Never NULL. */
 const char *bd_hotkey_trigger_name(int trigger);
 
+/*
+ * Whether a binding applies in `scope` ("global", "mode:desktop",
+ * "mode:game", or "app:<id>").  mode:game covers every app scope.
+ */
+bool bd_hotkey_scope_active(const bd_hotkey *hotkey, const char *scope);
+
 /* -------------------------------------------------------- state machine */
 
 typedef enum bd_input_trigger {
@@ -250,6 +256,15 @@ typedef struct bd_input_state {
  */
 void bd_input_state_init(bd_input_state *state, const bd_hotkey_table *table,
                          const char *scope, int double_tap_ms);
+
+/*
+ * Re-arms the binding table for a new scope without clearing pressed keys,
+ * active holds or pending timers.  Used when the shell changes context or
+ * reloads hotkeys; a held key still gets its normal release phase.
+ */
+void bd_input_state_set_scope(bd_input_state *state,
+                              const bd_hotkey_table *table, const char *scope,
+                              int double_tap_ms);
 
 /*
  * Feeds one timestamped key transition. `time_ms` must be monotonic; an

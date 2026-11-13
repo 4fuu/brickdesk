@@ -461,11 +461,6 @@ bool bd_hotkey_table_load(bd_hotkey_table *table,
                      "repeat is only supported on single-key bindings");
       continue;
     }
-    if (hotkey.suppress) {
-      diagnostic_add(table, false, id, "", 0,
-                     "suppress=true is accepted but exclusive grab+uinput "
-                     "forwarding is not implemented in M1-05");
-    }
 
     copy_text(hotkey.source_file, sizeof(hotkey.source_file),
               combo_file != NULL ? combo_file : "");
@@ -549,6 +544,21 @@ const char *bd_hotkey_trigger_name(int trigger) {
     default:
       return "unknown";
   }
+}
+
+bool bd_hotkey_scope_active(const bd_hotkey *hotkey, const char *scope) {
+  if (hotkey == NULL) {
+    return false;
+  }
+  if (scope == NULL || scope[0] == '\0') {
+    scope = "global";
+  }
+  if (strcmp(hotkey->scope, "global") == 0 ||
+      strcmp(hotkey->scope, scope) == 0) {
+    return true;
+  }
+  return strcmp(hotkey->scope, "mode:game") == 0 &&
+         strncmp(scope, "app:", 4) == 0;
 }
 
 /* ---------------------------------------------------------- state machine */
@@ -1076,25 +1086,18 @@ static void advance_internal(bd_input_state *state, uint64_t now_ms,
   }
 }
 
-void bd_input_state_init(bd_input_state *state,
-                         const bd_hotkey_table *table, const char *scope,
-                         int double_tap_ms) {
-  if (state == NULL) {
-    return;
-  }
-  memset(state, 0, sizeof(*state));
-  state->table = table;
-  copy_text(state->scope, sizeof(state->scope),
-            scope != NULL && *scope != '\0' ? scope : "global");
-  state->double_tap_ms = double_tap_ms > 0 ? double_tap_ms : 300;
+static void rearm_bindings(bd_input_state *state) {
+  const bd_hotkey_table *table = state->table;
+  memset(state->active, 0, sizeof(state->active));
+  memset(state->reserved, 0, sizeof(state->reserved));
+  memset(state->has_double, 0, sizeof(state->has_double));
+  memset(state->tap_prefix_delay_ms, 0, sizeof(state->tap_prefix_delay_ms));
   if (table == NULL) {
     return;
   }
-
   for (size_t i = 0; i < table->count; ++i) {
     const bd_hotkey *hotkey = &table->items[i];
-    bool active = strcmp(hotkey->scope, "global") == 0 ||
-                  strcmp(hotkey->scope, state->scope) == 0;
+    bool active = bd_hotkey_scope_active(hotkey, state->scope);
     state->active[i] = active;
     if (!active) {
       continue;
@@ -1118,6 +1121,29 @@ void bd_input_state_init(bd_input_state *state,
       state->reserved[key] = true;
     }
   }
+}
+
+void bd_input_state_set_scope(bd_input_state *state,
+                              const bd_hotkey_table *table, const char *scope,
+                              int double_tap_ms) {
+  if (state == NULL) {
+    return;
+  }
+  state->table = table;
+  copy_text(state->scope, sizeof(state->scope),
+            scope != NULL && *scope != '\0' ? scope : "global");
+  state->double_tap_ms = double_tap_ms > 0 ? double_tap_ms : 300;
+  rearm_bindings(state);
+}
+
+void bd_input_state_init(bd_input_state *state,
+                         const bd_hotkey_table *table, const char *scope,
+                         int double_tap_ms) {
+  if (state == NULL) {
+    return;
+  }
+  memset(state, 0, sizeof(*state));
+  bd_input_state_set_scope(state, table, scope, double_tap_ms);
 }
 
 void bd_input_state_feed(bd_input_state *state, bd_key key, bool pressed,

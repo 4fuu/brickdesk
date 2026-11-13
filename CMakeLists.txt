@@ -256,6 +256,7 @@ add_library(brickdesk_input STATIC
   src/input/evdev.c
   src/input/hotkey.c
   src/input/keys.c
+  src/input/uinput.c
 )
 target_include_directories(brickdesk_input
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

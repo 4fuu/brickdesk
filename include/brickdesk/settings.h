@@ -152,6 +152,12 @@ bool bd_settings_sync_system(bd_settings *settings, char *error,
 void bd_settings_set_perf(bd_settings *settings,
                           const bd_settings_perf *perf);
 void bd_settings_set_plugins(bd_settings *settings, bd_plugin_host *host);
+/*
+ * Supplies installed app ids for the hotkey scope picker.  The page copies the
+ * ids, so the caller may free its list after the call.
+ */
+void bd_settings_set_app_ids(bd_settings *settings, const char *const *ids,
+                             size_t count);
 void bd_settings_set_status(bd_settings *settings,
                             const bd_settings_status *status);
 /* Borrowed read-only series used by the system page's battery chart. */
@@ -198,6 +204,16 @@ bool bd_settings_needs_frame_until(const bd_settings *settings,
 /* Select-hold hint strip. */
 void bd_settings_set_hint_visible(bd_settings *settings, bool visible);
 bool bd_settings_hint_visible(const bd_settings *settings);
+
+/*
+ * Hotkey combo capture.  While capturing, the shell routes raw key edges to
+ * bd_settings_capture_key() instead of the normal action path.  A combo is
+ * finalized when every captured key is released; B cancels.  The edited combo
+ * is validated with bd_hotkey_parse() and checked against the other bindings
+ * before it is written to local.ini.
+ */
+bool bd_settings_hotkey_capturing(const bd_settings *settings);
+bool bd_settings_capture_key(bd_settings *settings, bd_key key, bool pressed);
 
 int bd_settings_category_index(const bd_settings *settings);
 int bd_settings_focus(const bd_settings *settings);

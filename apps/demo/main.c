@@ -319,16 +319,16 @@ static void fill_pattern(demo *app, uint8_t *pixels) {
 }
 
 static void fill_stable_pattern(demo *app, uint8_t *pixels) {
+  /*
+   * A flat colour is intentional: host screenshot baselines compare exact
+   * pixels, and gradients would encode the host compiler's float rounding.
+   */
   for (int y = 0; y < app->height; ++y) {
-    float ty = (float)y / (float)(app->height > 1 ? app->height - 1 : 1);
     for (int x = 0; x < app->width; ++x) {
-      float tx = (float)x / (float)(app->width > 1 ? app->width - 1 : 1);
-      float wave = 0.2f + 0.8f * (1.0f - (tx > 0.5f ? 2.0f * tx - 1.0f
-                                                   : 1.0f - 2.0f * tx));
       size_t offset = ((size_t)y * (size_t)app->width + (size_t)x) * 4u;
-      pixels[offset + 0] = (uint8_t)((0.35f + 0.25f * tx) * 255.0f + 0.5f);
-      pixels[offset + 1] = (uint8_t)((0.30f + 0.35f * wave) * 255.0f + 0.5f);
-      pixels[offset + 2] = (uint8_t)((0.45f + 0.20f * ty) * 255.0f + 0.5f);
+      pixels[offset + 0] = 58;
+      pixels[offset + 1] = 52;
+      pixels[offset + 2] = 72;
       pixels[offset + 3] = 255;
     }
   }

@@ -1338,10 +1338,78 @@ static void leave_subpage(bd_settings *settings) {
 
 /* ----------------------------------------------------------------- reset */
 
+static bool reset_value_text(const bd_settings *settings, const char *key,
+                             char *out, size_t out_size) {
+  bd_config_value value;
+  if (!bd_config_get(settings->config, key, &value)) {
+    return false;
+  }
+  if (value.type == BD_CONFIG_BOOL) {
+    snprintf(out, out_size, "%s", value.boolean ? "true" : "false");
+    return true;
+  }
+  if (value.type == BD_CONFIG_INT || value.type == BD_CONFIG_DURATION) {
+    snprintf(out, out_size, "%ld", value.integer);
+    return true;
+  }
+  if (value.string != NULL) {
+    snprintf(out, out_size, "%s", value.string);
+    return true;
+  }
+  return false;
+}
+
+static bool reset_service_key(bd_settings *settings, const char *key,
+                              const char *default_value) {
+  bool system_key = strcmp(key, "display.brightness") == 0 ||
+                    strcmp(key, "audio.volume") == 0 ||
+                    strcmp(key, "audio.mute") == 0;
+  bool perf_key = strcmp(key, "perf.global_profile") == 0;
+  char old_value[96] = {0};
+  reset_value_text(settings, key, old_value, sizeof(old_value));
+
+  if (system_key) {
+    if (!apply_system_value(settings, key, default_value)) {
+      return false;
+    }
+  } else if (perf_key) {
+    if (settings->perf_apply.apply_global_profile == NULL) {
+      set_error(settings, "perf 服务不可用");
+      return false;
+    }
+    char error[128] = {0};
+    if (!settings->perf_apply.apply_global_profile(
+            settings->perf_apply.user, default_value, error, sizeof(error))) {
+      set_error(settings, "%s",
+                error[0] != '\0' ? error : "perf 未确认默认档位");
+      return false;
+    }
+  }
+
+  char error[128] = {0};
+  if (!bd_config_set(settings->config, key, default_value, error,
+                     sizeof(error))) {
+    set_error(settings, "%s", error);
+    if (system_key && old_value[0] != '\0') {
+      (void)apply_system_value(settings, key, old_value);
+    } else if (perf_key && old_value[0] != '\0' &&
+               settings->perf_apply.apply_global_profile != NULL) {
+      char ignored[96] = {0};
+      (void)settings->perf_apply.apply_global_profile(
+          settings->perf_apply.user, old_value, ignored, sizeof(ignored));
+    }
+    return false;
+  }
+  return true;
+}
+
 static void reset_defaults(bd_settings *settings) {
   static const char *const DYNAMIC_PREFIXES[] = {
       "hotkey.", "profile.", "app.", "core.", "device.",
   };
+  clear_error(settings);
+  int failed = 0;
+  char failure[192] = {0};
   size_t count = bd_config_key_count(settings->config);
   for (size_t i = 0; i < count; ++i) {
     const char *key = bd_config_key(settings->config, i);
@@ -1365,31 +1433,30 @@ static void reset_defaults(bd_settings *settings) {
         info.default_value == NULL) {
       continue;
     }
-    char error[128] = {0};
-    (void)bd_config_set(settings->config, key, info.default_value, error,
-                        sizeof(error));
+    bool service_key = strcmp(key, "display.brightness") == 0 ||
+                       strcmp(key, "audio.volume") == 0 ||
+                       strcmp(key, "audio.mute") == 0 ||
+                       strcmp(key, "perf.global_profile") == 0;
+    bool ok = false;
+    if (service_key) {
+      ok = reset_service_key(settings, key, info.default_value);
+      if (!ok && failure[0] == '\0') {
+        copy_text(failure, sizeof(failure), settings->error);
+      }
+    } else {
+      char error[128] = {0};
+      ok = bd_config_set(settings->config, key, info.default_value, error,
+                         sizeof(error));
+      if (!ok && failure[0] == '\0') {
+        copy_text(failure, sizeof(failure), error);
+      }
+    }
+    if (!ok) {
+      ++failed;
+    }
   }
-  char error[128] = {0};
-  if (!bd_config_save(settings->config, error, sizeof(error))) {
-    set_error(settings, "恢复默认值后保存失败：%s", error);
-  } else {
-    clear_error(settings);
-  }
-  if (settings->system.set_brightness != NULL) {
-    (void)settings->system.set_brightness(
-        settings->system.user,
-        (int)bd_config_get_int(settings->config, "display.brightness", 70));
-  }
-  if (settings->system.set_volume != NULL) {
-    (void)settings->system.set_volume(
-        settings->system.user,
-        (int)bd_config_get_int(settings->config, "audio.volume", 70));
-  }
-  if (settings->system.set_muted != NULL) {
-    (void)settings->system.set_muted(
-        settings->system.user,
-        bd_config_get_bool(settings->config, "audio.mute", false));
-  }
+  char save_error[128] = {0};
+  bool saved = bd_config_save(settings->config, save_error, sizeof(save_error));
   bd_settings_apply_theme(settings);
   settings->confirm_open = false;
   settings->focus = 0;
@@ -1397,6 +1464,22 @@ static void reset_defaults(bd_settings *settings) {
   bd_settings_rebuild(settings);
   bd_settings_mark_all(settings);
   bd_gfx_damage_all(settings->gfx);
+
+  if (failed > 0) {
+    size_t used = strlen(failure);
+    if (failed > 1) {
+      snprintf(failure + used, sizeof(failure) - used, "（另有 %d 项）",
+               failed - 1);
+      used = strlen(failure);
+    }
+    if (!saved) {
+      snprintf(failure + used, sizeof(failure) - used, "；保存失败：%s",
+               save_error);
+    }
+    set_error(settings, "恢复默认值部分失败：%s", failure);
+  } else if (!saved) {
+    set_error(settings, "恢复默认值后保存失败：%s", save_error);
+  }
 }
 
 /* ------------------------------------------------------------- creation */

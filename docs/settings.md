@@ -151,11 +151,15 @@ hint bullet recolour immediately. The custom-colour sub-page edits R/G/B and
 writes `#rrggbb` on every step.
 
 The reset row opens a confirm dialog (default focus on 取消). Confirming writes
-the schema defaults for static keys and saves, then re-applies brightness,
-volume and mute through the system seam. Dynamic sections (`hotkey.*`,
-`profile.*`, `app.*`, `core.*`, `device.*`) are deliberately left alone; the
-dialog says so. `bd_config` still has no delete-override API, so reset writes
-defaults rather than deleting `local.ini` lines.
+the schema defaults for static keys and saves. Service-backed keys keep their
+old value when the device or daemon refuses the default: brightness/volume/
+mute are applied through `bd_settings_system` first, and `perf.global_profile`
+goes through `perf.global` and is stored only after daemon confirmation. Any
+such failure is reported as a partial-reset error; other defaults still apply.
+Dynamic sections (`hotkey.*`, `profile.*`, `app.*`, `core.*`, `device.*`) are
+deliberately left alone; the dialog says so. `bd_config` still has no
+delete-override API, so reset writes defaults rather than deleting `local.ini`
+lines.
 
 ## Controls
 
@@ -236,7 +240,9 @@ host and the config it points at.
   a read-only failure that leaves the preference untouched, brightness through
   the explicit backend,
   hotkey conflict counts, perf/app profile cycling, background limits, reset
-  confirm/cancel, custom accent sub-page, hint strip damage and B navigation.
+  confirm/cancel plus rejected/disconnected perf and failed-AV reset paths that
+  keep the old values and surface a partial error, custom accent sub-page, hint
+  strip damage and B navigation.
   A long 16-control plugin tree verifies that focus-following scroll reaches
   and activates the last control.
 - `settings_capture`: 14 dark screenshots (`settings_appearance`, `_hint`,

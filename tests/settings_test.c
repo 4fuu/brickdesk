@@ -469,6 +469,167 @@ static void test_pages(bd_settings *settings, bd_config *config) {
         bd_config_get_int(config, "session.max_background", -1));
 }
 
+typedef struct reset_fail_av {
+  int brightness_calls;
+  int volume_calls;
+  int mute_calls;
+} reset_fail_av;
+
+static bool reset_fail_brightness(void *user, int percent) {
+  (void)percent;
+  ((reset_fail_av *)user)->brightness_calls++;
+  return false;
+}
+
+static bool reset_fail_volume(void *user, int percent) {
+  (void)percent;
+  ((reset_fail_av *)user)->volume_calls++;
+  return false;
+}
+
+static bool reset_fail_mute(void *user, bool muted) {
+  (void)muted;
+  ((reset_fail_av *)user)->mute_calls++;
+  return false;
+}
+
+static bool reset_fail_brightness_get(void *user, int *percent) {
+  (void)user;
+  *percent = 80;
+  return true;
+}
+
+static bool reset_fail_volume_get(void *user, int *percent) {
+  (void)user;
+  *percent = 40;
+  return true;
+}
+
+static bool reset_fail_mute_get(void *user, bool *muted) {
+  (void)user;
+  *muted = true;
+  return true;
+}
+
+typedef struct reset_perf_probe {
+  int calls;
+  char last[64];
+  bool reject;
+} reset_perf_probe;
+
+static bool reset_perf_apply(void *user, const char *profile, char *error,
+                             size_t error_size) {
+  reset_perf_probe *probe = (reset_perf_probe *)user;
+  probe->calls++;
+  snprintf(probe->last, sizeof(probe->last), "%s", profile);
+  if (probe->reject) {
+    if (error != NULL && error_size > 0) {
+      snprintf(error, error_size, "perfd 拒绝重置");
+    }
+    return false;
+  }
+  return true;
+}
+
+static void confirm_reset(bd_settings *settings) {
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_SYSTEM),
+        "open system for reset");
+  CHECK(focus_row(settings, "!reset"), "focus reset row");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "open reset confirm");
+  CHECK(bd_settings_confirm_open(settings), "reset confirm open");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "focus reset action");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "confirm reset");
+  CHECK(!bd_settings_confirm_open(settings), "reset confirm closes");
+}
+
+static void test_reset_service_failures(bd_settings *settings,
+                                        bd_config *config,
+                                        bd_settings_system *working_system) {
+  char error[128] = {0};
+  CHECK(bd_config_set(config, "display.brightness", "80", error,
+                      sizeof(error)),
+        "reset failure seed brightness");
+  CHECK(bd_config_set(config, "audio.volume", "40", error, sizeof(error)),
+        "reset failure seed volume");
+  CHECK(bd_config_set(config, "audio.mute", "true", error, sizeof(error)),
+        "reset failure seed mute");
+  CHECK(bd_config_set(config, "perf.global_profile", "balanced", error,
+                      sizeof(error)),
+        "reset failure seed profile");
+
+  reset_fail_av fail_av;
+  memset(&fail_av, 0, sizeof(fail_av));
+  bd_settings_system failing_system;
+  memset(&failing_system, 0, sizeof(failing_system));
+  failing_system.user = &fail_av;
+  failing_system.set_brightness = reset_fail_brightness;
+  failing_system.set_volume = reset_fail_volume;
+  failing_system.set_muted = reset_fail_mute;
+  failing_system.get_brightness = reset_fail_brightness_get;
+  failing_system.get_volume = reset_fail_volume_get;
+  failing_system.get_muted = reset_fail_mute_get;
+  bd_settings_set_system(settings, &failing_system);
+
+  reset_perf_probe perf_probe;
+  memset(&perf_probe, 0, sizeof(perf_probe));
+  perf_probe.reject = true;
+  bd_settings_perf rejected = {.user = &perf_probe,
+                               .apply_global_profile = reset_perf_apply};
+  bd_settings_set_perf(settings, &rejected);
+  confirm_reset(settings);
+
+  CHECK(fail_av.brightness_calls > 0 && fail_av.volume_calls > 0 &&
+            fail_av.mute_calls > 0,
+        "reset calls each AV setter (%d/%d/%d)", fail_av.brightness_calls,
+        fail_av.volume_calls, fail_av.mute_calls);
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 80,
+        "failed AV reset keeps brightness %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  CHECK(bd_config_get_int(config, "audio.volume", -1) == 40,
+        "failed AV reset keeps volume %ld",
+        bd_config_get_int(config, "audio.volume", -1));
+  CHECK(bd_config_get_bool(config, "audio.mute", false),
+        "failed AV reset keeps mute");
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               "balanced") == 0,
+        "rejected perf reset keeps profile %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(perf_probe.calls == 1 && strcmp(perf_probe.last, "default") == 0,
+        "reset applies the perf default through confirmation (calls=%d last=%s)",
+        perf_probe.calls, perf_probe.last);
+  CHECK(bd_settings_last_error(settings)[0] != '\0',
+        "partial reset surfaces an error");
+
+  CHECK(bd_config_set(config, "display.brightness", "80", error,
+                      sizeof(error)),
+        "disconnected reset seed brightness");
+  CHECK(bd_config_set(config, "audio.volume", "40", error, sizeof(error)),
+        "disconnected reset seed volume");
+  CHECK(bd_config_set(config, "perf.global_profile", "performance", error,
+                      sizeof(error)),
+        "disconnected reset seed profile");
+  bd_settings_set_system(settings, working_system);
+  bd_settings_set_perf(settings, NULL);
+  confirm_reset(settings);
+
+  CHECK(bd_config_get_int(config, "display.brightness", -1) == 70,
+        "working AV still resets brightness to %ld",
+        bd_config_get_int(config, "display.brightness", -1));
+  CHECK(bd_config_get_int(config, "audio.volume", -1) == 70,
+        "working AV still resets volume to %ld",
+        bd_config_get_int(config, "audio.volume", -1));
+  CHECK(strcmp(bd_config_get_string(config, "perf.global_profile", ""),
+               "performance") == 0,
+        "disconnected perf keeps profile %s",
+        bd_config_get_string(config, "perf.global_profile", ""));
+  CHECK(strstr(bd_settings_last_error(settings), "perf") != NULL,
+        "disconnected perf reset error %s",
+        bd_settings_last_error(settings));
+}
+
 static bool wait_for_plugin_long(bd_plugin_host *host, bd_plugin *plugin,
                                 uint64_t timeout_ms) {
   uint64_t deadline = sf_now_ms() + timeout_ms;
@@ -710,9 +871,12 @@ int main(void) {
   test_focus_damage(platform, gfx, settings);
   test_values(platform, gfx, settings, config, dir, &stub);
   test_real_sysfs_transaction(platform, gfx, settings, config);
+  /* The fake sysfs tree is gone; restore the explicit test backend. */
+  bd_settings_set_system(settings, &system);
   test_pages(settings, config);
   test_plugin_scroll(platform, gfx, settings);
   test_reset_and_subpages(platform, gfx, settings, config);
+  test_reset_service_failures(settings, config, &system);
 
   const char *profile =
       bd_config_get_string(config, "perf.global_profile", "default");

@@ -402,8 +402,11 @@ if (pout.recommendation == BD_BATTERY_RECOMMEND_PREPARE_SHUTDOWN) {
   会让策略进入 UNKNOWN，不会关机。
 - shell 在 `src/app/shell.c` 中持有 `bd_battery`/`bd_battery_policy`，按
   `output.next_sample_ms` 调度，未知容量显示为斜杠电池/“电量未知”，不显示
-  0%。本轮不消费 `PREPARE_SHUTDOWN`，也不会自动关机；`power.low_battery_percent`
-  只映射到策略的 CRITICAL 阈值。
+  0%。本轮不消费 `PREPARE_SHUTDOWN`，也不会自动关机。shell 会把
+  `power.low_battery_percent`（完整 0..100 schema 范围）映射成合法的
+  critical/reminder 组合：critical 上限为 99，reminder 至少为 20 且高于
+  critical，并收紧 hysteresis 使总和不超过 100；策略初始化失败会明确报错，
+  退化为 60 s 容量采样而不是静默快速轮询。
 - 同一 `bd_battery` 可在单线程内复用；多线程读取需要调用方串行化。
 
 ## 7. 证据、版本与许可
@@ -843,8 +846,9 @@ adb shell '/mnt/SDCARD/brickdesk/bin/bd-battery'
 
 1. shell 持有 `bd_battery` 和 `bd_battery_policy`，生命周期覆盖事件循环。
 2. 首页/设置页使用同一状态快照；未知容量显示占位符，不显示 0%。
-3. `low_battery_percent` 只映射到 `critical_percent`；`recommend_shutdown`
-   固定为 false，本轮不接自动关机。
+3. `low_battery_percent` 映射到一组合法的 `critical_percent`/
+   `reminder_percent`/hysteresis；`recommend_shutdown` 固定为 false，本轮不接
+   自动关机。策略初始化失败会被记录并切换到明确的 60 s 降级采样。
 4. 事件循环按 `next_sample_ms` 调度；power_supply uevent、插电/唤醒提前
    采样仍是真机项。
 5. `PREPARE_SHUTDOWN` 的安全流程（保存、确认、`bd_power_poweroff()`）另任务。

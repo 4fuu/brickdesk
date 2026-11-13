@@ -96,5 +96,8 @@ void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms);
 /* Test-only access to the live session and the same launch path as A. */
 bd_session *bd_shell_test_session(bd_shell *shell);
 bool bd_shell_test_launch(bd_shell *shell, const char *app_id);
+/* Test/diagnostic view of the battery policy cadence. */
+bool bd_shell_test_battery_policy(const bd_shell *shell, uint64_t *next_ms,
+                                  bool *policy_ready, int *percent);
 
 #endif /* BRICKDESK_SHELL_H */

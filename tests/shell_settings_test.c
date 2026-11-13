@@ -216,7 +216,8 @@ static bool read_text(const char *path, char *out, size_t out_size) {
   return true;
 }
 
-static bool setup_runtime(test_runtime *runtime, const char *perfd) {
+static bool setup_runtime(test_runtime *runtime, const char *perfd,
+                          int low_battery_percent) {
   memset(runtime, 0, sizeof(*runtime));
   runtime->perfd = -1;
   if (!sf_make_config_dir(runtime->config_dir, sizeof(runtime->config_dir),
@@ -285,6 +286,11 @@ static bool setup_runtime(test_runtime *runtime, const char *perfd) {
   CHECK(bd_config_set(runtime->config, "audio.volume", "40", error,
                       sizeof(error)),
         "seed volume: %s", error);
+  char low_battery[16];
+  snprintf(low_battery, sizeof(low_battery), "%d", low_battery_percent);
+  CHECK(bd_config_set(runtime->config, "power.low_battery_percent", low_battery,
+                      error, sizeof(error)),
+        "seed low battery threshold %s: %s", low_battery, error);
   CHECK(bd_config_save(runtime->config, error, sizeof(error)),
         "save seeded config: %s", error);
 
@@ -334,6 +340,31 @@ static bool setup_runtime(test_runtime *runtime, const char *perfd) {
   CHECK(runtime->stub.brightness == 80 && runtime->stub.volume == 40,
         "persisted brightness/volume applied on startup (%d/%d)",
         runtime->stub.brightness, runtime->stub.volume);
+  uint64_t battery_next = 0;
+  bool battery_ready = false;
+  int battery_percent = -1;
+  CHECK(bd_shell_test_battery_policy(runtime->shell, &battery_next,
+                                     &battery_ready, &battery_percent),
+        "battery policy query");
+  CHECK(battery_percent == 73, "battery fixture capacity %d", battery_percent);
+  CHECK(battery_ready, "low_battery_percent=%d must initialize the policy",
+        low_battery_percent);
+  struct timespec wall;
+  clock_gettime(CLOCK_MONOTONIC, &wall);
+  uint64_t wall_now = (uint64_t)wall.tv_sec * 1000u +
+                      (uint64_t)wall.tv_nsec / 1000000u;
+  if (low_battery_percent <= 20) {
+    CHECK(battery_next >= wall_now + 30000,
+          "normal battery cadence is not a fast fallback: next=%llu now=%llu",
+          (unsigned long long)battery_next, (unsigned long long)wall_now);
+  } else {
+    /* A high threshold makes the 73% fixture critical; confirmation sampling
+     * is expected, but it must still be a valid policy rather than a
+     * fallback. */
+    CHECK(battery_next > wall_now,
+          "high-threshold policy has a live next sample: next=%llu now=%llu",
+          (unsigned long long)battery_next, (unsigned long long)wall_now);
+  }
   return runtime->settings != NULL;
 }
 
@@ -537,7 +568,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   test_runtime runtime;
-  if (!setup_runtime(&runtime, argv[1])) {
+  if (!setup_runtime(&runtime, argv[1], 20)) {
     destroy_runtime(&runtime);
     return 1;
   }
@@ -555,6 +586,21 @@ int main(int argc, char **argv) {
           "final B returns to the home page");
   }
   destroy_runtime(&runtime);
+
+  test_runtime high;
+  if (!setup_runtime(&high, argv[1], 100)) {
+    destroy_runtime(&high);
+    return 1;
+  }
+  uint64_t high_next = 0;
+  bool high_ready = false;
+  int high_percent = -1;
+  CHECK(bd_shell_test_battery_policy(high.shell, &high_next, &high_ready,
+                                     &high_percent),
+        "high threshold battery query");
+  CHECK(high_ready, "low_battery_percent=100 must initialize the policy");
+  destroy_runtime(&high);
+
   if (failures != 0) {
     fprintf(stderr, "shell_settings_test: %d failure(s)\n", failures);
     return 1;

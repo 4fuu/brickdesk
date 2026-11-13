@@ -77,6 +77,7 @@ struct bd_shell {
 
   bd_battery battery;
   bd_battery_policy battery_policy;
+  bool battery_policy_ready;
   bool battery_opened;
   uint64_t battery_next_ms;
 
@@ -476,6 +477,36 @@ static void shell_config_changed(void *user, const char *key) {
   }
 }
 
+static void shell_battery_policy_config(int low_percent,
+                                        bd_battery_policy_config *config) {
+  bd_battery_policy_config_default(config);
+  int critical = low_percent;
+  if (critical < 0) {
+    critical = 0;
+  }
+  /* critical_percent must stay below reminder_percent (<=100). */
+  if (critical > 99) {
+    critical = 99;
+  }
+  int reminder = critical < 20 ? 20 : critical + 5;
+  if (reminder > 100) {
+    reminder = 100;
+  }
+  if (reminder <= critical) {
+    reminder = critical + 1;
+  }
+  config->critical_percent = critical;
+  config->reminder_percent = reminder;
+  if (reminder + config->reminder_hysteresis_percent > 100) {
+    config->reminder_hysteresis_percent = 100 - reminder;
+  }
+  if (critical + config->critical_hysteresis_percent > 100) {
+    config->critical_hysteresis_percent = 100 - critical;
+  }
+  /* This round only displays capacity; shutdown/PMIC is a separate task. */
+  config->recommend_shutdown = false;
+}
+
 static void shell_battery_sample(bd_shell *shell, uint64_t now) {
   if (shell == NULL || now < shell->battery_next_ms) {
     return;
@@ -500,10 +531,6 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
   if (read == BD_BATTERY_ERR_STALE) {
     shell->battery_opened = false;
   }
-  bd_battery_policy_output output;
-  memset(&output, 0, sizeof(output));
-  bd_battery_policy_update(&shell->battery_policy,
-                           read == BD_BATTERY_OK ? &status : NULL, now, &output);
   int percent = -1;
   if (read == BD_BATTERY_OK && status.capacity_known) {
     percent = status.capacity_percent;
@@ -512,8 +539,22 @@ static void shell_battery_sample(bd_shell *shell, uint64_t now) {
     shell->status_battery = percent;
     shell_publish_status(shell, true);
   }
-  shell->battery_next_ms = output.next_sample_ms;
-  if (shell->battery_next_ms == 0) {
+  if (shell->battery_policy_ready) {
+    bd_battery_policy_output output;
+    memset(&output, 0, sizeof(output));
+    bd_battery_policy_result policy_result = bd_battery_policy_update(
+        &shell->battery_policy, read == BD_BATTERY_OK ? &status : NULL, now,
+        &output);
+    if (policy_result != BD_BATTERY_POLICY_OK) {
+      fprintf(stderr, "brickdesk: battery policy stopped: %s\n",
+              bd_battery_policy_result_name(policy_result));
+      shell->battery_policy_ready = false;
+    } else {
+      shell->battery_next_ms = output.next_sample_ms;
+    }
+  }
+  if (!shell->battery_policy_ready || shell->battery_next_ms == 0) {
+    /* Explicit degraded cadence; never a silent fast polling loop. */
     shell->battery_next_ms = now + BD_SHELL_BATTERY_RETRY_MS;
   }
 }
@@ -2429,20 +2470,28 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   bd_config_set_change_callback(config->settings, shell_config_changed, shell);
 
   bd_battery_policy_config battery_config;
-  bd_battery_policy_config_default(&battery_config);
   long low_battery =
       bd_config_get_int(config->settings, "power.low_battery_percent", 5);
-  if (low_battery >= 0 && low_battery <= 100) {
-    battery_config.critical_percent = (int)low_battery;
+  if (low_battery < 0 || low_battery > 100) {
+    low_battery = 5;
   }
-  /* This round only displays capacity; shutdown/PMIC is a separate task. */
-  battery_config.recommend_shutdown = false;
+  shell_battery_policy_config((int)low_battery, &battery_config);
   bd_battery_error battery_error;
   bd_battery_policy_output battery_output;
-  bd_battery_policy_init(&shell->battery_policy, &battery_config,
-                         shell_now(shell), &battery_output, &battery_error);
-  shell->battery_next_ms = shell_now(shell);
+  bd_battery_policy_result battery_result = bd_battery_policy_init(
+      &shell->battery_policy, &battery_config, shell_now(shell),
+      &battery_output, &battery_error);
+  shell->battery_policy_ready = battery_result == BD_BATTERY_POLICY_OK;
+  shell->battery_next_ms =
+      shell->battery_policy_ready ? shell_now(shell)
+                                  : shell_now(shell) + BD_SHELL_BATTERY_RETRY_MS;
   shell->battery_opened = false;
+  if (!shell->battery_policy_ready) {
+    fprintf(stderr, "brickdesk: battery policy unavailable: %s\n",
+            battery_error.message[0] != '\0' ? battery_error.message
+                                              : bd_battery_policy_result_name(
+                                                    battery_result));
+  }
 
   bd_home_status status;
   memset(&status, 0, sizeof(status));
@@ -2604,6 +2653,23 @@ void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms) {
   shell->test_clock = true;
   shell->test_now_ms = time_ms;
   bd_input_state_advance(&shell->test_input, time_ms, local_emit, shell);
+}
+
+bool bd_shell_test_battery_policy(const bd_shell *shell, uint64_t *next_ms,
+                                  bool *policy_ready, int *percent) {
+  if (shell == NULL) {
+    return false;
+  }
+  if (next_ms != NULL) {
+    *next_ms = shell->battery_next_ms;
+  }
+  if (policy_ready != NULL) {
+    *policy_ready = shell->battery_policy_ready;
+  }
+  if (percent != NULL) {
+    *percent = shell->status_battery;
+  }
+  return true;
 }
 
 bd_session *bd_shell_test_session(bd_shell *shell) {

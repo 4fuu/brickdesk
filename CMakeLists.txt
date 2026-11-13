@@ -71,6 +71,7 @@ endif()
 # --- core library -------------------------------------------------------
 add_library(brickdesk_core STATIC
   src/app/desktop.c
+  src/app/shell.c
   src/app/theme.c
   src/app/ui.c
   src/app/wall.c
@@ -96,6 +97,7 @@ target_link_libraries(brickdesk_core
     $<$<NOT:$<C_COMPILER_ID:MSVC>>:m>
     brickdesk_input
     brickdesk_plugin
+    brickdesk_session
   PRIVATE
     ${BRICKDESK_GLES2_LIBRARY}
     bd_stb

@@ -3,9 +3,12 @@
 #include <SDL.h>
 #include <GLES2/gl2.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 struct bd_platform {
   SDL_Window *window;
@@ -13,6 +16,8 @@ struct bd_platform {
   int width;
   int height;
   bd_gl_info gl;
+  int wake_fd;
+  int wake_write_fd;
 };
 
 static bd_key map_scancode(SDL_Scancode scancode) {
@@ -66,6 +71,68 @@ static const char *gl_string(GLenum name) {
   return value != NULL ? (const char *)value : "";
 }
 
+static int wake_watch(void *user, SDL_Event *event) {
+  (void)event;
+  bd_platform *platform = (bd_platform *)user;
+  if (platform != NULL && platform->wake_write_fd >= 0) {
+    unsigned char byte = 1;
+    ssize_t ignored = write(platform->wake_write_fd, &byte, 1);
+    (void)ignored;
+  }
+  return 1;
+}
+
+static void drain_wake(bd_platform *platform) {
+  if (platform == NULL || platform->wake_fd < 0) {
+    return;
+  }
+  unsigned char buffer[64];
+  while (read(platform->wake_fd, buffer, sizeof(buffer)) > 0) {
+  }
+}
+
+static void map_event(const SDL_Event *sdl_event, bd_event *event) {
+  event->type = BD_EVENT_NONE;
+  event->key = BD_KEY_UNKNOWN;
+  event->pressed = false;
+
+  switch (sdl_event->type) {
+    case SDL_QUIT:
+      event->type = BD_EVENT_QUIT;
+      break;
+    case SDL_WINDOWEVENT:
+      switch (sdl_event->window.event) {
+        case SDL_WINDOWEVENT_CLOSE:
+          event->type = BD_EVENT_QUIT;
+          break;
+        case SDL_WINDOWEVENT_EXPOSED:
+        case SDL_WINDOWEVENT_SIZE_CHANGED:
+        case SDL_WINDOWEVENT_SHOWN:
+        case SDL_WINDOWEVENT_RESTORED:
+          event->type = BD_EVENT_REDRAW;
+          break;
+        default:
+          break;
+      }
+      break;
+    case SDL_KEYDOWN:
+    case SDL_KEYUP: {
+      if (sdl_event->type == SDL_KEYDOWN && sdl_event->key.repeat != 0) {
+        break;
+      }
+      bd_key key = map_scancode(sdl_event->key.keysym.scancode);
+      if (key != BD_KEY_UNKNOWN) {
+        event->type = BD_EVENT_KEY;
+        event->key = key;
+        event->pressed = sdl_event->type == SDL_KEYDOWN;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 bd_platform *bd_platform_create(const bd_platform_config *config) {
   if (config == NULL || config->width <= 0 || config->height <= 0) {
     fprintf(stderr, "platform: invalid window configuration\n");
@@ -93,6 +160,24 @@ bd_platform *bd_platform_create(const bd_platform_config *config) {
   if (platform == NULL) {
     SDL_Quit();
     return NULL;
+  }
+  platform->wake_fd = -1;
+  platform->wake_write_fd = -1;
+  int wake_pipe[2];
+  if (pipe(wake_pipe) == 0) {
+    for (int i = 0; i < 2; ++i) {
+      int flags = fcntl(wake_pipe[i], F_GETFL, 0);
+      if (flags >= 0) {
+        fcntl(wake_pipe[i], F_SETFL, flags | O_NONBLOCK);
+      }
+      int fd_flags = fcntl(wake_pipe[i], F_GETFD, 0);
+      if (fd_flags >= 0) {
+        fcntl(wake_pipe[i], F_SETFD, fd_flags | FD_CLOEXEC);
+      }
+    }
+    platform->wake_fd = wake_pipe[0];
+    platform->wake_write_fd = wake_pipe[1];
+    SDL_AddEventWatch(wake_watch, platform);
   }
 
   platform->window = SDL_CreateWindow(config->title != NULL ? config->title : "brickdesk",
@@ -168,11 +253,20 @@ void bd_platform_destroy(bd_platform *platform) {
   if (platform == NULL) {
     return;
   }
+  if (platform->wake_fd >= 0) {
+    SDL_DelEventWatch(wake_watch, platform);
+  }
   if (platform->context != NULL) {
     SDL_GL_DeleteContext(platform->context);
   }
   if (platform->window != NULL) {
     SDL_DestroyWindow(platform->window);
+  }
+  if (platform->wake_fd >= 0) {
+    close(platform->wake_fd);
+  }
+  if (platform->wake_write_fd >= 0) {
+    close(platform->wake_write_fd);
   }
   free(platform);
   SDL_Quit();
@@ -287,52 +381,44 @@ int bd_platform_wait_event(bd_platform *platform, bd_event *event, int timeout_m
     return -1;
   }
 
-  event->type = BD_EVENT_NONE;
-  event->key = BD_KEY_UNKNOWN;
-  event->pressed = false;
-
   SDL_Event sdl_event;
   int result = wait_sdl_event(&sdl_event, timeout_ms);
+  drain_wake(platform);
   if (result <= 0) {
+    event->type = BD_EVENT_NONE;
+    event->key = BD_KEY_UNKNOWN;
+    event->pressed = false;
     return result;
   }
 
-  switch (sdl_event.type) {
-    case SDL_QUIT:
-      event->type = BD_EVENT_QUIT;
-      break;
-    case SDL_WINDOWEVENT:
-      switch (sdl_event.window.event) {
-        case SDL_WINDOWEVENT_CLOSE:
-          event->type = BD_EVENT_QUIT;
-          break;
-        case SDL_WINDOWEVENT_EXPOSED:
-        case SDL_WINDOWEVENT_SIZE_CHANGED:
-        case SDL_WINDOWEVENT_SHOWN:
-        case SDL_WINDOWEVENT_RESTORED:
-          event->type = BD_EVENT_REDRAW;
-          break;
-        default:
-          break;
-      }
-      break;
-    case SDL_KEYDOWN:
-    case SDL_KEYUP: {
-      if (sdl_event.type == SDL_KEYDOWN && sdl_event.key.repeat != 0) {
-        break;
-      }
-      bd_key key = map_scancode(sdl_event.key.keysym.scancode);
-      if (key != BD_KEY_UNKNOWN) {
-        event->type = BD_EVENT_KEY;
-        event->key = key;
-        event->pressed = sdl_event.type == SDL_KEYDOWN;
-      }
-      break;
-    }
-    default:
-      break;
-  }
+  map_event(&sdl_event, event);
+  return 1;
+}
 
+int bd_platform_event_fd(const bd_platform *platform) {
+  return platform != NULL ? platform->wake_fd : -1;
+}
+
+int bd_platform_pump_event(bd_platform *platform, bd_event *event) {
+  if (platform == NULL || event == NULL) {
+    return -1;
+  }
+  drain_wake(platform);
+
+  SDL_PumpEvents();
+  SDL_Event sdl_event;
+  int result = SDL_PeepEvents(&sdl_event, 1, SDL_GETEVENT, SDL_FIRSTEVENT,
+                              SDL_LASTEVENT);
+  if (result < 0) {
+    return -1;
+  }
+  if (result == 0) {
+    event->type = BD_EVENT_NONE;
+    event->key = BD_KEY_UNKNOWN;
+    event->pressed = false;
+    return 0;
+  }
+  map_event(&sdl_event, event);
   return 1;
 }
 

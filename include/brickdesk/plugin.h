@@ -212,6 +212,12 @@ bool bd_plugin_host_diagnostic(const bd_plugin_host *host, size_t index,
 int bd_plugin_host_poll(bd_plugin_host *host, int timeout_ms);
 /* Milliseconds until the next timer, or -1. Visible dynamic tiles cap it. */
 int bd_plugin_host_next_timeout(const bd_plugin_host *host);
+/*
+ * Appends every plugin listen and IPC socket to `out`. Returns how many were
+ * written; the desktop loop polls these and calls bd_plugin_host_poll(host, 0)
+ * when one becomes ready.
+ */
+int bd_plugin_host_fds(const bd_plugin_host *host, int *out, int max);
 /* Consumes the "visual state changed" flag (UI, frame, run state). */
 bool bd_plugin_host_take_dirty(bd_plugin_host *host);
 void bd_plugin_host_stop_all(bd_plugin_host *host);

@@ -1388,6 +1388,23 @@ int bd_plugin_host_next_timeout(const bd_plugin_host *host) {
   return (int)remaining;
 }
 
+int bd_plugin_host_fds(const bd_plugin_host *host, int *out, int max) {
+  if (host == NULL || out == NULL || max <= 0) {
+    return 0;
+  }
+  int count = 0;
+  for (int i = 0; i < host->count && count < max; ++i) {
+    const bd_plugin *plugin = &host->plugins[i];
+    if (plugin->listen_fd >= 0) {
+      out[count++] = plugin->listen_fd;
+    }
+    if (plugin->fd >= 0 && count < max) {
+      out[count++] = plugin->fd;
+    }
+  }
+  return count;
+}
+
 int bd_plugin_host_poll(bd_plugin_host *host, int timeout_ms) {
   if (host == NULL) {
     return -1;

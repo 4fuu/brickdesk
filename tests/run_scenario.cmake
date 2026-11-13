@@ -11,12 +11,29 @@ endif()
 file(REMOVE_RECURSE "${OUT_DIR}")
 file(MAKE_DIRECTORY "${OUT_DIR}")
 
+set(harness_command "${HARNESS}" --scenario "${SCENARIO}" --out-dir "${OUT_DIR}")
+if(DEFINED CONFIG_DIR AND CONFIG_DIR)
+  list(APPEND harness_command --config-dir "${CONFIG_DIR}")
+endif()
+if(DEFINED DEMO AND DEMO)
+  list(APPEND harness_command --demo "${DEMO}")
+endif()
+if(DEFINED SHIM AND SHIM)
+  list(APPEND harness_command --shim "${SHIM}")
+endif()
+if(DEFINED INPUTD AND INPUTD)
+  list(APPEND harness_command --inputd "${INPUTD}")
+endif()
+if(DEFINED REPLAY AND REPLAY)
+  list(APPEND harness_command --replay "${REPLAY}")
+endif()
+
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
           "SDL_VIDEODRIVER=offscreen"
           "SDL_AUDIODRIVER=dummy"
           "BRICKDESK_HEADLESS=1"
-          "${HARNESS}" --scenario "${SCENARIO}" --out-dir "${OUT_DIR}"
+          ${harness_command}
   RESULT_VARIABLE harness_result
   OUTPUT_VARIABLE harness_stdout
   ERROR_VARIABLE harness_stderr

@@ -179,16 +179,18 @@ bd-input --check [--config-dir DIR]
 
 ## 6. Host/desktop integration
 
-`brickdesk` still uses SDL keyboard scancodes (Z/X/C/V, arrows, Q/E, Tab,
-Enter, Escape) but feeds the resulting logical keys through the same state
-machine. `tests/harness` loads the same `config/hotkeys.ini` and feeds
-scenario key events at `frame * fixed_dt_ms`; the existing baseline images are
-unchanged because arrow keys are not reserved hotkeys.
+`brickdesk` connects to inputd when its socket exists and consumes both
+`action` and `key` lines; SDL keyboard scancodes (Z/X/C/V, arrows, Q/E, Tab,
+Enter, Escape) feed the same state machine when inputd is not running. Both
+sources converge on one dispatch path: reserved bindings become actions and
+unreserved keys become navigation.
 
-`ui.hint` is emitted as a hold action but the M1 desktop has no hint bar yet;
-the menu/hint UI consumes it in M1-09. `menu.open`, `perf.cycle` and
-`session.return_home` are likewise forwarded to subscribers, not executed by
-inputd.
+The 400 ms Select hold (`hotkey.hint` -> `ui.hint`) shows the hint bar and its
+release hides it; while Select is held, D-pad events still reach the desktop.
+`tests/harness` feeds scenario key events at `frame * fixed_dt_ms` through a
+separate test state so hold timing stays deterministic. `menu.open`,
+`perf.cycle` and `session.return_home` are forwarded by inputd; the desktop
+executes `session.return_home` when an app owns the screen.
 
 ## 7. Known deviations / device checks
 

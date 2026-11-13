@@ -111,6 +111,12 @@ set_tests_properties(idle_loop PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   PASS_REGULAR_EXPRESSION "idle: duration_ms=500 presents=0 ")
 
+add_test(NAME idle_loop_full COMMAND brickdesk --idle-check 3000)
+set_tests_properties(idle_loop_full PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 60
+  PASS_REGULAR_EXPRESSION "idle: duration_ms=3000 presents=0 ")
+
 add_test(NAME config_dir_override
   COMMAND brickdesk --idle-check 100 --config-dir "${PROJECT_SOURCE_DIR}/config")
 set_tests_properties(config_dir_override PROPERTIES
@@ -133,7 +139,7 @@ if(BRICKDESK_BUILD_HARNESS)
 
   set(BD_BASELINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/baselines/host")
 
-  foreach(scenario_name IN ITEMS boot focus_move)
+  foreach(scenario_name IN ITEMS boot focus_move hint_hold)
     set(scenario_file "${CMAKE_CURRENT_SOURCE_DIR}/scenarios/${scenario_name}.json")
     add_test(NAME "scenario.${scenario_name}"
       COMMAND "${CMAKE_COMMAND}"
@@ -149,6 +155,24 @@ if(BRICKDESK_BUILD_HARNESS)
       FAIL_REGULAR_EXPRESSION "FAIL"
     )
   endforeach()
+
+  add_test(NAME scenario.launch_menu
+    COMMAND "${CMAKE_COMMAND}"
+      "-DHARNESS=$<TARGET_FILE:bd_harness>"
+      "-DSCENARIO=${CMAKE_CURRENT_SOURCE_DIR}/scenarios/launch_menu.json"
+      "-DOUT_DIR=${BD_ARTIFACT_DIR}/launch_menu"
+      "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      "-DCONFIG_DIR=${PROJECT_SOURCE_DIR}/config"
+      "-DDEMO=$<TARGET_FILE:brickdesk-demo>"
+      "-DSHIM=$<TARGET_FILE:brickdesk-menu>"
+      "-DINPUTD=$<TARGET_FILE:brickdesk-inputd>"
+      "-DREPLAY=${CMAKE_CURRENT_SOURCE_DIR}/scenarios/launch_menu.replay"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_scenario.cmake")
+  set_tests_properties(scenario.launch_menu PROPERTIES
+    TIMEOUT 180
+    FAIL_REGULAR_EXPRESSION "FAIL")
 
   add_test(NAME determinism_boot
     COMMAND "${CMAKE_COMMAND}"

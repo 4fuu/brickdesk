@@ -11,12 +11,14 @@
 typedef enum bd_step_type {
   BD_STEP_WAIT = 0,
   BD_STEP_KEY,
+  BD_STEP_RUN,
   BD_STEP_SCREENSHOT
 } bd_step_type;
 
 typedef struct bd_step {
   bd_step_type type;
   int frames;      /* BD_STEP_WAIT */
+  int ms;          /* BD_STEP_RUN */
   bd_key key;      /* BD_STEP_KEY */
   bool pressed;    /* BD_STEP_KEY */
   char screenshot[64]; /* BD_STEP_SCREENSHOT */

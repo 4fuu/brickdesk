@@ -151,6 +151,12 @@ only when the menu opens.
 | `BRICKDESK_MENU_DEBUG` | Logs lifecycle decisions to stderr. |
 | `BRICKDESK_MENU_CAPTURE` | Test-only directory; every menu redraw writes `menu-NNNN.png`. |
 
+The desktop adds `LD_PRELOAD=<libbrickdesk-menu.so>` and the input/config/perf
+socket variables above when an app's `menu.mode` is `overlay`. It resolves the
+library next to `brickdesk` (host build), through `BRICKDESK_MENU_SHIM`, or from
+the staged `lib/` directory on the device. Other menu modes launch without the
+preload; their handoff UI is not part of M2-E.
+
 ## 8. Last frame
 
 On open the shim reads the default framebuffer and publishes it with

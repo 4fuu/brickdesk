@@ -51,8 +51,10 @@ At startup the program prints the GL vendor, renderer and version. `--verbose`
 also prints the full extension list, for verifying the device driver once
 hardware is available.
 
-The main loop only draws when something changed and otherwise blocks in
-`SDL_WaitEventTimeout`; it never runs a fixed 60 Hz redraw loop.
+The main loop only draws when something changed and otherwise blocks in one
+`poll()` over the SDL wake pipe, inputd, the session manager and the plugin
+host. The timeout is the nearest deadline (hotkey hold, plugin heartbeat,
+session timeout, image decode). It never runs a fixed 60 Hz redraw loop.
 
 Host keyboard mapping (the device input layer will feed the same logical keys):
 
@@ -88,7 +90,11 @@ The suite includes:
 - `smoke_render`: renders a 1024x768 colour + texture frame to
   `build-host/tests/artifacts/smoke.png`
 - `version`, `idle_loop`: CLI and no-redraw-at-idle checks
-- `scenario.boot`, `scenario.focus_move`: input replay + exact pixel compare
+- `idle_loop_full`: the complete desktop loop presents zero frames for 3 s
+- `scenario.boot`, `scenario.focus_move`, `scenario.hint_hold`: input replay +
+  exact pixel compare; the hint bar stays hidden until the 400 ms Select hold
+- `scenario.launch_menu`: launches `apps/demo` from the wall, opens the menu
+  shim through inputd, backgrounds it and checks the running tile
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,
@@ -153,11 +159,11 @@ SDL_VIDEODRIVER=offscreen BRICKDESK_HEADLESS=1 \
 
 ```text
 cmake/                 build options and generated version header input
-include/brickdesk/     public headers (gfx, platform, input, desktop)
+include/brickdesk/     public headers (gfx, platform, input, desktop, shell, app)
 src/platform/          SDL2 window + GLES2 context (host_sdl.c also serves
                        target builds until the device layer lands)
 src/gfx/               GLES2 renderer and framebuffer capture
-src/app/               M1 placeholder desktop scene
+src/app/               desktop scene, app tiles, event-loop shell
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
 src/session/           app manifests, process lifecycle, app IPC, last frame

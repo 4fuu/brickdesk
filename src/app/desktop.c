@@ -22,6 +22,23 @@
 #define BD_HINT_WIDTH 640
 #define BD_HINT_HEIGHT 56
 #define BD_HINT_Y 700
+#define BD_DESKTOP_MAX_ITEMS 14
+#define BD_DESKTOP_MAX_APPS 64
+#define BD_DESKTOP_APP_COVER_MAX 512
+
+typedef struct bd_desktop_app_state {
+  char id[BD_APP_ID_MAX];
+  char name[BD_APP_NAME_MAX];
+  char subtitle[BD_APP_SUBTITLE_MAX];
+  char badge[16];
+  bd_app_category category;
+  char cover[BD_DESKTOP_APP_COVER_MAX];
+  char color[BD_APP_COLOR_MAX];
+  bool running;
+  bd_texture *frame;
+  uint32_t frame_seq;
+  char frame_path[BD_APP_PATH_MAX];
+} bd_desktop_app_state;
 
 struct bd_desktop {
   bd_gfx *gfx;
@@ -39,9 +56,15 @@ struct bd_desktop {
   float ambient_veil;
   bool ambient_baked;
   bool dark;
-  bd_wall_item items[14];
-  char image_paths[14][512];
+  bd_wall_item demo_items[BD_DESKTOP_MAX_ITEMS];
+  char demo_image_paths[BD_DESKTOP_MAX_ITEMS][512];
+  int demo_count;
+  bd_wall_item items[BD_DESKTOP_MAX_ITEMS];
+  int item_app[BD_DESKTOP_MAX_ITEMS];
   int item_count;
+  bd_desktop_app_state apps[BD_DESKTOP_MAX_APPS];
+  int app_count;
+  bool hint_visible;
   bd_plugin *plugin;
   int plugin_item;
 };
@@ -132,55 +155,154 @@ static bd_rect cell_rect(int column, int row, int columns, int rows) {
                       rows * BD_WALL_CELL + (rows - 1) * BD_WALL_GAP);
 }
 
-static void set_item(bd_desktop *desktop, int index, int column, int row,
-                     int columns, int rows, const char *title,
-                     const char *subtitle, const char *badge, int cover,
-                     bd_color color, float progress) {
-  bd_wall_item *item = &desktop->items[index];
+static void set_demo_item(bd_desktop *desktop, int index, int column, int row,
+                          int columns, int rows, const char *title,
+                          const char *subtitle, const char *badge, int cover,
+                          bd_color color, float progress) {
+  bd_wall_item *item = &desktop->demo_items[index];
   memset(item, 0, sizeof(*item));
   item->rect = cell_rect(column, row, columns, rows);
   item->title = title;
   item->subtitle = subtitle;
   item->badge = badge;
-  snprintf(desktop->image_paths[index], sizeof(desktop->image_paths[index]),
+  snprintf(desktop->demo_image_paths[index],
+           sizeof(desktop->demo_image_paths[index]),
            "%s/covers/cover-%02d.png", BRICKDESK_ASSET_DIR, cover);
-  item->image_path = desktop->image_paths[index];
+  item->image_path = desktop->demo_image_paths[index];
   item->placeholder = color;
   item->progress = progress;
 }
 
-static void build_items(bd_desktop *desktop) {
-  desktop->item_count = 0;
+static void build_demo_items(bd_desktop *desktop) {
+  desktop->demo_count = 0;
   int i = 0;
-  set_item(desktop, i++, 0, 0, 3, 2, "小镇四季", "第 3 年夏季 · 已玩 41 小时", "GBA", 1,
-           bd_color_rgb(109, 122, 99), -1.0f);
-  set_item(desktop, i++, 3, 0, 2, 2, "星海拾荒者", "第 7 扇区 · 已玩 6 小时", "PICO-8",
-           2, bd_color_rgb(76, 92, 112), -1.0f);
-  set_item(desktop, i++, 5, 0, 1, 1, "终端", "本机 Shell", "APP", 3,
-           bd_color_rgb(44, 46, 44), -1.0f);
-  set_item(desktop, i++, 5, 1, 1, 1, "设置", "显示与声音", "APP", 4,
-           bd_color_rgb(111, 115, 123), -1.0f);
-  set_item(desktop, i++, 0, 2, 1, 2, "音乐", "夜航 · 林间电台", "LIVE", 5,
-           bd_color_rgb(123, 90, 140), 0.38f);
-  set_item(desktop, i++, 1, 2, 1, 1, "阅读", "《三体》第 14 章", "APP", 6,
-           bd_color_rgb(93, 124, 90), -1.0f);
-  set_item(desktop, i++, 2, 2, 1, 1, "文件", "SD 卡已用 41 GB", "APP", 7,
-           bd_color_rgb(76, 92, 112), -1.0f);
-  set_item(desktop, i++, 3, 2, 1, 1, "相册", "截图与照片 86 张", "APP", 8,
-           bd_color_rgb(176, 138, 78), -1.0f);
-  set_item(desktop, i++, 4, 2, 1, 1, "无线传输", "浏览器传文件", "APP", 1,
-           bd_color_rgb(63, 133, 135), -1.0f);
-  set_item(desktop, i++, 5, 2, 1, 2, "系统", "屏幕、网络与按键", "SYS", 2,
-           bd_color_rgb(111, 115, 123), -1.0f);
-  set_item(desktop, i++, 1, 3, 1, 1, "雾港", "第二章「灯塔」", "PS", 3,
-           bd_color_rgb(81, 96, 108), -1.0f);
-  set_item(desktop, i++, 2, 3, 1, 1, "深井", "到达地下 12 层", "SFC", 4,
-           bd_color_rgb(75, 94, 102), -1.0f);
-  set_item(desktop, i++, 3, 3, 1, 1, "赤色公路", "最佳圈速 1:42.08", "PS", 5,
-           bd_color_rgb(162, 90, 76), -1.0f);
-  set_item(desktop, i++, 4, 3, 1, 1, "收藏夹", "12 个收藏应用", "APP", 6,
-           bd_color_rgb(123, 90, 140), -1.0f);
-  desktop->item_count = i;
+  set_demo_item(desktop, i++, 0, 0, 3, 2, "小镇四季", "第 3 年夏季 · 已玩 41 小时", "GBA", 1,
+                bd_color_rgb(109, 122, 99), -1.0f);
+  set_demo_item(desktop, i++, 3, 0, 2, 2, "星海拾荒者", "第 7 扇区 · 已玩 6 小时", "PICO-8",
+                2, bd_color_rgb(76, 92, 112), -1.0f);
+  set_demo_item(desktop, i++, 5, 0, 1, 1, "终端", "本机 Shell", "APP", 3,
+                bd_color_rgb(44, 46, 44), -1.0f);
+  set_demo_item(desktop, i++, 5, 1, 1, 1, "设置", "显示与声音", "APP", 4,
+                bd_color_rgb(111, 115, 123), -1.0f);
+  set_demo_item(desktop, i++, 0, 2, 1, 2, "音乐", "夜航 · 林间电台", "LIVE", 5,
+                bd_color_rgb(123, 90, 140), 0.38f);
+  set_demo_item(desktop, i++, 1, 2, 1, 1, "阅读", "《三体》第 14 章", "APP", 6,
+                bd_color_rgb(93, 124, 90), -1.0f);
+  set_demo_item(desktop, i++, 2, 2, 1, 1, "文件", "SD 卡已用 41 GB", "APP", 7,
+                bd_color_rgb(76, 92, 112), -1.0f);
+  set_demo_item(desktop, i++, 3, 2, 1, 1, "相册", "截图与照片 86 张", "APP", 8,
+                bd_color_rgb(176, 138, 78), -1.0f);
+  set_demo_item(desktop, i++, 4, 2, 1, 1, "无线传输", "浏览器传文件", "APP", 1,
+                bd_color_rgb(63, 133, 135), -1.0f);
+  set_demo_item(desktop, i++, 5, 2, 1, 2, "系统", "屏幕、网络与按键", "SYS", 2,
+                bd_color_rgb(111, 115, 123), -1.0f);
+  set_demo_item(desktop, i++, 1, 3, 1, 1, "雾港", "第二章「灯塔」", "PS", 3,
+                bd_color_rgb(81, 96, 108), -1.0f);
+  set_demo_item(desktop, i++, 2, 3, 1, 1, "深井", "到达地下 12 层", "SFC", 4,
+                bd_color_rgb(75, 94, 102), -1.0f);
+  set_demo_item(desktop, i++, 3, 3, 1, 1, "赤色公路", "最佳圈速 1:42.08", "PS", 5,
+                bd_color_rgb(162, 90, 76), -1.0f);
+  set_demo_item(desktop, i++, 4, 3, 1, 1, "收藏夹", "12 个收藏应用", "APP", 6,
+                bd_color_rgb(123, 90, 140), -1.0f);
+  desktop->demo_count = i;
+}
+
+static void copy_string(char *dst, size_t size, const char *src) {
+  if (size == 0) {
+    return;
+  }
+  if (src == NULL) {
+    dst[0] = '\0';
+    return;
+  }
+  snprintf(dst, size, "%s", src);
+}
+
+static bd_app_cover_span span_for_rect(bd_rect rect) {
+  if (rect.w >= 500 && rect.h >= 300) {
+    return BD_APP_SPAN_3X2;
+  }
+  if (rect.w >= 300 && rect.h >= 300) {
+    return BD_APP_SPAN_2X2;
+  }
+  if (rect.w >= 300) {
+    return BD_APP_SPAN_2X1;
+  }
+  if (rect.h >= 300) {
+    return BD_APP_SPAN_1X2;
+  }
+  return BD_APP_SPAN_1X1;
+}
+
+static const char *app_badge(const bd_app *app) {
+  switch (app->category) {
+    case BD_APP_CATEGORY_GAME:
+      return "GAME";
+    case BD_APP_CATEGORY_EMULATOR:
+      return "EMU";
+    case BD_APP_CATEGORY_TOOL:
+      return "TOOL";
+    case BD_APP_CATEGORY_SERVICE:
+      return "SVC";
+    case BD_APP_CATEGORY_APP:
+    default:
+      return "APP";
+  }
+}
+
+static void rebuild_items(bd_desktop *desktop) {
+  int focus = bd_wall_focus(desktop->wall);
+  int app_slots = desktop->app_count;
+  if (app_slots > desktop->demo_count) {
+    app_slots = desktop->demo_count;
+  }
+  if (app_slots > BD_DESKTOP_MAX_ITEMS) {
+    app_slots = BD_DESKTOP_MAX_ITEMS;
+  }
+
+  desktop->item_count = 0;
+  for (int i = 0; i < desktop->demo_count; ++i) {
+    bd_wall_item *item = &desktop->items[desktop->item_count];
+    *item = desktop->demo_items[i];
+    desktop->item_app[desktop->item_count] = -1;
+    if (i < app_slots) {
+      bd_desktop_app_state *app = &desktop->apps[i];
+      item->title = app->name;
+      item->subtitle = app->subtitle[0] != '\0'
+                           ? app->subtitle
+                           : bd_app_category_name(app->category);
+      item->badge = app->running ? "运行" : app->badge;
+      item->image_path = app->cover[0] != '\0' ? app->cover : NULL;
+      item->progress = -1.0f;
+      bd_color color;
+      if (app->color[0] != '\0' && bd_color_from_hex(app->color, &color)) {
+        item->placeholder = bd_color_mix(desktop->bg, color, 0.55f);
+      } else {
+        item->placeholder =
+            bd_color_mix(desktop->bg, desktop->accent.soft, 0.5f);
+      }
+      desktop->item_app[desktop->item_count] = i;
+    }
+    ++desktop->item_count;
+  }
+
+  if (!bd_wall_set_items(desktop->wall, desktop->items, desktop->item_count)) {
+    fprintf(stderr, "desktop: failed to index wall items\n");
+    return;
+  }
+  if (focus >= 0) {
+    bd_wall_set_focus(desktop->wall, focus);
+  }
+  bd_gfx_damage_all(desktop->gfx);
+}
+
+static void free_app_frames(bd_desktop *desktop) {
+  for (int i = 0; i < desktop->app_count; ++i) {
+    if (desktop->apps[i].frame != NULL) {
+      bd_gfx_texture_destroy(desktop->gfx, desktop->apps[i].frame);
+      desktop->apps[i].frame = NULL;
+    }
+  }
 }
 
 static void draw_backdrop(bd_desktop *desktop, bd_gfx *gfx) {
@@ -298,14 +420,20 @@ bd_desktop *bd_desktop_create(bd_gfx *gfx, const bd_desktop_theme *theme) {
     return NULL;
   }
 
-  build_items(desktop);
-  if (!bd_wall_set_items(desktop->wall, desktop->items, desktop->item_count)) {
+  build_demo_items(desktop);
+  if (!bd_wall_set_items(desktop->wall, desktop->demo_items,
+                         desktop->demo_count)) {
     fprintf(stderr, "desktop: failed to index wall items\n");
     bd_wall_destroy(desktop->wall);
     bd_ui_fonts_free(&desktop->fonts);
     bd_gfx_texture_destroy(gfx, desktop->ambient);
     free(desktop);
     return NULL;
+  }
+  desktop->item_count = desktop->demo_count;
+  for (int i = 0; i < desktop->item_count; ++i) {
+    desktop->items[i] = desktop->demo_items[i];
+    desktop->item_app[i] = -1;
   }
   bd_wall_set_focus(desktop->wall, 0);
   return desktop;
@@ -315,6 +443,7 @@ void bd_desktop_destroy(bd_desktop *desktop) {
   if (desktop == NULL) {
     return;
   }
+  free_app_frames(desktop);
   if (desktop->plugin != NULL) {
     bd_plugin_tile_release(desktop->plugin, desktop->gfx);
     desktop->plugin = NULL;
@@ -361,6 +490,45 @@ static void draw_plugin_tile(bd_desktop *desktop, bd_gfx *gfx,
   bd_plugin_tile_draw(desktop->plugin, gfx, screen, &style);
 }
 
+static void draw_app_frames(bd_desktop *desktop, bd_gfx *gfx) {
+  for (int i = 0; i < desktop->item_count; ++i) {
+    int app_index = desktop->item_app[i];
+    if (app_index < 0 || app_index >= desktop->app_count) {
+      continue;
+    }
+    bd_desktop_app_state *app = &desktop->apps[app_index];
+    const bd_wall_item *item = &desktop->items[i];
+    bd_rect screen = bd_rect_make(item->rect.x + BD_WALL_ORIGIN_X,
+                                  item->rect.y + BD_WALL_ORIGIN_Y, item->rect.w,
+                                  item->rect.h);
+    if (app->frame != NULL) {
+      bd_rect dst = screen;
+      dst.y += 28;
+      dst.h -= 28 + 52;
+      if (dst.h > 16 && dst.w > 16) {
+        bd_gfx_push_clip(gfx, screen);
+        bd_gfx_draw_texture_round(gfx, app->frame, dst,
+                                  bd_color_rgba(235, 230, 220, 235), 4);
+        bd_gfx_pop_clip(gfx);
+      }
+    }
+    if (app->running) {
+      /* Keep the marker below the 76 px top bar, which overlaps row 0. */
+      bd_rect pill = bd_rect_make(screen.x + screen.w - 58, screen.y + 84, 50,
+                                  22);
+      if (pill.y + pill.h > screen.y + screen.h - 4) {
+        pill.y = screen.y + screen.h - 30;
+      }
+      bd_gfx_fill_round_rect(gfx, pill, 6, desktop->accent.accent);
+      bd_gfx_fill_round_rect(gfx,
+                             bd_rect_make(pill.x - 10, pill.y + 8, 6, 6), 3,
+                             desktop->accent.accent);
+      bd_gfx_draw_text(gfx, desktop->fonts.badge, pill.x + 9, pill.y + 16,
+                       desktop->accent.on_accent, "RUN");
+    }
+  }
+}
+
 void bd_desktop_draw(bd_desktop *desktop, bd_gfx *gfx) {
   if (desktop == NULL || gfx == NULL) {
     return;
@@ -370,9 +538,12 @@ void bd_desktop_draw(bd_desktop *desktop, bd_gfx *gfx) {
                       BD_WALL_ORIGIN_Y);
   draw_backdrop(desktop, gfx);
   bd_wall_draw(desktop->wall, gfx);
+  draw_app_frames(desktop, gfx);
   draw_plugin_tile(desktop, gfx, viewport);
   draw_top_bar(desktop, gfx);
-  draw_hint_bar(desktop, gfx);
+  if (desktop->hint_visible) {
+    draw_hint_bar(desktop, gfx);
+  }
 }
 
 bool bd_desktop_handle_key(bd_desktop *desktop, bd_key key, bool pressed) {
@@ -391,6 +562,205 @@ bool bd_desktop_handle_key(bd_desktop *desktop, bd_key key, bool pressed) {
     default:
       return false;
   }
+}
+
+bool bd_desktop_set_apps(bd_desktop *desktop, const bd_app *const *apps,
+                         size_t count) {
+  if (desktop == NULL || (count > 0 && apps == NULL)) {
+    return false;
+  }
+  free_app_frames(desktop);
+  desktop->app_count = 0;
+  int limit = (int)count;
+  if (limit > BD_DESKTOP_MAX_APPS) {
+    limit = BD_DESKTOP_MAX_APPS;
+  }
+  for (int i = 0; i < limit; ++i) {
+    const bd_app *app = apps[i];
+    bd_desktop_app_state *state = &desktop->apps[desktop->app_count];
+    memset(state, 0, sizeof(*state));
+    copy_string(state->id, sizeof(state->id), app->id);
+    copy_string(state->name, sizeof(state->name), app->name);
+    copy_string(state->subtitle, sizeof(state->subtitle), app->subtitle);
+    copy_string(state->badge, sizeof(state->badge), app_badge(app));
+    state->category = app->category;
+
+    bd_app_cover_span span = BD_APP_SPAN_1X1;
+    if (i < desktop->demo_count) {
+      span = span_for_rect(desktop->demo_items[i].rect);
+    }
+    bd_app_asset asset;
+    memset(&asset, 0, sizeof(asset));
+    if (bd_app_asset_cover(app, span, &asset)) {
+      if ((asset.kind == BD_APP_ASSET_COVER || asset.kind == BD_APP_ASSET_ICON) &&
+          asset.path[0] != '\0') {
+        copy_string(state->cover, sizeof(state->cover), asset.path);
+      }
+      if (asset.color[0] != '\0') {
+        copy_string(state->color, sizeof(state->color), asset.color);
+      }
+    }
+    if (state->color[0] == '\0') {
+      copy_string(state->color, sizeof(state->color),
+                  app->accent[0] != '\0' ? app->accent : app->fallback_color);
+    }
+    ++desktop->app_count;
+  }
+  rebuild_items(desktop);
+  return true;
+}
+
+const char *bd_desktop_focused_app_id(const bd_desktop *desktop) {
+  if (desktop == NULL) {
+    return NULL;
+  }
+  int index = bd_wall_focus(desktop->wall);
+  if (index < 0 || index >= desktop->item_count) {
+    return NULL;
+  }
+  int app_index = desktop->item_app[index];
+  if (app_index < 0 || app_index >= desktop->app_count) {
+    return NULL;
+  }
+  return desktop->apps[app_index].id;
+}
+
+static bool load_last_frame(bd_desktop *desktop, bd_desktop_app_state *app,
+                            const char *path, int target_width,
+                            int target_height) {
+  bd_app_last_frame frame;
+  memset(&frame, 0, sizeof(frame));
+  char error[192] = {0};
+  if (!bd_app_last_frame_open(path, &frame, error, sizeof(error))) {
+    return false;
+  }
+  bool ok = false;
+  size_t size = (size_t)frame.header.stride * frame.header.height;
+  uint8_t *pixels = (uint8_t *)malloc(size);
+  uint8_t *rgba = NULL;
+  bd_app_last_frame_header copied;
+  if (pixels != NULL &&
+      bd_app_last_frame_copy(&frame, pixels, size, &copied, error,
+                             sizeof(error)) &&
+      copied.format == BD_APP_PIXEL_RGBA8888 && copied.width > 0 &&
+      copied.height > 0) {
+    rgba = (uint8_t *)malloc((size_t)copied.width * copied.height * 4u);
+    if (rgba != NULL) {
+      uint32_t out_width = copied.width;
+      uint32_t out_height = copied.height;
+      if (target_width > 16 && target_height > 16) {
+        out_width = (uint32_t)target_width;
+        out_height = (uint32_t)target_height;
+      }
+      uint8_t *scaled =
+          (uint8_t *)malloc((size_t)out_width * out_height * 4u);
+      if (scaled != NULL) {
+        /*
+         * Downsample to the exact on-screen size. Drawing a 1024x768
+         * texture into a smaller tile makes adjacent texel selection depend
+         * on the driver's UV interpolation; a 1:1 blit is stable, and nearest
+         * resampling avoids mixing adjacent source pixels.
+         */
+        for (uint32_t y = 0; y < out_height; ++y) {
+          uint32_t source_y =
+              (uint32_t)((uint64_t)y * copied.height / out_height);
+          uint32_t source_row = copied.height - 1u - source_y;
+          for (uint32_t x = 0; x < out_width; ++x) {
+            uint32_t source_x =
+                (uint32_t)((uint64_t)x * copied.width / out_width);
+            memcpy(scaled + ((size_t)y * out_width + x) * 4u,
+                   pixels + ((size_t)source_row * copied.width + source_x) * 4u,
+                   4u);
+          }
+        }
+        bd_texture *texture = bd_gfx_texture_create(
+            desktop->gfx, (int)out_width, (int)out_height, BD_TEXTURE_NEAREST,
+            scaled);
+        free(scaled);
+        if (texture != NULL) {
+        if (app->frame != NULL) {
+          bd_gfx_texture_destroy(desktop->gfx, app->frame);
+        }
+          app->frame = texture;
+          app->frame_seq = copied.frame_seq;
+          copy_string(app->frame_path, sizeof(app->frame_path), path);
+          ok = true;
+        }
+      }
+    }
+  }
+  free(rgba);
+  free(pixels);
+  bd_app_last_frame_close(&frame);
+  return ok;
+}
+
+void bd_desktop_set_app_running(bd_desktop *desktop, const char *app_id,
+                                bool running, const char *last_frame_path) {
+  if (desktop == NULL || app_id == NULL) {
+    return;
+  }
+  for (int i = 0; i < desktop->app_count; ++i) {
+    bd_desktop_app_state *app = &desktop->apps[i];
+    if (strcmp(app->id, app_id) != 0) {
+      continue;
+    }
+    bool changed = app->running != running;
+    app->running = running;
+    if (running && last_frame_path != NULL && last_frame_path[0] != '\0') {
+      if (strcmp(app->frame_path, last_frame_path) != 0 || app->frame == NULL) {
+        int target_width = 0;
+        int target_height = 0;
+        for (int item = 0; item < desktop->item_count; ++item) {
+          if (desktop->item_app[item] == i) {
+            target_width = desktop->items[item].rect.w;
+            target_height = desktop->items[item].rect.h - 80;
+            break;
+          }
+        }
+        if (load_last_frame(desktop, app, last_frame_path, target_width,
+                            target_height)) {
+          changed = true;
+        }
+      }
+    } else if (!running && app->frame != NULL) {
+      bd_gfx_texture_destroy(desktop->gfx, app->frame);
+      app->frame = NULL;
+      app->frame_path[0] = '\0';
+      changed = true;
+    }
+    if (changed) {
+      rebuild_items(desktop);
+    }
+    return;
+  }
+}
+
+void bd_desktop_set_hint_visible(bd_desktop *desktop, bool visible) {
+  if (desktop == NULL || desktop->hint_visible == visible) {
+    return;
+  }
+  desktop->hint_visible = visible;
+  bd_gfx_damage_rect(desktop->gfx,
+                     bd_rect_make(0, BD_HINT_Y - 16, bd_gfx_width(desktop->gfx),
+                                  bd_gfx_height(desktop->gfx) - BD_HINT_Y + 16));
+}
+
+bool bd_desktop_hint_visible(const bd_desktop *desktop) {
+  return desktop != NULL && desktop->hint_visible;
+}
+
+bool bd_desktop_handle_action(bd_desktop *desktop, const char *action,
+                              bool pressed) {
+  if (desktop == NULL || action == NULL) {
+    return false;
+  }
+  if (strcmp(action, "ui.hint") == 0) {
+    bool was = desktop->hint_visible;
+    bd_desktop_set_hint_visible(desktop, pressed);
+    return was != desktop->hint_visible;
+  }
+  return false;
 }
 
 int bd_desktop_focus(const bd_desktop *desktop) {
@@ -476,7 +846,16 @@ void bd_desktop_set_plugin_tile(bd_desktop *desktop, bd_plugin *plugin) {
   if (desktop == NULL || plugin == NULL || desktop->item_count <= 0) {
     return;
   }
-  int index = desktop->item_count - 1;
+  int index = -1;
+  for (int i = desktop->item_count - 1; i >= 0; --i) {
+    if (desktop->item_app[i] < 0) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) {
+    return;
+  }
   int focus = bd_wall_focus(desktop->wall);
   bd_wall_item *item = &desktop->items[index];
   memset(item, 0, sizeof(*item));

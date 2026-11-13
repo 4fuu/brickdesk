@@ -318,6 +318,22 @@ static void fill_pattern(demo *app, uint8_t *pixels) {
   }
 }
 
+static void fill_stable_pattern(demo *app, uint8_t *pixels) {
+  /*
+   * A flat colour is intentional: host screenshot baselines compare exact
+   * pixels, and gradients would encode the host compiler's float rounding.
+   */
+  for (int y = 0; y < app->height; ++y) {
+    for (int x = 0; x < app->width; ++x) {
+      size_t offset = ((size_t)y * (size_t)app->width + (size_t)x) * 4u;
+      pixels[offset + 0] = 58;
+      pixels[offset + 1] = 52;
+      pixels[offset + 2] = 72;
+      pixels[offset + 3] = 255;
+    }
+  }
+}
+
 static bool write_last_frame(demo *app) {
   const char *path = getenv("BRICKDESK_LAST_FRAME");
   if (path == NULL || path[0] == '\0') {
@@ -332,14 +348,23 @@ static bool write_last_frame(demo *app) {
     return false;
   }
   bool captured = false;
-  if (app->display_ready && app->context != NULL) {
+  /*
+   * Host screenshot scenarios ask for a CPU pattern so the handoff tile does
+   * not depend on the GL driver's transcendental-math rounding.
+   */
+  bool stable_frame = getenv("BRICKDESK_DEMO_STABLE_FRAME") != NULL;
+  if (!stable_frame && app->display_ready && app->context != NULL) {
     render_frame(app);
     glReadPixels(0, 0, app->width, app->height, GL_RGBA, GL_UNSIGNED_BYTE,
                  pixels);
     captured = true;
   }
   if (!captured) {
-    fill_pattern(app, pixels);
+    if (stable_frame) {
+      fill_stable_pattern(app, pixels);
+    } else {
+      fill_pattern(app, pixels);
+    }
   }
 
   int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);

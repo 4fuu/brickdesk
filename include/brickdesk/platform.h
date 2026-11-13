@@ -67,4 +67,13 @@ int bd_platform_wait_event(bd_platform *platform, bd_event *event, int timeout_m
 
 void bd_platform_present(bd_platform *platform);
 
+/*
+ * Read end of a self-pipe that becomes readable when SDL has queued an event.
+ * The desktop loop polls it together with the service sockets so it can block
+ * once for all sources. Returns -1 when the platform could not create it.
+ */
+int bd_platform_event_fd(const bd_platform *platform);
+/* Drains the self-pipe and maps one queued SDL event: 1, 0 when empty, -1. */
+int bd_platform_pump_event(bd_platform *platform, bd_event *event);
+
 #endif /* BRICKDESK_PLATFORM_H */

@@ -76,6 +76,32 @@ typedef struct bd_config_options {
 typedef void (*bd_config_change_fn)(void *user, const char *key);
 
 /*
+ * Schema metadata for one key.  The settings UI derives its widgets from this
+ * instead of restating each row: bools become toggles, ints and durations get
+ * the min/max range, enums get their value list, accents become swatches.
+ * `enum_values` points into the compiled-in schema and is NULL-terminated.
+ */
+typedef struct bd_config_schema_info {
+  bd_config_type type;
+  long min_value;
+  long max_value;
+  const char *const *enum_values;
+  size_t enum_count;
+  const char *default_value; /* NULL when the key is optional and unset */
+  size_t max_length;
+  int duration_unit_ms;
+  bool required;
+} bd_config_schema_info;
+
+/*
+ * Looks up the spec for a dotted key, including dynamic [hotkey.*],
+ * [profile.*], [app.*], [core.*] and [device.*] keys.  Works for keys that
+ * have no loaded value yet.  Returns false when the key is not in the schema.
+ */
+bool bd_config_describe(const bd_config *config, const char *key,
+                        bd_config_schema_info *out);
+
+/*
  * Loads all configuration.  Never returns NULL for bad file contents: the
  * failing key is recorded as a diagnostic and the lower layer stays in effect.
  * Returns NULL only on allocation failure, with `error` filled in.

@@ -1401,6 +1401,74 @@ bool bd_config_get(const bd_config *config, const char *key,
   return true;
 }
 
+static const bd_config_spec *describe_spec(const bd_config *config,
+                                           const char *key) {
+  if (config != NULL) {
+    const bd_entry *entry = find_entry_by_key(config, key);
+    if (entry != NULL) {
+      return entry->spec;
+    }
+  }
+  size_t key_length = strlen(key);
+  for (size_t i = 0; i < bd_config_spec_count; ++i) {
+    const bd_config_spec *spec = &bd_config_specs[i];
+    size_t section_length = strlen(spec->section);
+    if (section_length >= 2 && spec->section[section_length - 1] == '*' &&
+        spec->section[section_length - 2] == '.') {
+      size_t prefix = section_length - 2;
+      if (key_length <= prefix + 1 || strncmp(key, spec->section, prefix) != 0 ||
+          key[prefix] != '.') {
+        continue;
+      }
+      if (strcmp(spec->key, "*") == 0) {
+        return spec;
+      }
+      size_t field_length = strlen(spec->key);
+      if (key_length <= prefix + 1 + field_length + 1) {
+        continue;
+      }
+      const char *field = key + key_length - field_length;
+      if (field[-1] == '.' && strcmp(field, spec->key) == 0) {
+        return spec;
+      }
+      continue;
+    }
+    size_t expected = section_length + 1 + strlen(spec->key);
+    if (key_length == expected && strncmp(key, spec->section, section_length) == 0 &&
+        key[section_length] == '.' &&
+        strcmp(key + section_length + 1, spec->key) == 0) {
+      return spec;
+    }
+  }
+  return NULL;
+}
+
+bool bd_config_describe(const bd_config *config, const char *key,
+                        bd_config_schema_info *out) {
+  if (key == NULL || out == NULL) {
+    return false;
+  }
+  const bd_config_spec *spec = describe_spec(config, key);
+  if (spec == NULL) {
+    return false;
+  }
+  memset(out, 0, sizeof(*out));
+  out->type = spec->type;
+  out->min_value = spec->min_value;
+  out->max_value = spec->max_value;
+  out->enum_values = spec->enum_values;
+  out->default_value = spec->default_value;
+  out->max_length = spec->max_length;
+  out->duration_unit_ms = spec->duration_unit_ms;
+  out->required = (spec->flags & BD_CONFIG_SPEC_REQUIRED) != 0;
+  if (spec->enum_values != NULL) {
+    while (spec->enum_values[out->enum_count] != NULL) {
+      ++out->enum_count;
+    }
+  }
+  return true;
+}
+
 const char *bd_config_get_string(const bd_config *config, const char *key,
                                  const char *fallback) {
   bd_config_value value;

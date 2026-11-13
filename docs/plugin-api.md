@@ -429,7 +429,9 @@ bd_plugin_host_destroy(host);
 `bd_plugin_tile_begin_frame()` uploads a changed frame and returns true when
 the caller must damage the tile rect; `bd_plugin_tile_draw()` draws the frame,
 the declarative tree, or the state fallback. The desktop calls these from
-`src/app/desktop.c`.
+`src/app/desktop.c`. `bd_plugin_ui_draw()` renders a tree with a focused node
+and scroll offset, and `bd_plugin_ui_measure()` returns the height the tree
+needs at a given width for frame sizing.
 
 The client SDK used by C plugins is in the same header:
 `bd_plugin_client_connect`, `bd_plugin_client_poll`,

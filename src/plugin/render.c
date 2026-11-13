@@ -449,6 +449,13 @@ void bd_plugin_ui_draw(const bd_plugin_ui *ui, bd_gfx *gfx, bd_rect rect,
   bd_gfx_pop_clip(gfx);
 }
 
+int bd_plugin_ui_measure(const bd_plugin_ui *ui, int width) {
+  if (ui == NULL || ui->root < 0 || width <= 0) {
+    return 0;
+  }
+  return measure_node(ui, ui->root, width, 0);
+}
+
 static const char *state_label(bd_plugin_state state) {
   switch (state) {
     case BD_PLUGIN_DISCOVERED:

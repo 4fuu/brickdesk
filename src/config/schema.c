@@ -40,6 +40,10 @@ const bd_config_spec bd_config_specs[] = {
     {"display", "refresh_hz", BD_CONFIG_INT, "60", 30, 120, NULL, 0, 0, 0},
     {"display", "brightness", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
 
+    /* audio */
+    {"audio", "volume", BD_CONFIG_INT, "70", 0, 100, NULL, 0, 0, 0},
+    {"audio", "mute", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+
     /* input */
     {"input", "repeat_delay_ms", BD_CONFIG_INT, "400", 0, 2000, NULL, 0, 0, 0},
     {"input", "repeat_interval_ms", BD_CONFIG_INT, "80", 10, 1000, NULL, 0, 0, 0},
@@ -66,8 +70,14 @@ const bd_config_spec bd_config_specs[] = {
     /* session */
     {"session", "state_quota_mb", BD_CONFIG_INT, "512", 64, 4096, NULL, 0, 0, 0},
     {"session", "max_background", BD_CONFIG_INT, "3", 1, 8, NULL, 0, 0, 0},
+    {"session", "memory_budget_mb", BD_CONFIG_INT, "560", 128, 1024, NULL, 0, 0,
+     0},
     {"session", "quick_resume", BD_CONFIG_ENUM, "auto", 0, 0, g_quick_resume, 0,
      0, 0},
+
+    /* perf */
+    {"perf", "global_profile", BD_CONFIG_STRING, "default", 0, 0, NULL, 64, 0,
+     0},
 
     /* [hotkey.<id>] */
     {"hotkey.*", "combo", BD_CONFIG_COMBO, NULL, 0, 0, NULL, 128, 0,

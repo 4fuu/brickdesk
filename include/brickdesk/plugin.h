@@ -341,6 +341,8 @@ void bd_plugin_tile_release(bd_plugin *plugin, bd_gfx *gfx);
 void bd_plugin_ui_draw(const bd_plugin_ui *ui, bd_gfx *gfx, bd_rect rect,
                        const bd_plugin_render_style *style, int focused_node,
                        int scroll_y);
+/* Height the tree needs at `width`, including its padding and gaps. */
+int bd_plugin_ui_measure(const bd_plugin_ui *ui, int width);
 
 /* --- client SDK (used by C plugins and test fixtures) ------------------ */
 

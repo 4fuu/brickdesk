@@ -248,6 +248,24 @@ target_compile_definitions(brickdesk_plugin
 )
 target_link_libraries(brickdesk_plugin PRIVATE brickdesk_warnings)
 
+# --- v3 settings page ---------------------------------------------------
+# Schema-driven settings UI.  Owns focus, rows, sub-pages and damage; the
+# event loop only feeds actions and time.  Links the plugin host because the
+# plugins page renders the host's declarative settings tree, and the perf
+# policy because the performance page lists perf.ini profiles.
+add_library(brickdesk_settings STATIC
+  src/settings/settings.c
+  src/settings/settings_draw.c
+  src/settings/system_stub.c
+)
+target_include_directories(brickdesk_settings
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(brickdesk_settings
+  PUBLIC brickdesk_core brickdesk_config brickdesk_input brickdesk_plugin
+  PRIVATE brickdesk_perf brickdesk_warnings
+)
+
 # --- in-app menu shim (M1-09) ------------------------------------------
 # LD_PRELOAD overlay for dynamically linked SDL2/EGL applications. It has no
 # SDL, EGL or GLES link-time dependency: the present calls and GL entry points

@@ -99,6 +99,17 @@ target_compile_definitions(bd_shell_settings_test PRIVATE
   BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
   BRICKDESK_TEST_BATTERY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery/full")
 
+add_executable(bd_shell_inputd_test shell_inputd_test.c)
+target_link_libraries(bd_shell_inputd_test PRIVATE
+  brickdesk_shell
+  brickdesk_config
+  brickdesk_settings
+  brickdesk_warnings)
+target_compile_definitions(bd_shell_inputd_test PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+  BRICKDESK_TEST_BATTERY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery/full")
+add_dependencies(bd_shell_inputd_test brickdesk-inputd)
+
 add_executable(bd_perf_client_test perf_client_test.c)
 target_link_libraries(bd_perf_client_test PRIVATE brickdesk_shell brickdesk_warnings)
 target_compile_definitions(bd_perf_client_test PRIVATE
@@ -240,6 +251,12 @@ set_tests_properties(perf_client PROPERTIES TIMEOUT 60)
 add_test(NAME shell_settings
   COMMAND bd_shell_settings_test $<TARGET_FILE:brickdesk-perfd>)
 set_tests_properties(shell_settings PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 120)
+
+add_test(NAME shell_inputd_reconnect
+  COMMAND bd_shell_inputd_test --inputd "$<TARGET_FILE:brickdesk-inputd>")
+set_tests_properties(shell_inputd_reconnect PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   TIMEOUT 120)
 

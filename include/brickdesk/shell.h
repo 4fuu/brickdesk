@@ -73,7 +73,7 @@ bool bd_shell_quit_requested(const bd_shell *shell);
 bool bd_shell_has_pending_images(const bd_shell *shell);
 bool bd_shell_hint_visible(const bd_shell *shell);
 uint64_t bd_shell_present_count(const bd_shell *shell);
-/* "inputd" or "sdl" for startup logs. */
+/* "inputd" or "sdl" for startup logs; inputd reconnects in the background. */
 const char *bd_shell_input_source(const bd_shell *shell);
 
 size_t bd_shell_app_count(const bd_shell *shell);

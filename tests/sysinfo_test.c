@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int failures = 0;
@@ -131,6 +132,51 @@ static void test_memory(void) {
   CHECK(bd_sys_process_tree_rss_mb(-1) == -1, "invalid pid is unknown");
   CHECK(bd_sys_process_tree_rss_mb(99999999) == -1,
         "missing pid is unknown");
+
+  int ready_pipe[2];
+  if (pipe(ready_pipe) != 0) {
+    CHECK(false, "create zombie sync pipe: %s", strerror(errno));
+    return;
+  }
+  pid_t child = fork();
+  if (child < 0) {
+    CHECK(false, "fork zombie child: %s", strerror(errno));
+    close(ready_pipe[0]);
+    close(ready_pipe[1]);
+    return;
+  }
+  if (child == 0) {
+    close(ready_pipe[0]);
+    char ready = '1';
+    (void)write(ready_pipe[1], &ready, 1);
+    close(ready_pipe[1]);
+    _exit(0);
+  }
+  close(ready_pipe[1]);
+
+  char ready = 0;
+  ssize_t received = read(ready_pipe[0], &ready, 1);
+  close(ready_pipe[0]);
+  CHECK(received == 1, "zombie child signaled readiness, got %zd", received);
+
+  siginfo_t info;
+  memset(&info, 0, sizeof(info));
+  if (waitid(P_PID, (id_t)child, &info, WEXITED | WNOWAIT) != 0) {
+    CHECK(false, "wait for zombie child: %s", strerror(errno));
+    waitpid(child, NULL, 0);
+    return;
+  }
+
+  int zombie_root = bd_sys_process_tree_rss_mb((int)child);
+  CHECK(zombie_root == -1, "zombie root rss is unknown, got %d",
+        zombie_root);
+  int zombie_tree = bd_sys_process_tree_rss_mb((int)getpid());
+  CHECK(zombie_tree == -1, "tree containing a zombie is unknown, got %d",
+        zombie_tree);
+
+  CHECK(waitpid(child, NULL, 0) == child, "reap zombie child");
+  rss = bd_sys_process_tree_rss_mb((int)getpid());
+  CHECK(rss >= 0, "self process tree rss recovers after reaping, got %d", rss);
 }
 
 int main(void) {

@@ -53,6 +53,7 @@ static bool proc_status(const char *path, proc_entry *entry) {
     return false;
   }
   bool has_ppid = false;
+  bool zombie = false;
   char line[256];
   while (fgets(line, sizeof(line), file) != NULL) {
     if (strncmp(line, "PPid:", 5) == 0) {
@@ -62,6 +63,12 @@ static bool proc_status(const char *path, proc_entry *entry) {
         entry->ppid = (int)value;
         has_ppid = true;
       }
+    } else if (strncmp(line, "State:", 6) == 0) {
+      const char *state = line + 6;
+      while (*state == ' ' || *state == '\t') {
+        ++state;
+      }
+      zombie = *state == 'Z';
     } else if (strncmp(line, "VmRSS:", 6) == 0) {
       char *end = NULL;
       unsigned long long value = strtoull(line + 6, &end, 10);
@@ -72,6 +79,10 @@ static bool proc_status(const char *path, proc_entry *entry) {
     }
   }
   fclose(file);
+  /* Some kernels expose "VmRSS: 0 kB" for zombies; that is not a sample. */
+  if (zombie) {
+    entry->rss_known = false;
+  }
   return has_ppid;
 }
 
@@ -160,7 +171,7 @@ int bd_sys_process_tree_rss_mb(int pid) {
   }
 
   const proc_entry *root = find_proc(items, count, pid);
-  if (root == NULL) {
+  if (root == NULL || !root->rss_known) {
     free(items);
     return -1;
   }
@@ -169,9 +180,15 @@ int bd_sys_process_tree_rss_mb(int pid) {
     if (!process_is_in_tree(items, count, items[i].pid, pid)) {
       continue;
     }
-    if (items[i].rss_known) {
-      total_kb += items[i].rss_kb;
+    /*
+     * A process can exist without VmRSS (zombies).  Reporting the remaining
+     * descendants would undercount the tree, so the whole reading is unknown.
+     */
+    if (!items[i].rss_known) {
+      free(items);
+      return -1;
     }
+    total_kb += items[i].rss_kb;
   }
   free(items);
   return (int)((total_kb + 1023u) / 1024u);

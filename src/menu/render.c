@@ -174,6 +174,7 @@ struct bd_menu_gl {
   bd_menu_typeface sans;
   bd_menu_font title_font;
   bd_menu_font body_font;
+  bd_menu_font cap_font;
   bd_vertex vertices[BD_MENU_MAX_VERTICES];
   int vertex_count;
 };
@@ -832,11 +833,51 @@ static void draw_text_right(bd_menu_gl *gl, bd_menu_font *font, float right,
             color, text);
 }
 
-static void draw_text_centered(bd_menu_gl *gl, bd_menu_font *font,
-                               float center_x, float baseline,
-                               bd_menu_color color, const char *text) {
-  draw_text(gl, font, center_x - (float)text_width(gl, font, text) / 2.0f,
-            baseline, color, text);
+typedef struct bd_menu_hint {
+  const char *key;
+  const char *label;
+} bd_menu_hint;
+
+static const bd_menu_hint FooterHints[] = {
+    {"A", "确认"},
+    {"B", "返回"},
+    {"←→", "调整"},
+};
+
+static int keycap_width(bd_menu_gl *gl, const char *key) {
+  int width = text_width(gl, &gl->cap_font, key) + 12;
+  return width < 22 ? 22 : width;
+}
+
+static int hint_item_width(bd_menu_gl *gl, const bd_menu_hint *item) {
+  return keycap_width(gl, item->key) + 6 +
+         text_width(gl, &gl->body_font, item->label);
+}
+
+static float draw_hint_keycap(bd_menu_gl *gl, float x, float y,
+                              const char *key, bd_menu_color surface,
+                              bd_menu_color ink) {
+  int width = keycap_width(gl, key);
+  bd_menu_color border = ink;
+  border.a = 0.22f;
+  bd_menu_color tint = ink;
+  tint.a = 0.04f;
+  round_rect(gl, x, y, (float)width, 22.0f, 4.0f, border);
+  round_rect(gl, x + 1, y + 1, (float)width - 2.0f, 20.0f, 3.0f, surface);
+  round_rect(gl, x + 1, y + 1, (float)width - 2.0f, 20.0f, 3.0f, tint);
+  int label_width = text_width(gl, &gl->cap_font, key);
+  draw_text(gl, &gl->cap_font, x + ((float)width - label_width) / 2.0f,
+            y + 15.0f, ink, key);
+  return (float)width;
+}
+
+static float draw_hint_item(bd_menu_gl *gl, float x, float y,
+                            const bd_menu_hint *item, bd_menu_color surface,
+                            bd_menu_color ink, bd_menu_color label_ink) {
+  float key_width = draw_hint_keycap(gl, x, y, item->key, surface, ink);
+  float label_x = x + key_width + 6.0f;
+  draw_text(gl, &gl->body_font, label_x, y + 16.0f, label_ink, item->label);
+  return label_x + (float)text_width(gl, &gl->body_font, item->label);
 }
 
 static void draw_background(bd_menu_gl *gl) {
@@ -909,23 +950,31 @@ bd_menu_gl *bd_menu_gl_create(int width, int height, bd_menu_color accent,
   load_typeface(&gl->sans, sans_path);
   int title_size = (int)lroundf(30.0f * gl->scale);
   int body_size = (int)lroundf(20.0f * gl->scale);
+  int cap_size = (int)lroundf(13.0f * gl->scale);
   if (title_size < 8) {
     title_size = 8;
   }
   if (body_size < 8) {
     body_size = 8;
   }
+  if (cap_size < 8) {
+    cap_size = 8;
+  }
   bool title_ok =
       font_create(gl, &gl->title_font,
                   gl->serif.ok ? &gl->serif : &gl->sans, title_size);
   bool body_ok = font_create(gl, &gl->body_font, &gl->sans, body_size);
-  if (!title_ok || !body_ok) {
+  bool cap_ok = font_create(gl, &gl->cap_font, &gl->sans, cap_size);
+  if (!title_ok || !body_ok || !cap_ok) {
     restore_state(gl);
     if (gl->title_font.atlas != 0) {
       font_destroy(gl, &gl->title_font);
     }
     if (gl->body_font.atlas != 0) {
       font_destroy(gl, &gl->body_font);
+    }
+    if (gl->cap_font.atlas != 0) {
+      font_destroy(gl, &gl->cap_font);
     }
     free(gl->serif.data);
     free(gl->sans.data);
@@ -950,6 +999,7 @@ void bd_menu_gl_destroy(bd_menu_gl *gl) {
   restore_state(gl);
   font_destroy(gl, &gl->title_font);
   font_destroy(gl, &gl->body_font);
+  font_destroy(gl, &gl->cap_font);
   if (gl->vbo != 0) {
     gl->gl.DeleteBuffers(1, &gl->vbo);
   }
@@ -1163,11 +1213,22 @@ void bd_menu_gl_draw_menu(bd_menu_gl *gl, const bd_menu_model *model) {
     }
   }
 
-  char hint[160];
-  snprintf(hint, sizeof(hint), "A 确认    B 返回    方向键 调整");
-  draw_text_centered(gl, &gl->body_font,
-                     layout.panel_x + layout.panel_w / 2.0f,
-                     layout.footer_y, ink3, hint);
+  int left_width = hint_item_width(gl, &FooterHints[0]) + 16 +
+                   hint_item_width(gl, &FooterHints[1]);
+  int right_width = hint_item_width(gl, &FooterHints[2]);
+  int footer_width = left_width + 44 + right_width;
+  float footer_x =
+      layout.panel_x + layout.panel_w / 2.0f - (float)footer_width / 2.0f;
+  float keycap_y = layout.footer_y - 16.0f;
+  float left_end = draw_hint_item(gl, footer_x, keycap_y, &FooterHints[0],
+                                  surface, ink, ink2);
+  left_end = draw_hint_item(gl, left_end + 16.0f, keycap_y, &FooterHints[1],
+                            surface, ink, ink2);
+  bd_menu_color divider = ink;
+  divider.a = 0.22f;
+  fill_rect(gl, left_end + 24.0f, keycap_y + 2.0f, 1.0f, 18.0f, divider);
+  draw_hint_item(gl, left_end + 44.0f, keycap_y, &FooterHints[2], surface,
+                 ink, ink2);
 }
 
 void bd_menu_gl_draw_background(bd_menu_gl *gl) {

@@ -867,9 +867,18 @@ static void draw_quick_icon(bd_gfx *gfx, int icon, int x, int y,
   }
 }
 
+enum {
+  /* Row content shares the header's 18 px optical inset. */
+  QUICK_ROW_RIGHT_PAD = 18,
+  /* Fixed value column keeps "100" clear of the slider knob. */
+  QUICK_VALUE_COL_W = 40,
+  QUICK_VALUE_GAP = 12,
+  QUICK_TRACK_W = 92
+};
+
 static void draw_slider(bd_home *home, bd_gfx *gfx, int x, int y, int value,
                         float alpha) {
-  int width = 92;
+  int width = QUICK_TRACK_W;
   bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y, width, 3), 1,
                          alpha_color(home->palette.line_strong, alpha));
   int fill = width * value / 100;
@@ -1041,7 +1050,7 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                  run->paused ? "已暂停" : "运行中", run->memory_mb);
       }
       bd_gfx_draw_text(gfx, home->fonts.badge13,
-                       row.x + row.w - 10 -
+                       row.x + row.w - QUICK_ROW_RIGHT_PAD -
                            bd_font_measure_text(home->fonts.badge13, meta),
                        row.y + 28,
                        home->quick_sel == i ? palette->ink2 : palette->ink3,
@@ -1071,19 +1080,22 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                      focused ? palette->ink : palette->ink2, LABELS[i]);
     if (i == 0 || i == 1) {
       int value = i == 0 ? home->brightness : home->volume;
+      int value_right = row.x + row.w - QUICK_ROW_RIGHT_PAD;
       if (value < 0) {
         const char *unknown = "未知";
         bd_gfx_draw_text(gfx, home->fonts.body14,
-                         row.x + row.w - 18 -
+                         value_right -
                              bd_font_measure_text(home->fonts.body14, unknown),
                          row.y + 29, palette->ink3, unknown);
       } else {
-        draw_slider(home, gfx, row.x + row.w - 26 - 8 - 92, row.y + 23, value,
-                    1.0f);
+        int value_left = value_right - QUICK_VALUE_COL_W;
+        draw_slider(home, gfx,
+                    value_left - QUICK_VALUE_GAP - QUICK_TRACK_W, row.y + 23,
+                    value, 1.0f);
         char number[16];
         snprintf(number, sizeof(number), "%d", value);
         bd_gfx_draw_text(gfx, home->fonts.body14,
-                         row.x + row.w - 10 -
+                         value_right -
                              bd_font_measure_text(home->fonts.body14, number),
                          row.y + 29, palette->ink2, number);
       }
@@ -1092,13 +1104,13 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                               ? "未知"
                               : (home->status.wifi ? "已连接" : "未连接");
       bd_gfx_draw_text(gfx, home->fonts.body14,
-                       row.x + row.w - 18 -
+                       row.x + row.w - QUICK_ROW_RIGHT_PAD -
                            bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink2, value);
     } else if (i == 3) {
       const char *value = "不可用";
       bd_gfx_draw_text(gfx, home->fonts.body14,
-                       row.x + row.w - 18 -
+                       row.x + row.w - QUICK_ROW_RIGHT_PAD -
                            bd_font_measure_text(home->fonts.body14, value),
                        row.y + 29, palette->ink3, value);
     }

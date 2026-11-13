@@ -33,7 +33,9 @@ transitions, and talks to the renderer only through `include/brickdesk/gfx.h`.
 - The quick panel is a 402 px edge panel on the right: full screen height,
   flush to the screen edge, square outer corners and no outer margin. Its inner
   cards, thumbnails and selected row keep the wall's 5 px radius; text keeps
-  16–18 px insets.
+  16–18 px insets. Row values and running metadata share an 18 px right inset.
+  Brightness and volume use a fixed 40 px value column, a 12 px gap and a 92 px
+  track, so "100" never collides with the slider knob.
 
 ## Damage and time
 

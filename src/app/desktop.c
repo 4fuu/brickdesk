@@ -650,8 +650,13 @@ static bool load_last_frame(bd_desktop *desktop, bd_desktop_app_state *app,
         memcpy(rgba + (size_t)y * row,
                pixels + (size_t)(copied.height - 1u - y) * row, row);
       }
+      /*
+       * Nearest avoids 1-LSB linear-sampling differences between Mesa
+       * versions, which would otherwise make the scenario baseline
+       * driver-dependent.
+       */
       bd_texture *texture = bd_gfx_texture_create(
-          desktop->gfx, (int)copied.width, (int)copied.height, BD_TEXTURE_LINEAR,
+          desktop->gfx, (int)copied.width, (int)copied.height, BD_TEXTURE_NEAREST,
           rgba);
       if (texture != NULL) {
         if (app->frame != NULL) {

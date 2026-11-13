@@ -596,6 +596,9 @@ bool bd_session_suggest_eviction(const bd_session *session,
 
 int bd_session_background_count(const bd_session *session);
 int bd_session_max_background(const bd_session *session);
+/* Applies a live limit change without recreating the session. */
+void bd_session_set_max_background(bd_session *session, int value);
+void bd_session_set_state_quota(bd_session *session, int value);
 
 /*
  * Path of the menu control socket injected as BRICKDESK_MENU_SOCKET. The

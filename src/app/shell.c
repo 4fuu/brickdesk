@@ -674,7 +674,20 @@ static void shell_config_changed(void *user, const char *key) {
   } else if (strncmp(key, "display.", 8) == 0) {
     shell_display_apply(shell);
   } else if (strcmp(key, "session.max_background") == 0) {
+    long max_background =
+        bd_config_get_int(shell->settings, "session.max_background", 3);
+    if (max_background < 1) {
+      max_background = 3;
+    }
+    bd_session_set_max_background(shell->session, (int)max_background);
     shell_publish_status(shell, true);
+  } else if (strcmp(key, "session.state_quota_mb") == 0) {
+    long quota =
+        bd_config_get_int(shell->settings, "session.state_quota_mb", 512);
+    if (quota < 1) {
+      quota = 512;
+    }
+    bd_session_set_state_quota(shell->session, (int)quota);
   } else if (strncmp(key, "led.", 4) == 0 ||
              strncmp(key, "input.haptic", 12) == 0) {
     shell->led_profile_valid = false;

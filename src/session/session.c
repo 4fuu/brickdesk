@@ -2430,6 +2430,18 @@ int bd_session_max_background(const bd_session *session) {
   return session != NULL ? session->max_background : 0;
 }
 
+void bd_session_set_max_background(bd_session *session, int value) {
+  if (session != NULL) {
+    session->max_background = value > 0 ? value : 3;
+  }
+}
+
+void bd_session_set_state_quota(bd_session *session, int value) {
+  if (session != NULL) {
+    session->state_quota_mb = value > 0 ? value : 512;
+  }
+}
+
 bool bd_session_suggest_eviction(const bd_session *session,
                                  bd_session_eviction *out) {
   if (session == NULL || out == NULL) {

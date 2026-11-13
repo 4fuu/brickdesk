@@ -99,7 +99,7 @@ needs a rebuild just to show a new number.
 | 性能 | `perf.global_profile` and every `[app.<id>] profile` override, both cycled through perf.ini profile names |
 | 后台 | `session.max_background`, `session.memory_budget_mb` |
 | 插件 | sorted plugin list; A opens the plugin host's declarative settings tree |
-| 系统 | version/backend, storage, about and a destructive reset row |
+| 系统 | version/backend, storage, CPU/GPU temperature (when thermal zones exist), battery estimate + 24 h chart, about and a destructive reset row |
 
 New config keys added for this page:
 

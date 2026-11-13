@@ -40,4 +40,12 @@ int bd_sys_process_tree_rss_mb(int pid);
  */
 bd_wifi_state bd_sys_wifi_state(const char *root);
 
+/*
+ * Reads /sys/class/thermal/thermal_zone* and classifies zones by their type
+ * string.  Returns false when no zone could be read.  cpu_c and gpu_c are set
+ * to rounded degrees Celsius; each is set to -999 when that class is absent.
+ * Values are deliberately not invented from a single sensor.
+ */
+bool bd_sys_temperature(const char *root, int *cpu_c, int *gpu_c);
+
 #endif /* BRICKDESK_SYSINFO_H */

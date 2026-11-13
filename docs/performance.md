@@ -273,6 +273,28 @@ bytes are 2.2 MiB against the default 96 MiB budget.
    and polls only for that driver. The same idle check reports 0.000 ms CPU
    and 0 presents. Device fbdev/mali paths still use SDL's blocking wait.
 
+## Performance policy additions (WP-22)
+
+- `auto` profile: `schedutil` governors the CPU; perfd re-evaluates the battery
+  every 5 seconds. On battery at or below 10%, every profile (including an
+  explicit performance lease) is capped at the highest available step
+  <= 816 MHz. Plugging in or recovering above 10% lifts the cap on the next
+  apply.
+- Custom frequency steps are `perf.ini` profiles: `min_khz`/`max_khz` are
+  clamped to `cpuinfo_min_freq`/`cpuinfo_max_freq` and snapped down to an
+  available `scaling_available_frequencies` entry. Add as many
+  `[profile.<name>]` sections as needed; the settings page cycles them.
+- Multiple `cpufreq/policy*` directories are counted and reported by
+  `perf.get`/capabilities. TG4040/A133 exposes one cluster (`policy0`), so the
+  transaction writes the selected policy; if a future kernel exposes more, the
+  probe still reports the count but only the selected policy is controlled.
+- CPU/GPU temperatures come from `/sys/class/thermal/thermal_zone*`, classified
+  by the zone `type` string (`cpu`/`soc` vs `gpu`). The settings System page
+  shows each rounded °C reading only when the zone exists; on a host without
+  thermal zones the rows are omitted, not filled with a fake value.
+- Low-battery capping is applied after profile resolution and before the sysfs
+  transaction, so a failed API write rolls back to the previous frequency.
+
 ## Device measurements to take first
 
 `bench_render` is cross-compiled for aarch64 and shipped in the release package

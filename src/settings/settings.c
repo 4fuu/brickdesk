@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "brickdesk/theme.h"
+#include "brickdesk/sysinfo.h"
 #include "brickdesk/version.h"
 
 #ifndef BRICKDESK_ASSET_DIR
@@ -724,6 +725,20 @@ static bool build_system_page(bd_settings *settings) {
   char storage[96];
   format_storage(settings, storage, sizeof(storage));
   add_info_row(settings, "!storage", "存储", "配置与存档所在分区", storage);
+  int cpu_c = -999;
+  int gpu_c = -999;
+  if (bd_sys_temperature(NULL, &cpu_c, &gpu_c)) {
+    if (cpu_c != -999) {
+      char text[32];
+      snprintf(text, sizeof(text), "%d °C", cpu_c);
+      add_info_row(settings, "!temp.cpu", "CPU 温度", "热区传感器读数", text);
+    }
+    if (gpu_c != -999) {
+      char text[32];
+      snprintf(text, sizeof(text), "%d °C", gpu_c);
+      add_info_row(settings, "!temp.gpu", "GPU 温度", "热区传感器读数", text);
+    }
+  }
   if (settings->battery_history != NULL) {
     char remaining[48];
     int minutes = bd_battery_history_remaining_minutes(

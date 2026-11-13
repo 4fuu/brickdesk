@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "brickdesk/bootlogo.h"
 #include "brickdesk/config.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/platform.h"
@@ -26,6 +27,9 @@ static void print_usage(FILE *stream) {
           "  --verbose        print GL extensions at startup\n"
           "  --idle-check MS  block for MS milliseconds and report redraws\n"
           "  --config-dir DIR load configuration from DIR\n"
+          "  --bootlogo-check FILE   validate a boot logo BMP and exit\n"
+          "  --bootlogo-apply FILE   install a validated boot logo and exit\n"
+          "  --bootlogo-restore      restore the saved stock boot logo and exit\n"
           "  -h, --help       show this help\n");
 }
 
@@ -99,6 +103,9 @@ int main(int argc, char **argv) {
   bool verbose = false;
   int idle_check_ms = 0;
   const char *config_dir = NULL;
+  const char *bootlogo_check = NULL;
+  const char *bootlogo_apply = NULL;
+  bool bootlogo_restore = false;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
@@ -132,6 +139,26 @@ int main(int argc, char **argv) {
       idle_check_ms = (int)value;
       continue;
     }
+    if (strcmp(arg, "--bootlogo-check") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "brickdesk: --bootlogo-check needs a BMP file\n");
+        return 2;
+      }
+      bootlogo_check = argv[++i];
+      continue;
+    }
+    if (strcmp(arg, "--bootlogo-apply") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "brickdesk: --bootlogo-apply needs a BMP file\n");
+        return 2;
+      }
+      bootlogo_apply = argv[++i];
+      continue;
+    }
+    if (strcmp(arg, "--bootlogo-restore") == 0) {
+      bootlogo_restore = true;
+      continue;
+    }
     if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
       print_usage(stdout);
       return 0;
@@ -139,6 +166,37 @@ int main(int argc, char **argv) {
     fprintf(stderr, "brickdesk: unknown option: %s\n", arg);
     print_usage(stderr);
     return 2;
+  }
+
+  if (bootlogo_check != NULL || bootlogo_apply != NULL ||
+      bootlogo_restore) {
+    char logo_error[256] = {0};
+    bd_bootlogo_result result;
+    if (bootlogo_check != NULL) {
+      bd_bootlogo_info info;
+      memset(&info, 0, sizeof(info));
+      result = bd_bootlogo_check(bootlogo_check, &info, logo_error,
+                                 sizeof(logo_error));
+      if (result == BD_BOOTLOGO_OK) {
+        printf("bootlogo: ok %dx%d %d bpp, %u bytes\n", info.width,
+               info.height, info.bits_per_pixel, info.file_bytes);
+      }
+    } else {
+      result = bd_bootlogo_apply(bootlogo_apply, bootlogo_restore, logo_error,
+                                 sizeof(logo_error));
+      if (result == BD_BOOTLOGO_OK) {
+        printf("bootlogo: %s ok\n",
+               bootlogo_restore ? "restore" : "install");
+        printf("bootlogo: reboot to see the new image\n");
+      }
+    }
+    if (result != BD_BOOTLOGO_OK) {
+      fprintf(stderr, "brickdesk: bootlogo %s: %s\n",
+              bd_bootlogo_result_name(result),
+              logo_error[0] != '\0' ? logo_error : "failed");
+      return 1;
+    }
+    return 0;
   }
 
   bd_config_options config_options = {config_dir, true};

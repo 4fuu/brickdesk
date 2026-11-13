@@ -266,6 +266,7 @@ target_link_libraries(brickdesk_input
 # session library.
 add_library(brickdesk_sysinfo STATIC
   src/system/sysinfo.c
+  src/system/bootlogo.c
 )
 target_include_directories(brickdesk_sysinfo
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -376,7 +377,7 @@ target_include_directories(brickdesk_settings
 )
 target_link_libraries(brickdesk_settings
   PUBLIC brickdesk_core brickdesk_config brickdesk_input brickdesk_plugin
-  PRIVATE brickdesk_perf brickdesk_battery brickdesk_warnings
+  PRIVATE brickdesk_perf brickdesk_battery brickdesk_sysinfo brickdesk_warnings
 )
 
 target_link_libraries(brickdesk_shell PUBLIC brickdesk_settings)

@@ -2,8 +2,9 @@
 
 #include "brickdesk/perf.h"
 
-#include <ctype.h>
 #include <errno.h>
+#include <dirent.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
@@ -41,6 +42,8 @@ typedef struct perfd {
   char applied_key[3 * (BD_PERF_NAME_MAX + 1) + 4];
   char applied_profile[BD_PERF_NAME_MAX + 1];
   int next_client_id;
+  uint64_t auto_next_ms;
+  int auto_low_state; /* -1 unknown, 0 normal, 1 low-battery throttle */
 
   perfd_client clients[BD_PERFD_MAX_CLIENTS];
   size_t client_count;
@@ -297,6 +300,10 @@ static void parse_request(const char *line, perf_request *request) {
   json_field_string(line, "core", request->core, sizeof(request->core));
 }
 
+static void effective_request(const perfd *daemon, perf_request *request);
+static void auto_power_state(const perfd *daemon, bool *charging,
+                             int *capacity);
+
 static bool daemon_apply(perfd *daemon, const perf_request *request,
                          bd_perf_plan *plan, char *error,
                          size_t error_size) {
@@ -314,6 +321,33 @@ static bool daemon_apply(perfd *daemon, const perf_request *request,
     return false;
   }
 
+  /*
+   * Low-battery throttle: below 10% on battery, cap the requested maximum at
+   * the highest step <= 816 MHz.  This runs for every profile, including an
+   * explicit performance lease, and never raises a lower user limit.
+   */
+  bool charging = false;
+  int capacity = -1;
+  auto_power_state(daemon, &charging, &capacity);
+  bool battery_capped = false;
+  if (!charging && capacity >= 0 && capacity <= 10 && system.cpufreq) {
+    int cap = system.cpuinfo_min_khz > 0 ? system.cpuinfo_min_khz : 816000;
+    for (size_t i = 0; i < system.freq_count; ++i) {
+      if (system.freqs[i] <= 816000 && system.freqs[i] > cap) {
+        cap = system.freqs[i];
+      }
+    }
+    if (plan->max_khz > cap) {
+      plan->max_khz = cap;
+      if (plan->min_khz > cap) {
+        plan->min_khz = cap;
+      }
+      plan->max_change = plan->max_khz != plan->current_max_khz;
+      plan->min_change = plan->min_khz != plan->current_min_khz;
+      battery_capped = true;
+    }
+  }
+
   bd_perf_apply_report report;
   if (!bd_perf_apply(&system, plan, &report, error, error_size)) {
     return false;
@@ -329,6 +363,10 @@ static bool daemon_apply(perfd *daemon, const perf_request *request,
   }
   snprintf(daemon->applied_profile, sizeof(daemon->applied_profile), "%s",
            plan->profile);
+  if (battery_capped) {
+    log_message(daemon, "low battery (%d%%): max capped to %d kHz", capacity,
+                plan->max_khz);
+  }
   log_message(daemon,
               "applied profile=%s app=%s core=%s governor %s->%s "
               "min %d->%d max %d->%d cores %d->%d swappiness %d->%d",
@@ -342,6 +380,113 @@ static bool daemon_apply(perfd *daemon, const perf_request *request,
   return true;
 }
 
+static void build_root_path(const perfd *daemon, const char *relative,
+                            char *out, size_t out_size) {
+  if (out == NULL || out_size == 0) {
+    return;
+  }
+  const char *root = daemon->sysfs_root;
+  if (root == NULL || root[0] == '\0') {
+    snprintf(out, out_size, "%s", relative);
+    return;
+  }
+  size_t root_length = strlen(root);
+  size_t relative_length = strlen(relative);
+  bool slash = root_length > 0 && root[root_length - 1] == '/';
+  size_t needed = root_length + (slash ? 0u : 1u) + relative_length;
+  if (needed >= out_size) {
+    out[0] = '\0';
+    return;
+  }
+  memcpy(out, root, root_length);
+  size_t used = root_length;
+  if (!slash) {
+    out[used++] = '/';
+  }
+  memcpy(out + used, relative, relative_length + 1);
+}
+
+static bool read_root_long(const perfd *daemon, const char *relative,
+                           long *value) {
+  char path[BD_PERF_PATH_MAX];
+  build_root_path(daemon, relative, path, sizeof(path));
+  FILE *file = fopen(path, "r");
+  if (file == NULL) {
+    return false;
+  }
+  char text[64];
+  bool ok = fgets(text, sizeof(text), file) != NULL;
+  fclose(file);
+  if (!ok) {
+    return false;
+  }
+  errno = 0;
+  char *end = NULL;
+  long parsed = strtol(text, &end, 10);
+  if (errno != 0 || end == text) {
+    return false;
+  }
+  *value = parsed;
+  return true;
+}
+
+/*
+ * NextUI's auto policy follows external power and cuts to powersave on a low
+ * battery.  brickdesk applies the user's existing performance/powersave
+ * profiles instead of hard-coded frequencies, so custom perf.ini steps still
+ * win; when a profile is missing we fall back to "default" or the first entry.
+ */
+static void auto_power_state(const perfd *daemon, bool *charging,
+                             int *capacity) {
+  *charging = false;
+  *capacity = -1;
+  long value = 0;
+  if (read_root_long(daemon, "sys/class/power_supply/axp2202-usb/online",
+                     &value)) {
+    *charging = value != 0;
+  } else {
+    char base[BD_PERF_PATH_MAX];
+    build_root_path(daemon, "sys/class/power_supply", base, sizeof(base));
+    DIR *dir = opendir(base);
+    if (dir != NULL) {
+      struct dirent *entry;
+      while ((entry = readdir(dir)) != NULL) {
+        char relative[BD_PERF_PATH_MAX];
+        snprintf(relative, sizeof(relative),
+                 "sys/class/power_supply/%s/online", entry->d_name);
+        if (read_root_long(daemon, relative, &value) && value != 0) {
+          *charging = true;
+          break;
+        }
+      }
+      closedir(dir);
+    }
+  }
+  if (read_root_long(daemon, "sys/class/power_supply/axp2202-battery/capacity",
+                     &value) &&
+      value >= 0 && value <= 100) {
+    *capacity = (int)value;
+  } else {
+    char base[BD_PERF_PATH_MAX];
+    build_root_path(daemon, "sys/class/power_supply", base, sizeof(base));
+    DIR *dir = opendir(base);
+    if (dir != NULL) {
+      struct dirent *entry;
+      while ((entry = readdir(dir)) != NULL) {
+        char relative[BD_PERF_PATH_MAX];
+        snprintf(relative, sizeof(relative),
+                 "sys/class/power_supply/%s/capacity", entry->d_name);
+        if (read_root_long(daemon, relative, &value) && value >= 0 &&
+            value <= 100) {
+          *capacity = (int)value;
+          break;
+        }
+      }
+      closedir(dir);
+    }
+  }
+}
+
 static void effective_request(const perfd *daemon, perf_request *request) {
   memset(request, 0, sizeof(*request));
   const bd_perf_lease *lease =
@@ -352,8 +497,13 @@ static void effective_request(const perfd *daemon, perf_request *request) {
     snprintf(request->app, sizeof(request->app), "%s", lease->app);
     snprintf(request->core, sizeof(request->core), "%s", lease->core);
   } else {
-    snprintf(request->profile, sizeof(request->profile), "%s",
-             daemon->global_profile);
+    if (strcmp(daemon->global_profile, "auto") == 0 &&
+        bd_perf_policy_find_profile(&daemon->policy, "auto") != NULL) {
+      snprintf(request->profile, sizeof(request->profile), "auto");
+    } else {
+      snprintf(request->profile, sizeof(request->profile), "%s",
+               daemon->global_profile);
+    }
   }
 }
 
@@ -510,7 +660,8 @@ static void handle_global(perfd *daemon, perfd_client *client, long id,
     send_error(client, id, -32602, "missing profile");
     return;
   }
-  if (bd_perf_policy_find_profile(&daemon->policy, profile) == NULL) {
+  if (bd_perf_policy_find_profile(&daemon->policy, profile) == NULL &&
+      strcmp(profile, "auto") != 0) {
     send_error(client, id, -32602, "unknown profile");
     return;
   }
@@ -526,8 +677,7 @@ static void handle_global(perfd *daemon, perfd_client *client, long id,
            profile);
 
   perf_request request;
-  memset(&request, 0, sizeof(request));
-  snprintf(request.profile, sizeof(request.profile), "%s", profile);
+  effective_request(daemon, &request);
   bd_perf_plan plan;
   char error[256] = "";
   if (!daemon_apply(daemon, &request, &plan, error, sizeof(error))) {
@@ -1023,17 +1173,20 @@ static bool setup_socket(perfd *daemon, const char *requested) {
 
 static int compute_timeout(perfd *daemon, uint64_t now_ms) {
   uint64_t deadline = 0;
-  if (!bd_perf_leases_next_deadline(&daemon->leases, &deadline)) {
-    return -1;
+  int timeout = -1;
+  if (bd_perf_leases_next_deadline(&daemon->leases, &deadline)) {
+    if (deadline <= now_ms) {
+      return 0;
+    }
+    uint64_t remaining = deadline - now_ms;
+    timeout = remaining > (uint64_t)INT_MAX ? INT_MAX : (int)remaining;
   }
-  if (deadline <= now_ms) {
-    return 0;
+  if (strcmp(daemon->global_profile, "auto") == 0 &&
+      (timeout < 0 || timeout > 5000)) {
+    /* Re-evaluate charging/low-battery at least every five seconds. */
+    timeout = 5000;
   }
-  uint64_t remaining = deadline - now_ms;
-  if (remaining > (uint64_t)INT_MAX) {
-    return INT_MAX;
-  }
-  return (int)remaining;
+  return timeout;
 }
 
 static void daemon_cleanup(perfd *daemon) {
@@ -1264,6 +1417,21 @@ static bool run_daemon(perfd *daemon, uint64_t *exit_code) {
     now = monotonic_ms();
     if (bd_perf_leases_expire(&daemon->leases, now) > 0) {
       recompute_effective(daemon, now, "lease expired");
+    }
+    if (strcmp(daemon->global_profile, "auto") == 0 &&
+        now >= daemon->auto_next_ms) {
+      daemon->auto_next_ms = now + 5000;
+      bool charging = false;
+      int capacity = -1;
+      auto_power_state(daemon, &charging, &capacity);
+      int low_state =
+          (!charging && capacity >= 0 && capacity <= 10) ? 1 : 0;
+      if (daemon->auto_low_state < 0 ||
+          low_state != daemon->auto_low_state) {
+        daemon->auto_low_state = low_state;
+        daemon->applied_key[0] = '\0';
+        recompute_effective(daemon, now, "auto low-battery state");
+      }
     }
     if (ready == 0) {
       continue;

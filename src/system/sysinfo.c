@@ -2,6 +2,7 @@
 
 #include "brickdesk/sysinfo.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -245,4 +246,85 @@ bd_wifi_state bd_sys_wifi_state(const char *root) {
     return BD_WIFI_UNKNOWN;
   }
   return BD_WIFI_UNKNOWN;
+}
+
+static bool contains_ci(const char *text, const char *needle) {
+  size_t length = strlen(needle);
+  if (length == 0) {
+    return true;
+  }
+  for (const char *p = text; *p != '\0'; ++p) {
+    size_t i = 0;
+    while (i < length && p[i] != '\0' &&
+           tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+      ++i;
+    }
+    if (i == length) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool bd_sys_temperature(const char *root, int *cpu_c, int *gpu_c) {
+  if (cpu_c != NULL) {
+    *cpu_c = -999;
+  }
+  if (gpu_c != NULL) {
+    *gpu_c = -999;
+  }
+  char base[BD_SYSINFO_PATH];
+  if (!join_path(base, sizeof(base), root, "sys/class/thermal")) {
+    return false;
+  }
+  DIR *directory = opendir(base);
+  if (directory == NULL) {
+    return false;
+  }
+  bool any = false;
+  int fallback_cpu = -999;
+  struct dirent *entry;
+  while ((entry = readdir(directory)) != NULL) {
+    if (strncmp(entry->d_name, "thermal_zone", 12) != 0) {
+      continue;
+    }
+    char type_path[BD_SYSINFO_PATH];
+    char temp_path[BD_SYSINFO_PATH];
+    if (!join_path(type_path, sizeof(type_path), base, entry->d_name) ||
+        !join_path(temp_path, sizeof(temp_path), type_path, "temp")) {
+      continue;
+    }
+    char type[64] = "";
+    read_file_value(type_path, type, sizeof(type));
+    char temp_text[64];
+    if (!read_file_value(temp_path, temp_text, sizeof(temp_text))) {
+      continue;
+    }
+    char *end = NULL;
+    long milli = strtol(temp_text, &end, 10);
+    if (end == temp_text) {
+      continue;
+    }
+    int celsius = (int)((milli + (milli >= 0 ? 500 : -500)) / 1000);
+    if (celsius < -50 || celsius > 150) {
+      continue;
+    }
+    any = true;
+    if (contains_ci(type, "gpu")) {
+      if (gpu_c != NULL) {
+        *gpu_c = celsius;
+      }
+    } else if (contains_ci(type, "cpu") || contains_ci(type, "soc")) {
+      if (cpu_c != NULL) {
+        *cpu_c = celsius;
+      }
+    } else if (fallback_cpu == -999) {
+      fallback_cpu = celsius;
+    }
+  }
+  closedir(directory);
+  if (cpu_c != NULL && *cpu_c == -999) {
+    *cpu_c = fallback_cpu;
+  }
+  return any;
 }

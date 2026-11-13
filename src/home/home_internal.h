@@ -24,7 +24,10 @@
 #define BD_HOME_CLOSE_MS 180
 #define BD_HOME_PREFETCH 1024
 #define BD_HOME_MAX_RUNNING 8
-#define BD_HOME_QUICK_ROWS_START 204
+#define BD_HOME_QUICK_MEM_BAR_Y 196
+#define BD_HOME_QUICK_MEM_BAR_H 12
+#define BD_HOME_QUICK_MEM_CELL 3
+#define BD_HOME_QUICK_ROWS_START 216
 #define BD_HOME_QUICK_ROW_H 50
 #define BD_HOME_QUICK_ROW_BOX 48
 #define BD_HOME_QUICK_CONTROL_H 48
@@ -172,6 +175,14 @@ struct bd_home {
   bd_home_running running[BD_HOME_MAX_RUNNING];
   int running_count;
   uint64_t now_ms;
+
+  /* CUI-style ordered-dither memory strip, rebuilt only on value/theme/size. */
+  bd_texture *memory_dither;
+  int memory_dither_width;
+  int memory_dither_height;
+  int memory_dither_value;
+  uint32_t memory_dither_rgb;
+  bool memory_dither_valid;
 
   bool quick_open;
   bool quick_anim;

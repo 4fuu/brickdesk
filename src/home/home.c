@@ -732,6 +732,10 @@ void bd_home_destroy(bd_home *home) {
       bd_gfx_texture_destroy(home->gfx, home->running[i].frame);
     }
   }
+  if (home->memory_dither != NULL) {
+    bd_gfx_texture_destroy(home->gfx, home->memory_dither);
+    home->memory_dither = NULL;
+  }
   entries_free(home);
   fonts_free(&home->fonts);
   free(home);
@@ -1298,6 +1302,7 @@ void bd_home_set_accent(bd_home *home, bd_color accent_base) {
   }
   home->style.accent_base = accent_base;
   bd_home_palette_apply(home);
+  home->memory_dither_valid = false;
   if (home->launch == BD_HOME_LAUNCH_OPEN) {
     home->launch_painted = false;
   }
@@ -1527,6 +1532,7 @@ bool bd_home_set_running(bd_home *home, const char *id,
     home->quick_sel = clamp_int(home->quick_sel, 0, max_selection);
     quick_scroll_to_selection(home);
   }
+  home->memory_dither_valid = false;
   bd_home_damage_item(home, item);
   if (home->quick_open || home->quick_anim) {
     damage_quick_panel(home);
@@ -1547,6 +1553,7 @@ bool bd_home_set_running_memory(bd_home *home, const char *id, int memory_mb) {
     return true;
   }
   home->running[index].memory_mb = value;
+  home->memory_dither_valid = false;
   if (home->quick_open || home->quick_anim) {
     damage_quick_panel(home);
   }
@@ -1577,6 +1584,7 @@ void bd_home_clear_running(bd_home *home, const char *id) {
   int old_sel = home->quick_sel;
   running_remove_at(home, index);
   update_running_flags(home);
+  home->memory_dither_valid = false;
   bd_home_damage_item(home, item);
   if (panel_open) {
     if (index < old_sel) {

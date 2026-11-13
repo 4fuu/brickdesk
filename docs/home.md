@@ -44,6 +44,13 @@ transitions, and talks to the renderer only through `include/brickdesk/gfx.h`.
   panel. Opening the panel resets the list to the first row, and adding,
   removing or reordering a running app preserves the selected app or control
   and its visibility.
+- The background-memory strip is 12 px high and uses 3 px ordered-dither cells
+  (122×4 texels drawn at exactly 3× with nearest filtering). The texture is
+  rebuilt only when the summed value or accent changes; unknown/zero values
+  leave the rounded track empty and keep the existing text. It is the only
+  dotted element in the panel; text, icons and focus rings stay solid. The
+  threshold is derived from CUI's MIT-licensed 8×8 Bayer pattern (see
+  `NOTICE`).
 
 ## Damage and time
 

@@ -941,6 +941,117 @@ static void draw_quick_scrollbar(const bd_home *home, bd_gfx *gfx,
       home->palette.ink3);
 }
 
+/*
+ * Ordered 8x8 Bayer threshold, adapted from CUI's pattern meter
+ * (commit 86d9781bbc3c35c264ec46287ad89c1d86a4c4de, MIT).  One texel is one
+ * dither cell; the texture is drawn with nearest filtering at an integer
+ * scale, so cells stay sharp at 1x.
+ */
+static float memory_bayer8(int x, int y) {
+  int qx = x & 7;
+  int qy = y & 7;
+  int a = qx ^ qy;
+  int m = ((a & 1) << 5) | ((qy & 1) << 4) | ((a & 2) << 2) |
+          ((qy & 2) << 1) | ((a & 4) >> 1) | ((qy & 4) >> 2);
+  return ((float)m + 0.5f) / 64.0f;
+}
+
+static uint32_t memory_color_rgb(bd_color color) {
+  int r = (int)(color.r * 255.0f + 0.5f);
+  int g = (int)(color.g * 255.0f + 0.5f);
+  int b = (int)(color.b * 255.0f + 0.5f);
+  if (r < 0) r = 0;
+  if (r > 255) r = 255;
+  if (g < 0) g = 0;
+  if (g > 255) g = 255;
+  if (b < 0) b = 0;
+  if (b > 255) b = 255;
+  return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+static bool ensure_memory_dither(bd_home *home, bd_gfx *gfx, int memory,
+                                 int width, int height) {
+  if (home == NULL || gfx == NULL || memory <= 0 || width <= 0 || height <= 0) {
+    return false;
+  }
+  int columns = (width + BD_HOME_QUICK_MEM_CELL - 1) / BD_HOME_QUICK_MEM_CELL;
+  int rows = (height + BD_HOME_QUICK_MEM_CELL - 1) / BD_HOME_QUICK_MEM_CELL;
+  if (columns <= 0 || rows <= 0 || columns > 1024 || rows > 64) {
+    return false;
+  }
+  uint32_t rgb = memory_color_rgb(home->accent.accent);
+  if (home->memory_dither_valid && home->memory_dither != NULL &&
+      home->memory_dither_value == memory && home->memory_dither_rgb == rgb &&
+      home->memory_dither_width == columns &&
+      home->memory_dither_height == rows) {
+    return true;
+  }
+  size_t count = (size_t)columns * (size_t)rows;
+  uint8_t *pixels = (uint8_t *)calloc(count, 4u);
+  if (pixels == NULL) {
+    return false;
+  }
+  float density = (float)(memory > 1024 ? 1024 : memory) / 1024.0f;
+  uint8_t r = (uint8_t)((rgb >> 16) & 0xffu);
+  uint8_t g = (uint8_t)((rgb >> 8) & 0xffu);
+  uint8_t b = (uint8_t)(rgb & 0xffu);
+  for (int y = 0; y < rows; ++y) {
+    for (int x = 0; x < columns; ++x) {
+      if (memory_bayer8(x, y) >= density) {
+        continue;
+      }
+      uint8_t *pixel = pixels + ((size_t)y * (size_t)columns + (size_t)x) * 4u;
+      pixel[0] = r;
+      pixel[1] = g;
+      pixel[2] = b;
+      pixel[3] = 255;
+    }
+  }
+  bool ok = false;
+  if (home->memory_dither == NULL) {
+    home->memory_dither = bd_gfx_texture_create(gfx, columns, rows,
+                                                BD_TEXTURE_NEAREST, pixels);
+    ok = home->memory_dither != NULL;
+  } else {
+    ok = bd_gfx_texture_update(gfx, home->memory_dither, columns, rows, pixels);
+    if (!ok) {
+      bd_gfx_texture_destroy(gfx, home->memory_dither);
+      home->memory_dither = bd_gfx_texture_create(gfx, columns, rows,
+                                                  BD_TEXTURE_NEAREST, pixels);
+      ok = home->memory_dither != NULL;
+    }
+  }
+  free(pixels);
+  if (!ok) {
+    home->memory_dither_valid = false;
+    return false;
+  }
+  home->memory_dither_width = columns;
+  home->memory_dither_height = rows;
+  home->memory_dither_value = memory;
+  home->memory_dither_rgb = rgb;
+  home->memory_dither_valid = true;
+  return true;
+}
+
+static void draw_memory_strip(bd_home *home, bd_gfx *gfx, bd_rect bar,
+                              int memory) {
+  if (home == NULL || gfx == NULL) {
+    return;
+  }
+  bd_gfx_fill_round_rect(gfx, bar, bar.h / 2, home->palette.line);
+  if (memory <= 0 || !ensure_memory_dither(home, gfx, memory, bar.w, bar.h)) {
+    return;
+  }
+  int draw_w = home->memory_dither_width * BD_HOME_QUICK_MEM_CELL;
+  bd_gfx_push_clip(gfx, bar);
+  bd_gfx_draw_texture_round(
+      gfx, home->memory_dither,
+      bd_rect_make(bar.x, bar.y, draw_w, bar.h),
+      bd_color_rgba(255, 255, 255, 255), bar.h / 2);
+  bd_gfx_pop_clip(gfx);
+}
+
 static void draw_quick(bd_home *home, bd_gfx *gfx) {
   float progress = bd_home_quick_progress(home);
   if (progress <= 0.0f) {
@@ -1028,16 +1139,10 @@ static void draw_quick(bd_home *home, bd_gfx *gfx) {
                        bd_font_measure_text(home->fonts.body14, count),
                    run_head, palette->ink3, count);
   int memory = running_memory(home);
-  int mem_bar_y = panel.y + 196;
-  int mem_bar_width = panel.w - 36;
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(panel.x + 18, mem_bar_y, mem_bar_width, 2),
-                         1, palette->line);
-  int mem_fill = memory > 0 ? mem_bar_width * (memory > 1024 ? 1024 : memory) / 1024 : 0;
-  if (mem_fill > 0) {
-    bd_gfx_fill_round_rect(gfx,
-                           bd_rect_make(panel.x + 18, mem_bar_y, mem_fill, 2), 1,
-                           home->accent.accent);
-  }
+  bd_rect mem_bar = bd_rect_make(panel.x + 18,
+                                 panel.y + BD_HOME_QUICK_MEM_BAR_Y,
+                                 panel.w - 36, BD_HOME_QUICK_MEM_BAR_H);
+  draw_memory_strip(home, gfx, mem_bar, memory);
 
   bd_home_quick_layout layout = bd_home_quick_layout_get(home);
   int rows_start = panel.y + layout.rows_start;

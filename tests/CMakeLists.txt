@@ -98,6 +98,11 @@ target_include_directories(bd_device_av_test PRIVATE
   "${PROJECT_SOURCE_DIR}/src/device")
 target_link_libraries(bd_device_av_test PRIVATE brickdesk_device brickdesk_warnings)
 
+add_executable(bd_device_feedback_test device_feedback_test.c)
+target_include_directories(bd_device_feedback_test PRIVATE
+  "${PROJECT_SOURCE_DIR}/src/device")
+target_link_libraries(bd_device_feedback_test PRIVATE brickdesk_feedback brickdesk_warnings)
+
 add_executable(bd_settings_capture settings_capture.c)
 target_link_libraries(bd_settings_capture PRIVATE brickdesk_settings brickdesk_warnings)
 target_compile_definitions(bd_settings_capture PRIVATE
@@ -177,6 +182,9 @@ set_tests_properties(settings PROPERTIES
 
 add_test(NAME device_av COMMAND bd_device_av_test)
 set_tests_properties(device_av PROPERTIES TIMEOUT 120)
+
+add_test(NAME device_feedback COMMAND bd_device_feedback_test)
+set_tests_properties(device_feedback PROPERTIES TIMEOUT 120)
 
 add_test(NAME smoke_render
   COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")

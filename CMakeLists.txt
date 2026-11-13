@@ -172,6 +172,21 @@ target_include_directories(brickdesk_device
 )
 target_link_libraries(brickdesk_device PRIVATE brickdesk_warnings)
 
+# --- device feedback ----------------------------------------------------
+# Standard Linux LED class and evdev force-feedback backends.  The library is
+# deliberately free of SDL, config and UI dependencies so plugins, the shell
+# and the bd-feedback diagnostic tool can share it.  Vendor TG4040 LED/motor
+# nodes are probe-only; see docs/device-feedback.md.
+add_library(brickdesk_feedback STATIC
+  src/device/feedback.c
+  src/device/feedback_linux.c
+)
+target_include_directories(brickdesk_feedback
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/device"
+)
+target_link_libraries(brickdesk_feedback PRIVATE brickdesk_warnings)
+
 # --- performance --------------------------------------------------------
 # Profile resolution, lease arbitration, sysfs probing and write
 # transactions.  Kept free of SDL so brickdesk-perfd can run without a
@@ -438,6 +453,9 @@ target_link_libraries(brickdesk-config PRIVATE brickdesk_config brickdesk_warnin
 
 add_executable(bd-av tools/bd-av.c)
 target_link_libraries(bd-av PRIVATE brickdesk_device brickdesk_warnings)
+
+add_executable(bd-feedback tools/bd-feedback.c)
+target_link_libraries(bd-feedback PRIVATE brickdesk_feedback brickdesk_warnings)
 
 # --- tests --------------------------------------------------------------
 include(CTest)

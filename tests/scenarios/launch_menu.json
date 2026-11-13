@@ -10,7 +10,7 @@
     { "type": "run", "ms": 60 },
     { "type": "wait", "frames": 2 },
     { "type": "screenshot", "name": "home_launch", "settle": false },
-    { "type": "run", "ms": 3200 },
+    { "type": "run", "ms": 4200 },
     { "type": "wait", "frames": 30 },
     { "type": "run", "ms": 100 },
     { "type": "wait", "frames": 30 },

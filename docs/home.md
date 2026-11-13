@@ -199,14 +199,18 @@ event, and feeds the dialog result back into the session.
   existing `prototype/bg` reference images (about 70 KiB total).
 - The light top bar is intentionally softer/darker than `v3-home-light.jpg`.
 
-## Plugin tile status
+## Plugin tile
 
-The M2 desktop owned a plugin-rendered tile through `bd_desktop_set_plugin_tile()`.
-M3-B replaced that desktop with `bd_home`, whose wall items currently render
-app covers only; the plugin host still scans and autostarts plugins, but its
-tile is not drawn on the production home. This is a known regression, not a
-plugin-storage change. The restoration path is a custom-draw home item: append
-one item backed by `bd_plugin_tile_draw()`, keep it out of the session launch
-path, and feed it the same `bd_plugin_tile_begin_frame()` damage used by
-`src/app/desktop.c`. It should be restored before the plugin tile is considered
-part of the M3 home surface.
+The production home appends the first tile-capable plugin as a custom-draw wall
+item.  The item is passive: A never sends it through the session launch path.
+Its callback calls `bd_plugin_set_tile_visible()` with the tile's viewport
+state, so the plugin host starts it on demand when the tile becomes visible and
+starts its idle-stop timer when it leaves the viewport or the home surface is
+hidden.  Visible frames go through `bd_plugin_tile_begin_frame()`; a changed
+frame/UI queues tile damage before `bd_plugin_tile_draw()`.  Off-screen items
+are not drawn.
+
+`tests/home_plugin_capture.c` scans the real `plugins/` directory, starts the
+real `hello` plugin through this production home path, asserts it did not enter
+the session, and captures `home_plugin.png`.  It replaces the old
+`bd_desktop_set_plugin_tile()` path rather than testing that legacy scene.

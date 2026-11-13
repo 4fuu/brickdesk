@@ -112,6 +112,9 @@ The suite includes:
 - `home_capture`: deterministic screenshots of dark/light home, live focus,
   running tile, return, dark/light quick panels, end and background-full
   dialogs, hint bar and launch frames
+- `home_plugin_capture`: runs the real hello plugin through the production home
+  custom-draw tile path, verifies on-demand startup and no session launch, and
+  captures the tile
 - `settings`: schema-generated rows, value persistence/reload, slider hold
   repeat, two-row focus damage with an exact partial/full match, hotkey
   conflicts, perf overrides, long plugin-tree scrolling, reset confirm and

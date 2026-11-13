@@ -25,6 +25,7 @@
 #define BD_HOME_PREFETCH 1024
 #define BD_HOME_MAX_RUNNING 8
 #define BD_HOME_MAX_QUERY BD_HOME_QUERY_MAX
+#define BD_HOME_MAX_CUSTOM 8
 #define BD_HOME_ID_MAX 65
 #define BD_HOME_PATH_MAX 512
 #define BD_HOME_TITLE_MAX 256
@@ -80,6 +81,9 @@ typedef struct bd_home_entry {
   bd_texture *texture;       /* cover from the async cache */
   uint32_t stamp;
   bool running;
+  bd_home_custom_draw_fn custom_draw;
+  void *custom_user;
+  bool custom_visible;
 } bd_home_entry;
 
 typedef struct bd_home_index_node {
@@ -121,6 +125,9 @@ struct bd_home {
 
   bd_home_entry *entries;
   int count;
+  int custom_items[BD_HOME_MAX_CUSTOM];
+  int custom_count;
+  bool surface_visible;
   int *col_head;
   int cols;
   bd_home_index_node *nodes;

@@ -32,6 +32,10 @@ typedef struct bd_shell_config {
   const char *session_state_root;
   const char *menu_shim;    /* NULL: autodetect next to the binary */
   bool verbose;
+  /* Attach the first tile-capable plugin to the production home wall.
+   * Production main enables it; the idle-check path leaves it off so the
+   * measurement stays at zero presents. */
+  bool attach_plugin_tile;
 } bd_shell_config;
 
 /* Requires a live platform, renderer and config. Returns NULL on failure. */

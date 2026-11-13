@@ -381,6 +381,27 @@ static void draw_tile(bd_home *home, bd_gfx *gfx, int index, bool focused) {
     return;
   }
 
+  if (entry->custom_draw != NULL) {
+    bd_gfx_fill_round_rect(gfx, rect, BD_HOME_GAP,
+                           alpha_color(entry->item.placeholder, alpha));
+    if (closing) {
+      bd_gfx_push_clip(gfx, rect);
+    }
+    entry->custom_visible = true;
+    entry->custom_draw(entry->custom_user, home, gfx, rect, true);
+    if (closing) {
+      bd_gfx_pop_clip(gfx);
+    }
+    if (!matches_tab) {
+      bd_gfx_fill_round_rect(gfx, rect, BD_HOME_GAP,
+                             with_alpha(bd_color_rgb(8, 7, 9), 0.46f * alpha));
+    }
+    if (show_focus && !closing) {
+      bd_gfx_stroke_round_rect(gfx, rect, BD_HOME_GAP, 2, palette->focus_ring);
+    }
+    return;
+  }
+
   const bd_texture *frame = running_frame_texture(home, index);
   const bd_texture *texture = frame != NULL ? frame : entry->texture;
   if (texture != NULL) {
@@ -526,6 +547,20 @@ static void draw_wall(bd_home *home, bd_gfx *gfx) {
     }
   }
   bd_gfx_image_end_set(gfx);
+
+  for (int i = 0; i < home->custom_count; ++i) {
+    int index = home->custom_items[i];
+    if (index < 0 || index >= home->count) {
+      continue;
+    }
+    bd_home_entry *entry = &home->entries[index];
+    if (entry->custom_draw != NULL && entry->custom_visible &&
+        !bd_home_item_visible(home, index)) {
+      entry->custom_visible = false;
+      entry->custom_draw(entry->custom_user, home, gfx,
+                         bd_home_screen_rect(home, index), false);
+    }
+  }
 
   bd_gfx_fill_gradient(gfx, bd_rect_make(0, 0, home->width, home->height), 0,
                        home->palette.bg_deep, home->palette.bg,

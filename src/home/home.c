@@ -320,11 +320,17 @@ static void entry_free(bd_home_entry *entry) {
 
 static void entries_free(bd_home *home) {
   for (int i = 0; i < home->count; ++i) {
-    entry_free(&home->entries[i]);
+    bd_home_entry *entry = &home->entries[i];
+    if (entry->custom_draw != NULL && entry->custom_visible) {
+      entry->custom_draw(entry->custom_user, home, home->gfx,
+                         bd_home_screen_rect(home, i), false);
+    }
+    entry_free(entry);
   }
   free(home->entries);
   home->entries = NULL;
   home->count = 0;
+  home->custom_count = 0;
   free(home->col_head);
   home->col_head = NULL;
   home->cols = 0;
@@ -711,6 +717,8 @@ bd_home *bd_home_create(bd_gfx *gfx, const bd_home_style *style) {
   home->height = style->height > 0 ? style->height : bd_gfx_height(gfx);
   home->focus = -1;
   home->pan = 0;
+  home->custom_count = 0;
+  home->surface_visible = true;
   home->quick_last_x = home->width;
   home->brightness = 70;
   home->volume = 45;
@@ -938,6 +946,69 @@ bool bd_home_item_rect(const bd_home *home, int index, bd_rect *out) {
   }
   *out = home->entries[index].rect;
   return true;
+}
+
+bool bd_home_set_custom_draw(bd_home *home, const char *id,
+                             bd_home_custom_draw_fn draw, void *user) {
+  if (home == NULL || id == NULL) {
+    return false;
+  }
+  int index = find_item(home, id);
+  if (index < 0 || index >= home->count) {
+    return false;
+  }
+  bd_home_entry *entry = &home->entries[index];
+  if (draw == NULL) {
+    entry->custom_draw = NULL;
+    entry->custom_user = NULL;
+    entry->custom_visible = false;
+    for (int i = 0; i < home->custom_count; ++i) {
+      if (home->custom_items[i] == index) {
+        for (int j = i; j + 1 < home->custom_count; ++j) {
+          home->custom_items[j] = home->custom_items[j + 1];
+        }
+        --home->custom_count;
+        break;
+      }
+    }
+    return true;
+  }
+  entry->custom_draw = draw;
+  entry->custom_user = user;
+  bool present = false;
+  for (int i = 0; i < home->custom_count; ++i) {
+    if (home->custom_items[i] == index) {
+      present = true;
+      break;
+    }
+  }
+  if (!present && home->custom_count < BD_HOME_MAX_CUSTOM) {
+    home->custom_items[home->custom_count++] = index;
+  }
+  return true;
+}
+
+void bd_home_set_surface_visible(bd_home *home, bool visible) {
+  if (home == NULL) {
+    return;
+  }
+  home->surface_visible = visible;
+  for (int i = 0; i < home->custom_count; ++i) {
+    int index = home->custom_items[i];
+    if (index < 0 || index >= home->count) {
+      continue;
+    }
+    bd_home_entry *entry = &home->entries[index];
+    if (entry->custom_draw == NULL) {
+      continue;
+    }
+    bool now_visible = visible && bd_home_item_visible(home, index);
+    if (now_visible != entry->custom_visible) {
+      entry->custom_visible = now_visible;
+      entry->custom_draw(entry->custom_user, home, home->gfx,
+                         bd_home_screen_rect(home, index), now_visible);
+    }
+  }
 }
 
 int bd_home_focus(const bd_home *home) {

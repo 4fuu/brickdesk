@@ -254,6 +254,7 @@ int main(int argc, char **argv) {
   shell_config.settings = settings;
   shell_config.plugins = plugin_host;
   shell_config.verbose = verbose;
+  shell_config.attach_plugin_tile = idle_check_ms == 0;
   bd_shell *shell = bd_shell_create(&shell_config);
   if (shell == NULL) {
     fprintf(stderr, "brickdesk: cannot create desktop loop\n");

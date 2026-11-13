@@ -38,8 +38,8 @@ for target in "$@"; do
 done
 
 cmake --build "$BUILD_DIR" --target bd_harness bd_gfx_capture bd_plugin_capture \
-  bd_home_capture bd_settings_capture bd_menu_test bd_menu_state_app \
-  brickdesk-inputd brickdesk-demo brickdesk-menu
+  bd_home_capture bd_home_plugin_capture bd_settings_capture bd_menu_test \
+  bd_menu_state_app brickdesk-inputd brickdesk-demo brickdesk-menu
 mkdir -p "$BASELINE_DIR"
 
 SCRATCH="$BUILD_DIR/tests/baselines-scratch"
@@ -123,6 +123,8 @@ if [ "$home" -eq 1 ]; then
   mkdir -p "$out_dir"
   SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
     "$BUILD_DIR/tests/bd_home_capture" "$out_dir"
+  SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
+    "$BUILD_DIR/tests/bd_home_plugin_capture" "$out_dir"
 
   for image in "$out_dir"/home_*.png; do
     if [ ! -e "$image" ]; then

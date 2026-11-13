@@ -139,6 +139,21 @@ int bd_home_item_count(const bd_home *home);
 /* Wall coordinates of one item; false when index is out of range. */
 bool bd_home_item_rect(const bd_home *home, int index, bd_rect *out);
 
+/*
+ * Optional custom draw entry for a home item.  The callback is invoked with
+ * visible=true only while the tile intersects the viewport; with
+ * visible=false when it leaves the viewport or the home surface is hidden, so
+ * a plugin-backed tile can start on demand and stop drawing off-screen.  The
+ * callback owns the tile's content; the home still owns its focus ring and
+ * damage.  It must be called after bd_home_set_items().
+ */
+typedef void (*bd_home_custom_draw_fn)(void *user, bd_home *home, bd_gfx *gfx,
+                                       bd_rect rect, bool visible);
+bool bd_home_set_custom_draw(bd_home *home, const char *id,
+                             bd_home_custom_draw_fn draw, void *user);
+/* Tells custom tiles whether the home surface itself is on screen. */
+void bd_home_set_surface_visible(bd_home *home, bool visible);
+
 int bd_home_focus(const bd_home *home);
 void bd_home_set_focus(bd_home *home, int index);
 /*

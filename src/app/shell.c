@@ -18,6 +18,7 @@
 
 #include "brickdesk/sysinfo.h"
 #include "brickdesk/theme.h"
+#include "brickdesk/ui.h"
 
 #define BD_SHELL_LINE_MAX 4096
 #define BD_SHELL_FD_MAX 64
@@ -26,6 +27,7 @@
 #define BD_SHELL_STATUS_MS 5000
 #define BD_SHELL_MEMORY_MS 1000
 #define BD_SHELL_MEMORY_RETRY_MS 5000
+#define BD_SHELL_PLUGIN_ITEM_ID "plugin-tile"
 
 typedef enum shell_pending_kind {
   SHELL_PENDING_STATE = 0,
@@ -61,6 +63,13 @@ struct bd_shell {
   size_t runtime_count;
   bd_home *home;
   bd_home_style home_style;
+  bd_plugin *plugin_tile;
+  char plugin_tile_name[BD_PLUGIN_MAX_NAME + 1];
+  int plugin_tile_span_w;
+  int plugin_tile_span_h;
+  bd_ui_fonts plugin_fonts;
+  bool plugin_fonts_loaded;
+  bd_accent_palette plugin_accent;
 
   bd_session *session;
   int session_next_ms;
@@ -687,6 +696,7 @@ static void shell_update_home(bd_shell *shell, uint64_t now) {
   if (shell->home == NULL) {
     return;
   }
+  bd_home_set_surface_visible(shell->home, shell->visible);
   uint64_t wake_at = 0;
   bool was_active = bd_home_needs_frame_until(shell->home, &wake_at);
   bd_home_update(shell->home, now);
@@ -1018,6 +1028,9 @@ static void shell_accept(bd_shell *shell) {
   }
   const char *app_id = bd_home_selected_id(shell->home);
   if (app_id != NULL) {
+    if (strcmp(app_id, BD_SHELL_PLUGIN_ITEM_ID) == 0) {
+      return;
+    }
     shell_launch_app(shell, app_id);
     return;
   }
@@ -1163,7 +1176,8 @@ static bool shell_request_eviction(bd_shell *shell, const char *app_id) {
 }
 
 static bool shell_launch_app(bd_shell *shell, const char *app_id) {
-  if (shell->session == NULL || app_id == NULL || app_id[0] == '\0') {
+  if (shell->session == NULL || app_id == NULL || app_id[0] == '\0' ||
+      strcmp(app_id, BD_SHELL_PLUGIN_ITEM_ID) == 0) {
     return false;
   }
   bd_session_app_info info;
@@ -1320,8 +1334,68 @@ static bd_color shell_app_placeholder(const bd_app *app,
   return bd_color_rgb(58, 52, 46);
 }
 
+static bool shell_has_plugin_tile(const bd_shell *shell) {
+  return shell != NULL && shell->plugin_tile != NULL;
+}
+
+static void shell_plugin_tile_item(const bd_shell *shell, bd_home_item *item) {
+  memset(item, 0, sizeof(*item));
+  item->id = BD_SHELL_PLUGIN_ITEM_ID;
+  item->title = shell->plugin_tile_name;
+  item->subtitle = "插件";
+  item->placeholder =
+      bd_color_mix(bd_color_rgb(18, 16, 13), shell->home_style.accent_base,
+                   0.42f);
+  item->span_w = shell->plugin_tile_span_w;
+  item->span_h = shell->plugin_tile_span_h;
+  item->flags = 0;
+  item->badge_number = 0;
+}
+
+static void shell_plugin_tile_draw(void *user, bd_home *home, bd_gfx *gfx,
+                                   bd_rect rect, bool visible) {
+  (void)home;
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || shell->plugin_tile == NULL) {
+    return;
+  }
+  bd_plugin_set_tile_visible(shell->plugin_tile, visible);
+  if (!visible) {
+    return;
+  }
+  bool changed = bd_plugin_tile_begin_frame(shell->plugin_tile, gfx);
+  if (changed) {
+    bd_rect damage = rect;
+    damage.x -= 4;
+    damage.y -= 4;
+    damage.w += 8;
+    damage.h += 8;
+    bd_gfx_damage_rect(gfx, damage);
+  }
+  bd_plugin_render_style style;
+  memset(&style, 0, sizeof(style));
+  style.fonts = shell->plugin_fonts_loaded ? &shell->plugin_fonts : NULL;
+  style.accent = shell->plugin_accent;
+  style.dark = shell->home_style.dark;
+  bd_plugin_tile_draw(shell->plugin_tile, gfx, rect, &style);
+}
+
+static bool shell_attach_plugin_tile(bd_shell *shell) {
+  if (!shell_has_plugin_tile(shell) || shell->home == NULL) {
+    return true;
+  }
+  return bd_home_set_custom_draw(shell->home, BD_SHELL_PLUGIN_ITEM_ID,
+                                 shell_plugin_tile_draw, shell);
+}
+
+static int shell_item_count_with_plugin(const bd_shell *shell, int count) {
+  return count + (shell_has_plugin_tile(shell) ? 1 : 0);
+}
+
+
 static bool shell_set_demo_items(bd_shell *shell) {
-  int count = (int)(sizeof(SHELL_DEMO_ITEMS) / sizeof(SHELL_DEMO_ITEMS[0]));
+  int base = (int)(sizeof(SHELL_DEMO_ITEMS) / sizeof(SHELL_DEMO_ITEMS[0]));
+  int count = shell_item_count_with_plugin(shell, base);
   bd_home_item *items =
       (bd_home_item *)calloc((size_t)count, sizeof(*items));
   char(*covers)[512] = (char(*)[512])calloc((size_t)count, 512);
@@ -1330,7 +1404,7 @@ static bool shell_set_demo_items(bd_shell *shell) {
     free(covers);
     return false;
   }
-  for (int i = 0; i < count; ++i) {
+  for (int i = 0; i < base; ++i) {
     const shell_demo_item *demo = &SHELL_DEMO_ITEMS[i];
     snprintf(covers[i], 512, "%s/covers/home-%02d.jpg", BRICKDESK_ASSET_DIR,
              demo->cover);
@@ -1345,9 +1419,15 @@ static bool shell_set_demo_items(bd_shell *shell) {
     items[i].flags = demo->flags;
     items[i].badge_number = i + 1;
   }
+  if (shell_has_plugin_tile(shell)) {
+    shell_plugin_tile_item(shell, &items[base]);
+  }
   bool ok = bd_home_set_items(shell->home, items, count);
   free(items);
   free(covers);
+  if (ok) {
+    ok = shell_attach_plugin_tile(shell);
+  }
   return ok;
 }
 
@@ -1359,9 +1439,11 @@ static bool shell_set_app_items(bd_shell *shell) {
   if (count > 100000) {
     return false;
   }
-  bd_home_item *items = (bd_home_item *)calloc(count, sizeof(*items));
+  int base = (int)count;
+  int total = shell_item_count_with_plugin(shell, base);
+  bd_home_item *items = (bd_home_item *)calloc((size_t)total, sizeof(*items));
   char(*covers)[BD_APP_PATH_MAX] =
-      (char(*)[BD_APP_PATH_MAX])calloc(count, BD_APP_PATH_MAX);
+      (char(*)[BD_APP_PATH_MAX])calloc((size_t)total, BD_APP_PATH_MAX);
   if (items == NULL || covers == NULL) {
     free(items);
     free(covers);
@@ -1397,9 +1479,15 @@ static bool shell_set_app_items(bd_shell *shell) {
                          : 0;
     items[i].badge_number = (int)i + 1;
   }
-  bool ok = bd_home_set_items(shell->home, items, (int)count);
+  if (shell_has_plugin_tile(shell)) {
+    shell_plugin_tile_item(shell, &items[base]);
+  }
+  bool ok = bd_home_set_items(shell->home, items, total);
   free(items);
   free(covers);
+  if (ok) {
+    ok = shell_attach_plugin_tile(shell);
+  }
   return ok;
 }
 
@@ -1662,6 +1750,37 @@ bool bd_shell_run_for(bd_shell *shell, int duration_ms) {
   }
 }
 
+static void shell_find_plugin_tile(bd_shell *shell, bd_gfx *gfx) {
+  shell->plugin_tile = NULL;
+  shell->plugin_tile_name[0] = '\0';
+  shell->plugin_tile_span_w = 1;
+  shell->plugin_tile_span_h = 1;
+  if (shell->plugins == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < bd_plugin_host_count(shell->plugins); ++i) {
+    bd_plugin *plugin = bd_plugin_host_at(shell->plugins, i);
+    const bd_plugin_manifest *manifest =
+        bd_plugin_host_manifest(shell->plugins, i);
+    if (plugin == NULL || manifest == NULL ||
+        (manifest->capabilities & BD_PLUGIN_CAP_TILE) == 0) {
+      continue;
+    }
+    shell->plugin_tile = plugin;
+    copy_text(shell->plugin_tile_name, sizeof(shell->plugin_tile_name),
+              manifest->name[0] != '\0' ? manifest->name : "插件");
+    shell->plugin_tile_span_w = manifest->tile.w > 1 ? 2 : 1;
+    shell->plugin_tile_span_h = manifest->tile.h > 1 ? 2 : 1;
+    shell->plugin_accent = bd_accent_palette_from(
+        shell->home_style.accent_base, shell->home_style.dark);
+    shell->plugin_fonts_loaded = bd_ui_fonts_load(&shell->plugin_fonts, gfx);
+    if (!shell->plugin_fonts_loaded) {
+      fprintf(stderr, "brickdesk: cannot load plugin tile fonts\n");
+    }
+    break;
+  }
+}
+
 bd_shell *bd_shell_create(const bd_shell_config *config) {
   if (config == NULL || config->platform == NULL || config->gfx == NULL ||
       config->settings == NULL) {
@@ -1704,6 +1823,9 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
     fprintf(stderr, "brickdesk: cannot create the home page\n");
     free(shell);
     return NULL;
+  }
+  if (config->attach_plugin_tile) {
+    shell_find_plugin_tile(shell, config->gfx);
   }
 
   bd_home_status status;
@@ -1778,6 +1900,17 @@ void bd_shell_destroy(bd_shell *shell) {
     bd_session_destroy(shell->session);
   }
   inputd_disconnect(shell, "shutdown");
+  if (shell->home != NULL) {
+    bd_home_set_surface_visible(shell->home, false);
+  }
+  if (shell->plugin_tile != NULL) {
+    bd_plugin_tile_release(shell->plugin_tile, shell->gfx);
+    shell->plugin_tile = NULL;
+  }
+  if (shell->plugin_fonts_loaded) {
+    bd_ui_fonts_free(&shell->plugin_fonts);
+    shell->plugin_fonts_loaded = false;
+  }
   free(shell->runtime);
   if (shell->apps != NULL) {
     bd_app_list_destroy(shell->apps);

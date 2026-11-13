@@ -6,7 +6,10 @@ PowerVR GE8300, 1024x768), written in C11 with SDL2 and GLES2.
 This repository is at the M1 infrastructure stage: host build, SDL2/GLES2
 platform layer, minimal renderer, screenshot/input-replay tests, and host CI.
 The cover wall, text, themes and the device platform layer arrive in later
-milestones.
+milestones. The v3 home page is implemented as a reusable module in
+[src/home](src/home) with the API in
+[include/brickdesk/home.h](include/brickdesk/home.h); see
+[docs/home.md](docs/home.md). It is not wired into the event loop yet.
 
 For installing a release on the Brick Pro, see [docs/install.md](docs/install.md).
 The release package includes the desktop, input/perf daemons, tools, patched
@@ -100,6 +103,10 @@ The suite includes:
   exact pixel compare; the hint bar stays hidden until the 400 ms Select hold
 - `scenario.launch_menu`: launches `apps/demo` from the wall, opens the menu
   shim through inputd, backgrounds it and checks the running tile
+- `home_scale`: 5,000-item first-fit layout/index traversal, focus damage,
+  blur fallback, incremental launch and host timing checks
+- `home_capture`: deterministic screenshots of dark/light home, live focus,
+  running tile, return, quick panel, dialog, hint bar and launch frames
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,
@@ -169,6 +176,7 @@ src/platform/          SDL2 window + GLES2 context (host_sdl.c also serves
                        target builds until the device layer lands)
 src/gfx/               GLES2 renderer and framebuffer capture
 src/app/               desktop scene, app tiles, event-loop shell
+src/home/              v3 home page module (wall, focus, chrome, transitions)
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
 src/session/           app manifests, process lifecycle, app IPC, last frame

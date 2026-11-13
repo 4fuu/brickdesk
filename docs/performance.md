@@ -128,6 +128,33 @@ p95 is more useful than a single run.
 Idle measured `presents=0` and `cpu_ms=0.000` over 3,000 ms. The `pan` p95
 spike is host scheduling/llvmpipe noise, not a stable device expectation.
 
+## v3 home module (M3-A)
+
+The v3 home page is not wired into `brickdesk` yet, so `bench_render` still
+measures the placeholder desktop. `tests/home_scale` is a deterministic
+correctness test that also prints host timings; it builds a 5,000-item wall and
+drives the same draw/damage paths the event loop will use.
+
+Measured in the orb with `SDL_VIDEODRIVER=offscreen`, Mesa llvmpipe,
+2026-11-13:
+
+| metric | value |
+|---|---:|
+| 5,000-item layout build | 53-74 ms (one-time, startup) |
+| query items in viewport + one screen each side | 31 max, 27.1 average |
+| drawn-frame visited / visible items | 35 / 14 max |
+| focus repaint (two 1x1 tiles, one damage rect) | 76,048 px |
+| wall pan frame | 32-41 ms average, 45-85 ms max |
+| launch frame | 18-20 ms average, 40-68 ms max |
+| resident cover textures | 15 / 6.4 MiB (96 MiB budget) |
+
+The launch frame cost is after the incremental launch painter was added: only
+the first frame paints the scrimmed wall, later frames repaint the card and the
+opaque app view underneath it. The incremental image differs from a full redraw
+only at the card's antialiased border (373 px, max channel delta 34), which the
+scale test allows. Host frame times include llvmpipe; the GE8300 is the device
+reference and these numbers are not a device budget.
+
 ## Budgets
 
 `bench/budgets.ini` contains deterministic host limits. `bench_budget` runs

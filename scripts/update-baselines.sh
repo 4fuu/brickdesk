@@ -3,7 +3,7 @@
 #
 # Usage: scripts/update-baselines.sh [target ...]
 # Targets: boot focus_move hint_hold launch_menu primitives text tiles blur
-#          plugin_hello plugin_settings menu
+#          plugin_hello plugin_settings menu home
 # Default: all of them.
 # Baseline updates must be reviewed and committed separately from feature work.
 set -euo pipefail
@@ -13,19 +13,21 @@ BUILD_DIR=${BUILD_DIR:-"$ROOT/build-host"}
 BASELINE_DIR=${BASELINE_DIR:-"$ROOT/tests/baselines/host"}
 
 if [ "$#" -eq 0 ]; then
-  set -- boot focus_move hint_hold launch_menu primitives text tiles blur plugin_hello plugin_settings menu
+  set -- boot focus_move hint_hold launch_menu primitives text tiles blur plugin_hello plugin_settings menu home
 fi
 
 scenarios=()
 captures=()
 menu=0
 launch_menu=0
+home=0
 for target in "$@"; do
   case "$target" in
     boot|focus_move|hint_hold) scenarios+=("$target") ;;
     launch_menu) launch_menu=1 ;;
     primitives|text|tiles|blur|plugin_hello|plugin_settings) captures+=("$target") ;;
     menu) menu=1 ;;
+    home) home=1 ;;
     *)
       printf 'update-baselines: unknown target: %s\n' "$target" >&2
       exit 1
@@ -34,7 +36,8 @@ for target in "$@"; do
 done
 
 cmake --build "$BUILD_DIR" --target bd_harness bd_gfx_capture bd_plugin_capture \
-  bd_menu_test bd_menu_state_app brickdesk-inputd brickdesk-demo brickdesk-menu
+  bd_home_capture bd_menu_test bd_menu_state_app brickdesk-inputd brickdesk-demo \
+  brickdesk-menu
 mkdir -p "$BASELINE_DIR"
 
 SCRATCH="$BUILD_DIR/tests/baselines-scratch"
@@ -100,6 +103,21 @@ if [ "${#captures[@]}" -gt 0 ]; then
     if [ ! -f "$image" ]; then
       printf 'update-baselines: capture %s was not produced\n' "$name" >&2
       exit 1
+    fi
+    cp "$image" "$BASELINE_DIR/"
+    printf 'baseline: %s\n' "$BASELINE_DIR/$(basename "$image")"
+  done
+fi
+
+if [ "$home" -eq 1 ]; then
+  out_dir="$SCRATCH/home"
+  mkdir -p "$out_dir"
+  SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRICKDESK_HEADLESS=1 \
+    "$BUILD_DIR/tests/bd_home_capture" "$out_dir"
+
+  for image in "$out_dir"/home_*.png; do
+    if [ ! -e "$image" ]; then
+      continue
     fi
     cp "$image" "$BASELINE_DIR/"
     printf 'baseline: %s\n' "$BASELINE_DIR/$(basename "$image")"

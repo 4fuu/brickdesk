@@ -1332,7 +1332,7 @@ bd_session *bd_session_create(const bd_session_config *config, char *error,
              session_id);
   }
   session->max_background =
-      config != NULL && config->max_background > 0 ? config->max_background : 2;
+      config != NULL && config->max_background > 0 ? config->max_background : 3;
   session->on_event = config != NULL ? config->on_event : NULL;
   session->event_user = config != NULL ? config->event_user : NULL;
   session->perf = config != NULL ? config->perf : (bd_session_perf_ops){0};

@@ -29,6 +29,7 @@ const bd_config_spec bd_config_specs[] = {
     /* ui */
     {"ui", "language", BD_CONFIG_ENUM, "zh-CN", 0, 0, g_languages, 0, 0, 0},
     {"ui", "animations", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"ui", "blur", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
     {"ui", "time_format", BD_CONFIG_ENUM, "24h", 0, 0, g_time_formats, 0, 0, 0},
     {"ui", "clock_seconds", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
     {"ui", "cover_cache_mb", BD_CONFIG_INT, "96", 8, 512, NULL, 0, 0, 0},
@@ -64,7 +65,7 @@ const bd_config_spec bd_config_specs[] = {
 
     /* session */
     {"session", "state_quota_mb", BD_CONFIG_INT, "512", 64, 4096, NULL, 0, 0, 0},
-    {"session", "max_background", BD_CONFIG_INT, "2", 1, 8, NULL, 0, 0, 0},
+    {"session", "max_background", BD_CONFIG_INT, "3", 1, 8, NULL, 0, 0, 0},
     {"session", "quick_resume", BD_CONFIG_ENUM, "auto", 0, 0, g_quick_resume, 0,
      0, 0},
 

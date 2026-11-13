@@ -119,6 +119,7 @@ schema_version = 1
 |---|---|---|---|---|
 | `language` | enum | `zh-CN` | `zh-CN`、`en-US` | 界面语言 |
 | `animations` | bool | `true` | — | 过渡/焦点动画；关闭可降低 CPU |
+| `blur` | bool | `true` | — | 顶栏/提示栏的窄条模糊；关闭后退化为渐变 |
 | `time_format` | enum | `24h` | `24h`、`12h` | 时钟格式 |
 | `clock_seconds` | bool | `false` | — | 时钟是否显示秒 |
 | `cover_cache_mb` | int | `96` | 8..512 | 封面缩略图缓存上限（MB） |
@@ -165,7 +166,7 @@ schema_version = 1
 |---|---|---|---|---|
 | `state_quota_mb` | int | `512` | 64..4096 | 每个应用的存档配额 |
 | `quick_resume` | enum | `auto` | `auto`、`always`、`never` | 快速恢复策略 |
-| `max_background` | int | `2` | 1..8 | 同时保留在后台的应用数量上限 |
+| `max_background` | int | `3` | 1..8 | 同时保留在后台的应用数量上限 |
 
 ## 5. `perf.ini`
 

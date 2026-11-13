@@ -25,6 +25,12 @@ target_link_libraries(bd_dirty_regions PRIVATE brickdesk_core brickdesk_warnings
 add_executable(bd_wall_scale wall_scale.c)
 target_link_libraries(bd_wall_scale PRIVATE brickdesk_core brickdesk_warnings)
 
+add_executable(bd_home_scale home_scale.c)
+target_link_libraries(bd_home_scale PRIVATE brickdesk_home brickdesk_core brickdesk_config brickdesk_warnings)
+
+add_executable(bd_home_capture home_capture.c)
+target_link_libraries(bd_home_capture PRIVATE brickdesk_home brickdesk_core brickdesk_config brickdesk_warnings)
+
 add_executable(bd_gfx_capture gfx_capture.c)
 target_link_libraries(bd_gfx_capture PRIVATE brickdesk_core brickdesk_warnings)
 target_compile_definitions(bd_gfx_capture PRIVATE
@@ -97,6 +103,11 @@ add_test(NAME wall_scale COMMAND bd_wall_scale)
 set_tests_properties(wall_scale PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   TIMEOUT 120)
+
+add_test(NAME home_scale COMMAND bd_home_scale)
+set_tests_properties(home_scale PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 300)
 
 add_test(NAME smoke_render
   COMMAND bd_smoke_render "${BD_ARTIFACT_DIR}/smoke.png")
@@ -212,6 +223,19 @@ if(BRICKDESK_BUILD_HARNESS)
   set_tests_properties(gfx_capture PROPERTIES
     ENVIRONMENT "${BD_HEADLESS_ENV}"
     TIMEOUT 180
+    FAIL_REGULAR_EXPRESSION "FAIL")
+
+  add_test(NAME home_capture
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCAPTURE=$<TARGET_FILE:bd_home_capture>"
+      "-DOUT_DIR=${BD_ARTIFACT_DIR}/home_capture"
+      "-DBASELINE_DIR=${BD_BASELINE_DIR}"
+      "-DIMAGEDIFF=${PROJECT_SOURCE_DIR}/tools/imagediff.py"
+      "-DPYTHON=${Python3_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_gfx_capture.cmake")
+  set_tests_properties(home_capture PROPERTIES
+    ENVIRONMENT "${BD_HEADLESS_ENV}"
+    TIMEOUT 300
     FAIL_REGULAR_EXPRESSION "FAIL")
 
   add_test(NAME menu

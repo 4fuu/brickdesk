@@ -154,15 +154,111 @@ static bool write_raw_manifest(const char *root, const char *dir_name,
   return write_text(path, json);
 }
 
+static bool write_settings_manifest(const char *root, const char *id,
+                                    const char *default_value,
+                                    const char *action, const char *value,
+                                    const char *result_path) {
+  char dir[1024];
+  char path[2048];
+  snprintf(dir, sizeof(dir), "%s/%s", root, id);
+  if (!make_dir(dir)) {
+    return false;
+  }
+  snprintf(path, sizeof(path), "%s/plugin.json", dir);
+  char manifest[2048];
+  snprintf(manifest, sizeof(manifest),
+           "{\"schema\":1,\"id\":\"%s\",\"name\":\"Fixture %s\","
+           "\"version\":\"0.1.0\",\"api\":1,\"runtime\":\"shell\","
+           "\"entry\":[\"run.sh\"],\"capabilities\":[\"settings\"],"
+           "\"settings\":[{\"key\":\"show_meta\",\"type\":\"bool\","
+           "\"label\":\"Show meta\",\"default\":%s}]}",
+           id, id, default_value);
+  if (!write_text(path, manifest)) {
+    return false;
+  }
+  char script[3072];
+  snprintf(script, sizeof(script),
+           "#!/bin/sh\n"
+           "export BD_FIXTURE_SETTINGS_ACTION='%s'\n"
+           "export BD_FIXTURE_SETTINGS_VALUE='%s'\n"
+           "export BD_FIXTURE_SETTINGS_RESULT='%s'\n"
+           "exec \"%s\" settings \"$@\"\n",
+           action, value, result_path, BRICKDESK_TEST_FIXTURE);
+  snprintf(path, sizeof(path), "%s/run.sh", dir);
+  if (!write_text(path, script)) {
+    return false;
+  }
+  chmod(path, 0755);
+  return true;
+}
+
+static bool wait_for_result(bd_plugin_host *host, const char *path, char *out,
+                            size_t out_size, int timeout_ms) {
+  uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
+  while (now_ms() < deadline) {
+    bd_plugin_host_poll(host, 5);
+    FILE *file = fopen(path, "rb");
+    if (file != NULL) {
+      bool ok = fgets(out, (int)out_size, file) != NULL;
+      fclose(file);
+      if (ok) {
+        size_t length = strlen(out);
+        while (length > 0 && (out[length - 1] == '\n' ||
+                              out[length - 1] == '\r')) {
+          out[--length] = '\0';
+        }
+        if (length > 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+static void settings_file_path(char *out, size_t out_size, const char *root,
+                               const char *id) {
+  snprintf(out, out_size, "%s/state/plugin-settings/%s/settings.json", root,
+           id);
+}
+
+static bool make_settings_test_dir(const char *root, const char *id) {
+  char path[2048];
+  snprintf(path, sizeof(path), "%s/state", root);
+  if (!make_dir(path)) {
+    return false;
+  }
+  snprintf(path, sizeof(path), "%s/state/plugin-settings", root);
+  if (!make_dir(path)) {
+    return false;
+  }
+  snprintf(path, sizeof(path), "%s/state/plugin-settings/%s", root, id);
+  return make_dir(path);
+}
+
+static bool read_file_text(const char *path, char *out, size_t out_size) {
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
+    return false;
+  }
+  size_t length = fread(out, 1, out_size - 1, file);
+  fclose(file);
+  out[length] = '\0';
+  return true;
+}
+
 static bd_plugin_host *make_host_paths(const char *plugin_dir,
                                       const char *root,
                                       bd_plugin_limits limits) {
   char runtime[1024];
+  char state[1024];
   snprintf(runtime, sizeof(runtime), "%s/runtime", root);
+  snprintf(state, sizeof(state), "%s/state", root);
   bd_plugin_host_config config;
   memset(&config, 0, sizeof(config));
   config.plugin_dir = plugin_dir;
   config.runtime_dir = runtime;
+  config.state_dir = state;
   config.limits = &limits;
   config.display_width = 1024;
   config.display_height = 768;
@@ -783,6 +879,464 @@ static void test_desktop_frames_with_busy_plugin(void) {
   free(root);
 }
 
+static void test_settings_persistence(void) {
+  char *root = make_root();
+  check(root != NULL, "settings: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *id = "com.test.persist";
+  char result1[1024];
+  char result2[1024];
+  snprintf(result1, sizeof(result1), "%s/result-1.txt", root);
+  snprintf(result2, sizeof(result2), "%s/result-2.txt", root);
+  check(write_settings_manifest(root, id, "true", "set", "false", result1),
+        "settings: manifest");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "settings: host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "settings: scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "settings: find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "settings: manifest default");
+      check(bd_plugin_set_settings_open(plugin, true),
+            "settings: open starts the plugin");
+      char result[256] = {0};
+      check(wait_for_result(host, result1, result, sizeof(result), 3000),
+            "settings: protocol set result");
+      check(strcmp(result, "ok") == 0, "settings: protocol set: %s", result);
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "settings: value after protocol set");
+    }
+    bd_plugin_host_destroy(host);
+  }
+
+  char state_file[2048];
+  settings_file_path(state_file, sizeof(state_file), root, id);
+  char contents[2048] = {0};
+  check(access(state_file, F_OK) == 0, "settings: state file exists");
+  check(read_file_text(state_file, contents, sizeof(contents)),
+        "settings: read state file");
+  check(strstr(contents, "\"version\":1") != NULL,
+        "settings: state file version");
+  check(strstr(contents, "\"show_meta\":\"false\"") != NULL,
+        "settings: state file value");
+  char package_file[2048];
+  snprintf(package_file, sizeof(package_file), "%s/%s/settings.json", root, id);
+  check(access(package_file, F_OK) != 0,
+        "settings: must not write into the package directory");
+
+  check(write_settings_manifest(root, id, "true", "get", "false", result2),
+        "settings: get manifest");
+  host = make_host(root, limits);
+  check(host != NULL, "settings: restart host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "settings: restart scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "settings: restart find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "settings: value loaded before the plugin starts");
+      check(bd_plugin_set_settings_open(plugin, true),
+            "settings: restart open");
+      char result[256] = {0};
+      check(wait_for_result(host, result2, result, sizeof(result), 3000),
+            "settings: protocol get result");
+      check(strcmp(result, "value false") == 0,
+            "settings: protocol get: %s", result);
+      check(bd_plugin_set_setting(plugin, "show_meta", "true"),
+            "settings: host API persists");
+    }
+    bd_plugin_host_destroy(host);
+  }
+
+  host = make_host(root, limits);
+  check(host != NULL, "settings: third host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "settings: third scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "settings: third find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "settings: host API value loaded after restart");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
+static void test_settings_isolation(void) {
+  char *root = make_root();
+  check(root != NULL, "isolation: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *alpha = "com.test.alpha";
+  const char *beta = "com.test.beta";
+  char alpha_result1[1024];
+  char beta_result1[1024];
+  char alpha_result2[1024];
+  char beta_result2[1024];
+  snprintf(alpha_result1, sizeof(alpha_result1), "%s/alpha-1.txt", root);
+  snprintf(beta_result1, sizeof(beta_result1), "%s/beta-1.txt", root);
+  snprintf(alpha_result2, sizeof(alpha_result2), "%s/alpha-2.txt", root);
+  snprintf(beta_result2, sizeof(beta_result2), "%s/beta-2.txt", root);
+  check(write_settings_manifest(root, alpha, "true", "set", "false",
+                                alpha_result1),
+        "isolation: alpha manifest");
+  check(write_settings_manifest(root, beta, "false", "set", "true",
+                                beta_result1),
+        "isolation: beta manifest");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "isolation: host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 2,
+          "isolation: scan (%s)", error);
+    bd_plugin *alpha_plugin = bd_plugin_host_find(host, alpha);
+    bd_plugin *beta_plugin = bd_plugin_host_find(host, beta);
+    check(alpha_plugin != NULL && beta_plugin != NULL, "isolation: find");
+    if (alpha_plugin != NULL) {
+      check(bd_plugin_set_settings_open(alpha_plugin, true),
+            "isolation: start alpha");
+      char result[256] = {0};
+      check(wait_for_result(host, alpha_result1, result, sizeof(result), 3000),
+            "isolation: alpha set result");
+      check(strcmp(result, "ok") == 0, "isolation: alpha set: %s", result);
+      check(strcmp(bd_plugin_get_setting(alpha_plugin, "show_meta"), "false") ==
+                0,
+            "isolation: alpha value");
+    }
+    if (beta_plugin != NULL) {
+      check(bd_plugin_set_settings_open(beta_plugin, true),
+            "isolation: start beta");
+      char result[256] = {0};
+      check(wait_for_result(host, beta_result1, result, sizeof(result), 3000),
+            "isolation: beta set result");
+      check(strcmp(result, "ok") == 0, "isolation: beta set: %s", result);
+      check(strcmp(bd_plugin_get_setting(beta_plugin, "show_meta"), "true") ==
+                0,
+            "isolation: beta value");
+    }
+    bd_plugin_host_destroy(host);
+  }
+
+  char alpha_file[2048];
+  char beta_file[2048];
+  char contents[2048] = {0};
+  settings_file_path(alpha_file, sizeof(alpha_file), root, alpha);
+  settings_file_path(beta_file, sizeof(beta_file), root, beta);
+  check(strcmp(alpha_file, beta_file) != 0, "isolation: distinct paths");
+  check(access(alpha_file, F_OK) == 0, "isolation: alpha file");
+  check(access(beta_file, F_OK) == 0, "isolation: beta file");
+  check(read_file_text(alpha_file, contents, sizeof(contents)) &&
+            strstr(contents, "\"show_meta\":\"false\"") != NULL,
+        "isolation: alpha file value");
+  check(read_file_text(beta_file, contents, sizeof(contents)) &&
+            strstr(contents, "\"show_meta\":\"true\"") != NULL,
+        "isolation: beta file value");
+
+  check(write_settings_manifest(root, alpha, "true", "get", "true",
+                                alpha_result2),
+        "isolation: alpha get manifest");
+  check(write_settings_manifest(root, beta, "false", "get", "false",
+                                beta_result2),
+        "isolation: beta get manifest");
+  host = make_host(root, limits);
+  check(host != NULL, "isolation: restart host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 2,
+          "isolation: restart scan (%s)", error);
+    bd_plugin *alpha_plugin = bd_plugin_host_find(host, alpha);
+    bd_plugin *beta_plugin = bd_plugin_host_find(host, beta);
+    check(alpha_plugin != NULL && beta_plugin != NULL,
+          "isolation: restart find");
+    if (alpha_plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(alpha_plugin, "show_meta"), "false") ==
+                0,
+            "isolation: alpha loaded");
+      check(bd_plugin_set_settings_open(alpha_plugin, true),
+            "isolation: restart alpha");
+      char result[256] = {0};
+      check(wait_for_result(host, alpha_result2, result, sizeof(result), 3000),
+            "isolation: alpha get result");
+      check(strcmp(result, "value false") == 0,
+            "isolation: alpha get: %s", result);
+    }
+    if (beta_plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(beta_plugin, "show_meta"), "true") ==
+                0,
+            "isolation: beta loaded");
+      check(bd_plugin_set_settings_open(beta_plugin, true),
+            "isolation: restart beta");
+      char result[256] = {0};
+      check(wait_for_result(host, beta_result2, result, sizeof(result), 3000),
+            "isolation: beta get result");
+      check(strcmp(result, "value true") == 0,
+            "isolation: beta get: %s", result);
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
+static void test_settings_corruption(void) {
+  char *root = make_root();
+  check(root != NULL, "corrupt: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *invalid_json = "com.test.corrupt";
+  const char *invalid_value = "com.test.badvalue";
+  char result[1024];
+  snprintf(result, sizeof(result), "%s/corrupt-result.txt", root);
+  check(write_settings_manifest(root, invalid_json, "true", "get", "true",
+                                result),
+        "corrupt: invalid JSON manifest");
+  check(write_settings_manifest(root, invalid_value, "true", "get", "true",
+                                result),
+        "corrupt: invalid value manifest");
+  check(make_settings_test_dir(root, invalid_json), "corrupt: state dir");
+  check(make_settings_test_dir(root, invalid_value), "corrupt: value dir");
+  char path[2048];
+  settings_file_path(path, sizeof(path), root, invalid_json);
+  check(write_text(path, "{not json"), "corrupt: write invalid JSON");
+  settings_file_path(path, sizeof(path), root, invalid_value);
+  check(write_text(path, "{\"version\":1,\"settings\":{\"show_meta\":\"maybe\"}}"),
+        "corrupt: write invalid value");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "corrupt: host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 2,
+          "corrupt: scan (%s)", error);
+    int setting_diagnostics = 0;
+    for (size_t i = 0; i < bd_plugin_host_diagnostic_count(host); ++i) {
+      char diagnostic[256];
+      if (bd_plugin_host_diagnostic(host, i, diagnostic, sizeof(diagnostic)) &&
+          strstr(diagnostic, "settings") != NULL) {
+        ++setting_diagnostics;
+      }
+    }
+    check(setting_diagnostics >= 2,
+          "corrupt: expected >=2 settings diagnostics, got %d",
+          setting_diagnostics);
+    bd_plugin *plugin = bd_plugin_host_find(host, invalid_json);
+    bd_plugin *bad_value = bd_plugin_host_find(host, invalid_value);
+    check(plugin != NULL && bad_value != NULL, "corrupt: find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "corrupt: invalid JSON used the default");
+      check(bd_plugin_set_settings_open(plugin, true),
+            "corrupt: start plugin");
+      char result_text[256] = {0};
+      check(wait_for_result(host, result, result_text, sizeof(result_text),
+                            3000),
+            "corrupt: get result");
+      check(strcmp(result_text, "value true") == 0,
+            "corrupt: protocol get: %s", result_text);
+    }
+    if (bad_value != NULL) {
+      check(strcmp(bd_plugin_get_setting(bad_value, "show_meta"), "true") == 0,
+            "corrupt: invalid value used the default");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
+static void test_settings_write_failure(void) {
+  char *root = make_root();
+  check(root != NULL, "write failure: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *id = "com.test.writefail";
+  char result[1024];
+  snprintf(result, sizeof(result), "%s/writefail-result.txt", root);
+  check(write_settings_manifest(root, id, "true", "set", "false", result),
+        "write failure: manifest");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  setenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_WRITE", "0", 1);
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "write failure: host");
+  char state_file[2048];
+  settings_file_path(state_file, sizeof(state_file), root, id);
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "write failure: scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "write failure: find");
+    if (plugin != NULL) {
+      check(bd_plugin_set_settings_open(plugin, true),
+            "write failure: start plugin");
+      char result_text[256] = {0};
+      check(wait_for_result(host, result, result_text, sizeof(result_text),
+                            3000),
+            "write failure: protocol result");
+      check(strncmp(result_text, "error -32603", 12) == 0,
+            "write failure: expected -32603, got %s", result_text);
+      check(strstr(result_text, "injected write failure") != NULL,
+            "write failure: error text: %s", result_text);
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "write failure: value rolled back");
+      check(access(state_file, F_OK) != 0,
+            "write failure: failed write left no file");
+
+      unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_WRITE");
+      check(bd_plugin_set_setting(plugin, "show_meta", "false"),
+            "write failure: host API succeeds after recovery");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "write failure: recovered value");
+
+      setenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_WRITE", "0", 1);
+      check(!bd_plugin_set_setting(plugin, "show_meta", "true"),
+            "write failure: host API reports the failure");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "write failure: host API rolled back");
+      char contents[2048] = {0};
+      check(read_file_text(state_file, contents, sizeof(contents)) &&
+                strstr(contents, "\"show_meta\":\"false\"") != NULL,
+            "write failure: previous file preserved");
+      unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_WRITE");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_WRITE");
+
+  host = make_host(root, limits);
+  check(host != NULL, "write failure: reload host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "write failure: reload scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "write failure: reload find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "write failure: last successful value loaded");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
+static void test_settings_directory_sync_failure(void) {
+  char *root = make_root();
+  check(root != NULL, "dir sync: temp dir");
+  if (root == NULL) {
+    return;
+  }
+  const char *id = "com.test.dirsync";
+  char result[1024];
+  snprintf(result, sizeof(result), "%s/dirsync-result.txt", root);
+  check(write_settings_manifest(root, id, "true", "set", "false", result),
+        "dir sync: manifest");
+
+  bd_plugin_limits limits = bd_plugin_default_limits();
+  limits.handshake_timeout_ms = 2000;
+  limits.idle_stop_ms = 0;
+  setenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC", "1", 1);
+  bd_plugin_host *host = make_host(root, limits);
+  check(host != NULL, "dir sync: host");
+  char state_file[2048];
+  settings_file_path(state_file, sizeof(state_file), root, id);
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "dir sync: scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "dir sync: find");
+    if (plugin != NULL) {
+      check(bd_plugin_set_settings_open(plugin, true),
+            "dir sync: start plugin");
+      char result_text[256] = {0};
+      check(wait_for_result(host, result, result_text, sizeof(result_text),
+                            3000),
+            "dir sync: protocol result");
+      check(strcmp(result_text, "unsynced") == 0,
+            "dir sync: expected durable:false, got %s", result_text);
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: memory keeps the new value");
+      char contents[2048] = {0};
+      check(read_file_text(state_file, contents, sizeof(contents)) &&
+                strstr(contents, "\"show_meta\":\"false\"") != NULL,
+            "dir sync: visible file keeps the new value");
+      int not_durable = 0;
+      for (size_t i = 0; i < bd_plugin_host_diagnostic_count(host); ++i) {
+        char diagnostic[256];
+        if (bd_plugin_host_diagnostic(host, i, diagnostic, sizeof(diagnostic)) &&
+            strstr(diagnostic, "not durable") != NULL) {
+          ++not_durable;
+        }
+      }
+      check(not_durable >= 1, "dir sync: expected a not-durable diagnostic");
+
+      size_t diagnostics_before = bd_plugin_host_diagnostic_count(host);
+      check(bd_plugin_set_setting(plugin, "show_meta", "true"),
+            "dir sync: host API reports the applied value");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "true") == 0,
+            "dir sync: host API keeps the new value");
+      check(bd_plugin_host_diagnostic_count(host) > diagnostics_before,
+            "dir sync: host API reports the sync failure");
+
+      unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC");
+      check(bd_plugin_set_setting(plugin, "show_meta", "false"),
+            "dir sync: recovery save succeeds");
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: recovery value");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  unsetenv("BRICKDESK_PLUGIN_SETTINGS_FAIL_DIRSYNC");
+
+  host = make_host(root, limits);
+  check(host != NULL, "dir sync: reload host");
+  if (host != NULL) {
+    char error[256] = {0};
+    check(bd_plugin_host_scan(host, error, sizeof(error)) == 1,
+          "dir sync: reload scan (%s)", error);
+    bd_plugin *plugin = bd_plugin_host_find(host, id);
+    check(plugin != NULL, "dir sync: reload find");
+    if (plugin != NULL) {
+      check(strcmp(bd_plugin_get_setting(plugin, "show_meta"), "false") == 0,
+            "dir sync: recovery value loaded");
+    }
+    bd_plugin_host_destroy(host);
+  }
+  remove_tree(root);
+  free(root);
+}
+
 static void test_python_plugin(void) {
   bd_plugin_limits limits = bd_plugin_default_limits();
   limits.handshake_timeout_ms = 5000;
@@ -797,6 +1351,9 @@ static void test_python_plugin(void) {
   memset(&config, 0, sizeof(config));
   config.plugin_dir = BRICKDESK_TEST_PLUGIN_DIR;
   config.runtime_dir = runtime_dir;
+  char state_dir[1024];
+  snprintf(state_dir, sizeof(state_dir), "%s/state", runtime_dir);
+  config.state_dir = state_dir;
   config.limits = &limits;
   config.display_width = 1024;
   config.display_height = 768;
@@ -867,6 +1424,11 @@ int main(void) {
   test_ui_validation();
   test_invalid_ui_message();
   test_idle_stop_and_restart();
+  test_settings_persistence();
+  test_settings_isolation();
+  test_settings_corruption();
+  test_settings_write_failure();
+  test_settings_directory_sync_failure();
   test_memory_limit();
   test_desktop_frames_with_busy_plugin();
   test_python_plugin();

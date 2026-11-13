@@ -81,6 +81,7 @@ struct bd_plugin_host {
   char plugin_dir[BD_PLUGIN_MAX_PATH];
   char data_dir[BD_PLUGIN_MAX_PATH];
   char runtime_dir[BD_PLUGIN_MAX_PATH];
+  char state_dir[BD_PLUGIN_MAX_PATH];
   char locale[32];
   bd_plugin_limits limits;
   int display_width;

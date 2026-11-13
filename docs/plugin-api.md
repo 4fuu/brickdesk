@@ -43,15 +43,22 @@ non-executable entry files are rejected at scan time.
 
 The default directories are:
 
-| Build | Plugin directory |
-| --- | --- |
-| host | `<repo>/plugins` |
-| target | `/mnt/SDCARD/brickdesk/plugins` |
+| Build | Plugin directory | State directory |
+| --- | --- | --- |
+| host | `<repo>/plugins` | `/tmp/brickdesk-state` |
+| target | `/mnt/SDCARD/brickdesk/plugins` | `/mnt/SDCARD/brickdesk/state` |
 
-Override with `BRICKDESK_PLUGIN_DIR` or the `[plugins] dir` configuration key.
-Sockets, shared-memory files, per-plugin cache and data directories live under
-`BRICKDESK_RUNTIME_DIR` (default `/run/brickdesk`, falling back to
-`/tmp/brickdesk`).
+Override the plugin directory with `BRICKDESK_PLUGIN_DIR` or the
+`plugins.dir` configuration key. Sockets, shared-memory files, per-plugin cache
+and data directories live under `BRICKDESK_RUNTIME_DIR` (default
+`/run/brickdesk`, falling back to `/tmp/brickdesk`).
+
+Persisted plugin settings are host-owned state: each plugin id gets
+`<state-dir>/plugin-settings/<id>/settings.json`. The state directory comes
+from `bd_plugin_host_config.state_dir`, then `BRICKDESK_STATE_DIR`, then the
+build-time default above. The host never writes settings into the plugin
+package directory, and the protocol has no path parameter, so a plugin cannot
+choose the location.
 
 ## 3. Manifest
 
@@ -129,8 +136,9 @@ the package name and reason.
   `host.ping`.
 
 Error codes: `-32600` invalid request, `-32601` unknown method, `-32602` bad
-parameters, `-32005` internal/out-of-memory. The host logs protocol errors and
-keeps running; a malformed line does not take down the desktop.
+parameters, `-32603` internal error (including settings persistence failures),
+`-32005` internal/out-of-memory. The host logs protocol errors and keeps
+running; a malformed line does not take down the desktop.
 
 ## 5. Lifecycle
 
@@ -258,8 +266,38 @@ second.
 ```
 
 `get` returns `{"key":..., "value":...}` with the value typed according to the
-manifest. `set` validates the type, stores the value for this run, and sends a
-`settings.changed` event back. M1 does not persist settings to disk.
+manifest. Values are loaded from the host-owned settings file when the host
+scans plugins, so they survive a desktop restart.
+
+`set` validates the type, writes the new value atomically, and then sends a
+`settings.changed` event back. A normal success returns `{}`.
+
+If the temporary file, its fsync, its close, or the rename fails before the new
+file is in place, the value stays unchanged and the host returns `-32603` with
+the I/O error message.
+
+If the rename succeeded but opening, fsyncing, or closing the settings
+directory fails, the new file is already visible. The host keeps the new value
+in memory, still sends `settings.changed`, returns `{"durable":false}`, and
+records a diagnostic instead of reporting a plain success. A crash or power
+loss before the directory entry is durable may restore the old file, so a
+caller that needs a durable acknowledgement can retry the same `set`. The
+host-side `bd_plugin_set_setting()` follows the same rule: it returns true
+because the value is applied, and exposes the sync failure through
+`bd_plugin_host_diagnostic()`.
+
+The settings file is a single JSON object. Values are encoded as strings and
+validated against the manifest when read:
+
+```json
+{"version":1,"settings":{"show_meta":"false","quality":"high"}}
+```
+
+The host writes a temporary file in the same directory, fsyncs it, renames it
+over the old file, and fsyncs the directory. A missing file uses the manifest
+defaults. A corrupt or unreadable file also keeps the defaults and adds a scan
+diagnostic; it never prevents the plugin from loading. Unknown keys are
+ignored; a file with an unsupported version falls back to the defaults.
 
 ### `plugin.log` / `plugin.toast`
 
@@ -510,7 +548,7 @@ device.
 | Menu/hotkey UI | Menu items and hotkeys declared | Capabilities and events exist; menu routing is M1-09 |
 | Images in UI | `image` node with host decoding | Not implemented; use icon/text/progress in M1 |
 | Global RSS | 128 MB total, LRU stop | Per-process `RLIMIT_AS` only |
-| Persistence | Settings persisted | Settings live for the host process lifetime |
+| Persistence | Settings persisted | Per-plugin `plugin-settings/<id>/settings.json` under the host state root |
 | Protocol patching | `plugin.ui.patch` | Whole-tree `plugin.ui.set` only |
 
 These are intentionally visible so plugins and tests can rely on the

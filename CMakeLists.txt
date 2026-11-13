@@ -245,6 +245,7 @@ target_include_directories(brickdesk_plugin
 )
 target_compile_definitions(brickdesk_plugin
   PUBLIC BRICKDESK_PLUGIN_DIR="${BRICKDESK_PLUGIN_DIR}"
+  PRIVATE BRICKDESK_STATE_DIR="${BRICKDESK_STATE_DIR}"
 )
 target_link_libraries(brickdesk_plugin PRIVATE brickdesk_warnings)
 

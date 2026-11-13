@@ -3241,21 +3241,23 @@ static int shell_power_resource_prepare(void *user, bd_power_sleep_mode mode) {
     return 0;
   }
   char error[192] = {0};
-  bool ok = true;
+  /*
+   * Service and mixer shutdown is best-effort.  A missing ip/alsactl command
+   * or a Wi-Fi interface that is already gone must not turn a normal sleep
+   * into a poweroff; the failure is logged and resume still runs.
+   */
   if (!bd_net_suspend(error, sizeof(error))) {
     shell_power_resource_error(shell, "net suspend", error);
-    ok = false;
   }
   error[0] = '\0';
   if (!bd_bt_suspend(error, sizeof(error))) {
     shell_power_resource_error(shell, "Bluetooth suspend", error);
-    ok = false;
   }
-  /*
-   * Audio save is best-effort: a missing alsactl must not leave the device
-   * unable to suspend.  The failure is logged, and resume is still called.
-   */
-  return ok ? 0 : 1;
+  error[0] = '\0';
+  if (!bd_audio_suspend(error, sizeof(error))) {
+    shell_power_resource_error(shell, "audio suspend", error);
+  }
+  return 0;
 }
 
 static int shell_power_resource_restore(void *user, bd_power_sleep_mode mode) {
@@ -3271,18 +3273,23 @@ static int shell_power_resource_restore(void *user, bd_power_sleep_mode mode) {
     return 0;
   }
   char error[192] = {0};
-  bool ok = true;
+  /*
+   * Resume is best-effort as well: a failed service restart is logged and
+   * reported through the normal status path, but must not turn a wake into a
+   * degraded power state by itself.
+   */
+  if (!bd_audio_resume(error, sizeof(error))) {
+    shell_power_resource_error(shell, "audio resume", error);
+  }
   error[0] = '\0';
   if (!bd_bt_resume(error, sizeof(error))) {
     shell_power_resource_error(shell, "Bluetooth resume", error);
-    ok = false;
   }
   error[0] = '\0';
   if (!bd_net_resume(error, sizeof(error))) {
     shell_power_resource_error(shell, "net resume", error);
-    ok = false;
   }
-  return ok ? 0 : 1;
+  return 0;
 }
 
 static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {

@@ -410,8 +410,11 @@ hooks 的职责：
   后才写 0。读取失败、越界或缺少 getter/setter 都让轻睡失败，绝不盲写，也不
   把失败报告成已睡。零写入或恢复写入失败时保留快照，由 bd_power 的 rollback 或
   下一次 `DEGRADED` wake 重试；只有恢复成功才清除快照。
-- 不提供 `resource_prepare/restore`。本切片不暂停音频、Wi-Fi、BT、面板电源或
-  inputd；音频线程只随前台进程组的 SIGSTOP 停止，不能声称 codec/功放已挂起。
+- `resource_prepare/restore` 已接线：DEEP prepare 依次停止 Wi-Fi/热点
+  （udhcpc、wpa_supplicant、wlan0 down）、蓝牙（bluetoothctl power off、
+  bluealsa/bluetoothd、rfkill block）并执行 `alsactl store`；restore 逆序恢复
+  `alsactl restore`、rfkill/daemon/bluealsa、wlan0/supplicant/DHCP。服务命令失败
+  只记日志，不把正常睡眠变成关机；panel 电源和 inputd 仍不由本模块控制。
 
 亮度 0 只是现有 AV 后端的背光写入，不是面板断电；本切片没有 panel power API。
 RAM 冻结不是 `app.pause`、存档或掉电保护。
@@ -449,11 +452,12 @@ RAM 冻结不是 `app.pause`、存档或掉电保护。
 
 - 亮度/背光：power 模块本身不写 `/dev/disp`；shell 的 display hook 只使用既有
   AV getter/setter（生产由 device_av 提供，测试可注入）。未知值只报告失败。
-- 音频：本切片不调用 ALSA/tinymix，不声称音量、静音或路由已恢复；只有前台
-  进程组被 SIGSTOP。
+- 音频：DEEP prepare/restore 通过 `bd_audio_suspend/resume` 保存/恢复 ALSA
+  mixer 状态；轻睡只 SIGSTOP 前台进程组，不调用 ALSA。
 - 应用/session：只调用同步 freeze/thaw；不杀进程、不解析存档、不把冻结当成
   `app.pause`，也不改后台配额。
-- perf/网络：不停止 perf lease、Wi-Fi 或 BT；这些留给后续深睡任务。
+- perf/网络：DEEP 前后调用 `bd_net_suspend/resume` 和 `bd_bt_suspend/resume`；
+  perf lease 仍由 session 管理，不在电源 hook 里改动。
 - 输入：power 不打开 evdev；inputd 继续运行，shell 只丢弃睡眠期间的普通输入，
   不发送全局 release。
 - 插件：host 继续 poll；不发送 `system.suspend/resume`，插件进程不被冻结。

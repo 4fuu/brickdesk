@@ -133,7 +133,17 @@ schema_version = 1
 | `refresh_hz` | int | `60` | 30..120 | 刷新率 |
 | `brightness` | int | `70` | 0..100 | 背光百分比 |
 
-### 4.4 `[input]`
+### 4.4 `[audio]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `volume` | int | `70` | 0..100 | 系统输出音量百分比 |
+| `mute` | bool | `false` | — | 静音；保留音量值，取消静音后恢复 |
+
+音量、静音和背光由 `bd_settings_system` 接口应用到硬件；M3 使用记录状态的
+stub，M4 接入设备后端。
+
+### 4.5 `[input]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -143,7 +153,7 @@ schema_version = 1
 | `long_press_ms` | int | `500` | 100..3000 | 应用内长按阈值；热键用各自的 `hold_ms`，不读这个值 |
 | `double_tap_ms` | int | `300` | 100..1000 | 双击判定窗口 |
 
-### 4.5 `[power]`
+### 4.6 `[power]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -151,7 +161,7 @@ schema_version = 1
 | `low_battery_percent` | int | `5` | 0..100 | 低电量阈值 |
 | `shutdown_on_low_battery` | bool | `true` | — | 低于阈值是否关机 |
 
-### 4.6 `[plugins]`
+### 4.7 `[plugins]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -160,13 +170,14 @@ schema_version = 1
 | `idle_stop` | duration | `60s` | 0..24h | 插件空闲停止时间；不带单位按秒 |
 | `autostart_delay` | duration | `2s` | 0..10min | 开机后延迟启动插件；不带单位按秒 |
 
-### 4.7 `[session]`
+### 4.8 `[session]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
 | `state_quota_mb` | int | `512` | 64..4096 | 每个应用的存档配额 |
 | `quick_resume` | enum | `auto` | `auto`、`always`、`never` | 快速恢复策略 |
 | `max_background` | int | `3` | 1..8 | 同时保留在后台的应用数量上限 |
+| `memory_budget_mb` | int | `560` | 128..1024 | 后台应用的内存软上限（MB） |
 
 ## 5. `perf.ini`
 
@@ -174,7 +185,16 @@ profile 段是动态的：`[profile.<name>]`、`[app.<id>]`、`[core.<name>]`。
 配置层校验类型和范围；profile 继承链、未知 profile、循环检测由 M1-07 的
 perfd 在应用策略时完成。
 
-### 5.1 `[profile.<name>]`
+### 5.1 `[perf]`
+
+| key | 类型 | 默认 | 取值/范围 | 说明 |
+|---|---|---|---|---|
+| `global_profile` | string | `default` | 任一 `[profile.<name>]` 名 | perfd 的全局档位；设置页从这里读取和写回 |
+
+`global_profile` 只在设置页做成员校验；perfd 启动时仍以 `--profile` 参数
+为准，读取该 key 由后续的接线任务完成。
+
+### 5.2 `[profile.<name>]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -188,7 +208,7 @@ perfd 在应用策略时完成。
 未设置的字段由 `inherit` 链或 perfd 的策略决定；最终写入的频率必须是设备
 `scaling_available_frequencies` 里的值。
 
-### 5.2 `[app.<id>]`
+### 5.3 `[app.<id>]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -196,7 +216,7 @@ perfd 在应用策略时完成。
 
 `<id>` 是应用 id，例如 `org.libretro.retroarch`。
 
-### 5.3 `[core.<name>]`
+### 5.4 `[core.<name>]`
 
 | key | 类型 | 默认 | 取值/范围 | 说明 |
 |---|---|---|---|---|
@@ -207,7 +227,7 @@ perfd 在应用策略时完成。
 | `online_cores` | int | 未设置 | 2..4 | 覆盖核心数 |
 | `swappiness` | int | 未设置 | 0..100 | 覆盖 swappiness |
 
-### 5.4 预设、继承与解析
+### 5.5 预设、继承与解析
 
 随固件提供这些预设（都可在 `perf.ini` 里覆盖或删除）：
 
@@ -248,7 +268,7 @@ default（或显式 profile）
 - thermal zone 和 `/sys/class/devfreq/*` 只读展示；M1-07 不写 GPU 频率、
   thermal trip 或 cooling device。
 
-### 5.5 `brickdesk-perfd`
+### 5.6 `brickdesk-perfd`
 
 ```sh
 brickdesk-perfd [--config-dir DIR] [--socket PATH] [--sysfs-root DIR]
@@ -541,6 +561,9 @@ bool bd_config_save(bd_config *, char *error, size_t error_size);
 
 void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
                                    void *user);
+
+bool bd_config_describe(const bd_config *, const char *key,
+                        bd_config_schema_info *out);
 ```
 
 - key 是 section 和字段用 `.` 连接的完整路径，匹配时不做再次分割，所以
@@ -553,6 +576,9 @@ void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
 - `bd_config_source_layer()`/`bd_config_source_file()` 用于 UI 显示来源。
 - `bd_config_accent_hex(accent, dark)` 解析预设；自定义 `#RRGGBB` 原样返回，
   未知值返回 `NULL`。
+- `bd_config_describe()` 返回 key 的 schema 元数据（类型、min/max、枚举表、
+  默认值、长度），也支持 `hotkey.*`、`profile.*`、`app.*`、`core.*`、
+  `device.*` 动态 key。设置页用它生成控件，不逐行硬编码范围或枚举。
 
 ## 11. M1-04 的边界与后续
 
@@ -572,7 +598,7 @@ void bd_config_set_change_callback(bd_config *, bd_config_change_fn fn,
 - `flock` 并发写锁；
 - 热键冲突/前缀/scope 合并：M1-05 已实现，见 `docs/input.md` 和
   `bd-input --check`；应用级 scope 切换仍待 M1-09；
-- profile 继承链、循环、未知 profile：M1-07 已实现，见 5.4/5.5；
+- profile 继承链、循环、未知 profile：M1-07 已实现，见 5.5/5.6；
 - `/usr/share`、`/etc`、环境变量白名单、逐 key 命令行覆盖；
 - `path`、`frequency` 类型和 `restart_required` 标记；
 - `dump --json`；

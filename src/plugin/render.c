@@ -449,6 +449,101 @@ void bd_plugin_ui_draw(const bd_plugin_ui *ui, bd_gfx *gfx, bd_rect rect,
   bd_gfx_pop_clip(gfx);
 }
 
+int bd_plugin_ui_measure(const bd_plugin_ui *ui, int width) {
+  if (ui == NULL || ui->root < 0 || width <= 0) {
+    return 0;
+  }
+  return measure_node(ui, ui->root, width, 0);
+}
+
+static bool layout_find(const bd_plugin_ui *ui, int index, bd_rect rect,
+                        int target, bd_rect *out, int depth) {
+  if (ui == NULL || index < 0 || index >= ui->node_count || depth > 12 ||
+      rect.w <= 0 || rect.h <= 0) {
+    return false;
+  }
+  if (index == target) {
+    *out = rect;
+    return true;
+  }
+  const bd_plugin_ui_node *node = &ui->nodes[index];
+  if (node->type == BD_PLUGIN_UI_COLUMN) {
+    int x = rect.x + node->padding;
+    int width = rect.w - node->padding * 2;
+    if (width < 0) {
+      width = 0;
+    }
+    int y = rect.y + node->padding;
+    for (int i = 0; i < node->child_count; ++i) {
+      int child = node->children[i];
+      int height = measure_node(ui, child, width, depth + 1);
+      if (ui->nodes[child].type == BD_PLUGIN_UI_SPACER) {
+        height = 0;
+      }
+      if (layout_find(ui, child, bd_rect_make(x, y, width, height), target,
+                      out, depth + 1)) {
+        return true;
+      }
+      y += height + node->gap;
+    }
+  } else if (node->type == BD_PLUGIN_UI_ROW) {
+    int inner_width = rect.w - node->padding * 2;
+    if (inner_width < 0) {
+      inner_width = 0;
+    }
+    int count = node->child_count > 0 ? node->child_count : 1;
+    int gap_total = node->gap * (count - 1);
+    int fixed_width = 0;
+    int flexible = 0;
+    for (int i = 0; i < node->child_count; ++i) {
+      const bd_plugin_ui_node *child = &ui->nodes[node->children[i]];
+      if (child->type == BD_PLUGIN_UI_ICON) {
+        fixed_width += 28;
+      } else {
+        ++flexible;
+      }
+    }
+    int available = inner_width - gap_total - fixed_width;
+    if (available < 0) {
+      available = 0;
+    }
+    int flexible_width = flexible > 0 ? available / flexible : 0;
+    int x = rect.x + node->padding;
+    for (int i = 0; i < node->child_count; ++i) {
+      int child = node->children[i];
+      const bd_plugin_ui_node *child_node = &ui->nodes[child];
+      int width = child_node->type == BD_PLUGIN_UI_ICON ? 28 : flexible_width;
+      if (child_node->type == BD_PLUGIN_UI_SPACER) {
+        width = flexible_width;
+      }
+      int height = measure_node(ui, child, width, depth + 1);
+      int offset = (rect.h - node->padding * 2 - height) / 2;
+      if (offset < 0) {
+        offset = 0;
+      }
+      if (layout_find(ui, child,
+                      bd_rect_make(x, rect.y + node->padding + offset, width,
+                                   height),
+                      target, out, depth + 1)) {
+        return true;
+      }
+      x += width + node->gap;
+    }
+  }
+  return false;
+}
+
+bool bd_plugin_ui_node_rect(const bd_plugin_ui *ui, int node, int width,
+                            bd_rect *out) {
+  if (ui == NULL || out == NULL || ui->root < 0 || width <= 0 || node < 0 ||
+      node >= ui->node_count) {
+    return false;
+  }
+  int height = measure_node(ui, ui->root, width, 0);
+  return layout_find(ui, ui->root, bd_rect_make(0, 0, width, height), node,
+                     out, 0);
+}
+
 static const char *state_label(bd_plugin_state state) {
   switch (state) {
     case BD_PLUGIN_DISCOVERED:

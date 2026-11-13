@@ -9,7 +9,10 @@ The cover wall, text, themes and the device platform layer arrive in later
 milestones. The v3 home page is implemented as a reusable module in
 [src/home](src/home) with the API in
 [include/brickdesk/home.h](include/brickdesk/home.h); see
-[docs/home.md](docs/home.md). It is not wired into the event loop yet.
+[docs/home.md](docs/home.md). The v3 settings page lives in
+[src/settings](src/settings) with
+[include/brickdesk/settings.h](include/brickdesk/settings.h); see
+[docs/settings.md](docs/settings.md). Neither is wired into the event loop yet.
 
 For installing a release on the Brick Pro, see [docs/install.md](docs/install.md).
 The release package includes the desktop, input/perf daemons, tools, patched
@@ -107,6 +110,12 @@ The suite includes:
   blur fallback, incremental launch and host timing checks
 - `home_capture`: deterministic screenshots of dark/light home, live focus,
   running tile, return, quick panel, dialog, hint bar and launch frames
+- `settings`: schema-generated rows, value persistence/reload, slider hold
+  repeat, two-row focus damage with an exact partial/full match, hotkey
+  conflicts, perf overrides, long plugin-tree scrolling, reset confirm and
+  sub-pages
+- `settings_capture`: 15 screenshots for every category, accent, moved slider,
+  hotkey conflict, long plugin settings scroll, confirm dialog and light theme
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,
@@ -177,6 +186,7 @@ src/platform/          SDL2 window + GLES2 context (host_sdl.c also serves
 src/gfx/               GLES2 renderer and framebuffer capture
 src/app/               desktop scene, app tiles, event-loop shell
 src/home/              v3 home page module (wall, focus, chrome, transitions)
+src/settings/          v3 settings page module (schema rows, sub-pages, damage)
 src/input/             logical keys, hotkey state machine, evdev/input.ini,
                        inputd daemon
 src/session/           app manifests, process lifecycle, app IPC, last frame

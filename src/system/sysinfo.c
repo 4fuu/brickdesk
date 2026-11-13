@@ -79,7 +79,8 @@ static bool append_proc(proc_entry **items, size_t *count, size_t *capacity,
                         const proc_entry *entry) {
   if (*count == *capacity) {
     size_t next = *capacity > 0 ? *capacity * 2 : 128;
-    proc_entry *grown = (proc_entry *)realloc(*items, next * sizeof(*items));
+    proc_entry *grown =
+        (proc_entry *)realloc(*items, next * sizeof(proc_entry));
     if (grown == NULL) {
       return false;
     }

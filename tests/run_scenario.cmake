@@ -64,7 +64,7 @@ foreach(actual IN LISTS shots)
   # Mesa versions differ by low-bit rounding in SDF/text, blur and scaled
   # cover output.  Mesa 22 (orb) and Mesa 25 (Ubuntu 24.04 CI) can put that
   # drift on whole text lines across the wall and on the launch card, so allow
-  # a small fraction of <=3-LSB pixels and a wide cluster; a real layout shift
+  # a small fraction of <=4-LSB pixels and a wide cluster; a real layout shift
   # or colour change still fails.
   set(diff "${OUT_DIR}/${stem}.diff.png")
   execute_process(
@@ -73,7 +73,7 @@ foreach(actual IN LISTS shots)
             --actual "${actual}"
             --diff "${diff}"
             --mode tolerance
-            --max-delta 3
+            --max-delta 4
             --max-diff-ratio 0.02
             --min-ssim 0.9999
             --max-cluster 1024

@@ -507,3 +507,502 @@ bd_feedback_result bd_feedback_rumble_close(bd_feedback_rumble *rumble,
   }
   return BD_FEEDBACK_OK;
 }
+
+/* ---------------------------------------------------------------------- */
+/* TG4040 vendor LED animation                                             */
+/* ---------------------------------------------------------------------- */
+
+const char *bd_feedback_led_zone_name(bd_feedback_led_zone zone) {
+  switch (zone) {
+    case BD_FEEDBACK_LED_ZONE_M:
+      return "top bar";
+    case BD_FEEDBACK_LED_ZONE_LR:
+      return "stick rings";
+    case BD_FEEDBACK_LED_ZONE_F1:
+      return "F1";
+    case BD_FEEDBACK_LED_ZONE_F2:
+      return "F2";
+    case BD_FEEDBACK_LED_ZONE_REAR:
+      return "triggers";
+    case BD_FEEDBACK_LED_ZONE_COUNT:
+      break;
+  }
+  return "unknown";
+}
+
+const char *bd_feedback_led_zone_suffix(bd_feedback_led_zone zone) {
+  switch (zone) {
+    case BD_FEEDBACK_LED_ZONE_M:
+      return "m";
+    case BD_FEEDBACK_LED_ZONE_LR:
+      return "lr";
+    case BD_FEEDBACK_LED_ZONE_F1:
+      return "f1";
+    case BD_FEEDBACK_LED_ZONE_F2:
+      return "f2";
+    case BD_FEEDBACK_LED_ZONE_REAR:
+      return "rear";
+    case BD_FEEDBACK_LED_ZONE_COUNT:
+      break;
+  }
+  return "";
+}
+
+static bool led_anim_node(const bd_feedback_led_anim *led, const char *name,
+                          char *out, size_t out_size) {
+  char relative[BD_FEEDBACK_PATH_MAX];
+  int written = snprintf(relative, sizeof(relative),
+                         "/sys/class/led_anim/%s", name);
+  if (written <= 0 || (size_t)written >= sizeof(relative)) {
+    return false;
+  }
+  return bd_feedback_path_join(led->root, relative, out, out_size);
+}
+
+static bool write_led_anim_node(const bd_feedback_led_anim *led,
+                                const char *name, const char *text,
+                                bd_feedback_error *error,
+                                bd_feedback_result failure) {
+  char path[BD_FEEDBACK_PATH_MAX];
+  if (!led_anim_node(led, name, path, sizeof(path))) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "led_anim node name is too long: %s", name);
+    return false;
+  }
+  if (!bd_feedback_write_text(path, text)) {
+    bd_feedback_set_error(error, failure, "cannot write %s", path);
+    return false;
+  }
+  return true;
+}
+
+bd_feedback_result bd_feedback_led_anim_probe(
+    bd_feedback_led_anim *led, const bd_feedback_led_anim_config *config,
+    bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (led == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "led is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  memset(led, 0, sizeof(*led));
+  const char *root = config != NULL && config->sysfs_root != NULL
+                         ? config->sysfs_root
+                         : "";
+  int max_brightness =
+      config != NULL && config->max_brightness != 0 ? config->max_brightness
+                                                    : 100;
+  if (max_brightness < 1 || max_brightness > 100) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "led_anim max_brightness must be 1..100");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!bd_feedback_copy_string(led->root, sizeof(led->root), root)) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "led_anim sysfs root is too long");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  led->max_brightness = max_brightness;
+
+  char directory[BD_FEEDBACK_PATH_MAX];
+  if (!bd_feedback_path_join(root, "/sys/class/led_anim", directory,
+                             sizeof(directory)) ||
+      !bd_feedback_dir_exists(directory)) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "%s is not present", directory);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+
+  for (int i = 0; i < BD_FEEDBACK_LED_ZONE_COUNT; ++i) {
+    char name[32];
+    snprintf(name, sizeof(name), "effect_%s",
+             bd_feedback_led_zone_suffix((bd_feedback_led_zone)i));
+    char path[BD_FEEDBACK_PATH_MAX];
+    if (led_anim_node(led, name, path, sizeof(path)) &&
+        bd_feedback_file_exists(path)) {
+      led->zone_present[i] = true;
+    }
+  }
+  char shared[BD_FEEDBACK_PATH_MAX];
+  led->f1f2_shared =
+      led_anim_node(led, "max_scale_f1f2", shared, sizeof(shared)) &&
+      bd_feedback_file_exists(shared);
+
+  led->available = false;
+  for (int i = 0; i < BD_FEEDBACK_LED_ZONE_COUNT; ++i) {
+    if (led->zone_present[i]) {
+      led->available = true;
+      break;
+    }
+  }
+  if (!led->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "no led_anim zone nodes under %s", directory);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  return BD_FEEDBACK_OK;
+}
+
+bool bd_feedback_led_anim_has_zone(const bd_feedback_led_anim *led,
+                                   bd_feedback_led_zone zone) {
+  if (led == NULL || !led->available || zone < 0 ||
+      zone >= BD_FEEDBACK_LED_ZONE_COUNT) {
+    return false;
+  }
+  return led->zone_present[zone];
+}
+
+static bool led_anim_brightness_node(const bd_feedback_led_anim *led,
+                                     bd_feedback_led_zone zone, char *out,
+                                     size_t out_size) {
+  switch (zone) {
+    case BD_FEEDBACK_LED_ZONE_M:
+      return led_anim_node(led, "max_scale", out, out_size);
+    case BD_FEEDBACK_LED_ZONE_F1:
+      return led_anim_node(led, "max_scale_f1f2", out, out_size);
+    case BD_FEEDBACK_LED_ZONE_F2:
+      return false; /* shared with f1; f1 owns the brightness write */
+    case BD_FEEDBACK_LED_ZONE_LR:
+    case BD_FEEDBACK_LED_ZONE_REAR: {
+      char name[32];
+      snprintf(name, sizeof(name), "max_scale_%s",
+               bd_feedback_led_zone_suffix(zone));
+      return led_anim_node(led, name, out, out_size);
+    }
+    case BD_FEEDBACK_LED_ZONE_COUNT:
+      break;
+  }
+  return false;
+}
+
+static bd_feedback_result apply_led_anim_zone(
+    bd_feedback_led_anim *led, bd_feedback_led_zone zone,
+    const bd_feedback_led_anim_settings *settings, bd_feedback_error *error) {
+  const char *suffix = bd_feedback_led_zone_suffix(zone);
+  char text[64];
+
+  if (settings->brightness < 0 ||
+      settings->brightness > led->max_brightness) {
+    bd_feedback_set_error(
+        error, BD_FEEDBACK_ERR_RANGE,
+        "led_anim brightness %d is outside 0..%d", settings->brightness,
+        led->max_brightness);
+    return BD_FEEDBACK_ERR_RANGE;
+  }
+  if (settings->effect < 0 || settings->effect > 255) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_RANGE,
+                          "led_anim effect %d is outside 0..255",
+                          settings->effect);
+    return BD_FEEDBACK_ERR_RANGE;
+  }
+  if (settings->cycles < -1 || settings->cycles > 65535) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_RANGE,
+                          "led_anim cycles %d is outside -1..65535",
+                          settings->cycles);
+    return BD_FEEDBACK_ERR_RANGE;
+  }
+  if (settings->duration_ms < 1 || settings->duration_ms > 60000) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_RANGE,
+                          "led_anim duration %d ms is outside 1..60000",
+                          settings->duration_ms);
+    return BD_FEEDBACK_ERR_RANGE;
+  }
+  char brightness_path[BD_FEEDBACK_PATH_MAX];
+  if (led_anim_brightness_node(led, zone, brightness_path,
+                               sizeof(brightness_path))) {
+    snprintf(text, sizeof(text), "%d\n", settings->brightness);
+    if (!bd_feedback_write_text(brightness_path, text)) {
+      bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO,
+                            "cannot write %s", brightness_path);
+      return BD_FEEDBACK_ERR_IO;
+    }
+  } else if (zone != BD_FEEDBACK_LED_ZONE_F2) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "led_anim zone %s has no brightness node",
+                          bd_feedback_led_zone_name(zone));
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+
+  char name[32];
+  snprintf(name, sizeof(name), "effect_cycles_%s", suffix);
+  snprintf(text, sizeof(text), "%d\n", settings->cycles);
+  if (!write_led_anim_node(led, name, text, error, BD_FEEDBACK_ERR_IO)) {
+    return BD_FEEDBACK_ERR_IO;
+  }
+  snprintf(name, sizeof(name), "effect_duration_%s", suffix);
+  snprintf(text, sizeof(text), "%d\n", settings->duration_ms);
+  if (!write_led_anim_node(led, name, text, error, BD_FEEDBACK_ERR_IO)) {
+    return BD_FEEDBACK_ERR_IO;
+  }
+  snprintf(name, sizeof(name), "effect_rgb_hex_%s", suffix);
+  snprintf(text, sizeof(text), "%06X\n", (unsigned)(settings->rgb & 0xFFFFFFu));
+  if (!write_led_anim_node(led, name, text, error, BD_FEEDBACK_ERR_IO)) {
+    return BD_FEEDBACK_ERR_IO;
+  }
+  snprintf(name, sizeof(name), "effect_%s", suffix);
+  snprintf(text, sizeof(text), "%d\n", settings->effect);
+  if (!write_led_anim_node(led, name, text, error, BD_FEEDBACK_ERR_IO)) {
+    return BD_FEEDBACK_ERR_IO;
+  }
+  return BD_FEEDBACK_OK;
+}
+
+bd_feedback_result bd_feedback_led_anim_apply(
+    bd_feedback_led_anim *led, bd_feedback_led_zone zone,
+    const bd_feedback_led_anim_settings *settings, bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (led == NULL || settings == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "led_anim handle or settings is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!led->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
+                          "led_anim was not probed or is unavailable");
+    return BD_FEEDBACK_ERR_STATE;
+  }
+  if (zone < 0 || zone >= BD_FEEDBACK_LED_ZONE_COUNT ||
+      !led->zone_present[zone]) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "led_anim zone %d is not present", (int)zone);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  return apply_led_anim_zone(led, zone, settings, error);
+}
+
+bd_feedback_result bd_feedback_led_anim_apply_all(
+    bd_feedback_led_anim *led,
+    const bd_feedback_led_anim_settings settings[BD_FEEDBACK_LED_ZONE_COUNT],
+    bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (led == NULL || settings == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "led_anim handle or settings is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!led->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
+                          "led_anim was not probed or is unavailable");
+    return BD_FEEDBACK_ERR_STATE;
+  }
+  for (int i = 0; i < BD_FEEDBACK_LED_ZONE_COUNT; ++i) {
+    if (!led->zone_present[i]) {
+      continue;
+    }
+    bd_feedback_result result =
+        apply_led_anim_zone(led, (bd_feedback_led_zone)i, &settings[i], error);
+    if (result != BD_FEEDBACK_OK) {
+      return result;
+    }
+  }
+  return BD_FEEDBACK_OK;
+}
+
+bd_feedback_result bd_feedback_led_anim_off(bd_feedback_led_anim *led,
+                                            bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (led == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "led is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!led->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
+                          "led_anim was not probed or is unavailable");
+    return BD_FEEDBACK_ERR_STATE;
+  }
+  for (int i = 0; i < BD_FEEDBACK_LED_ZONE_COUNT; ++i) {
+    if (!led->zone_present[i]) {
+      continue;
+    }
+    char path[BD_FEEDBACK_PATH_MAX];
+    if (!led_anim_brightness_node(led, (bd_feedback_led_zone)i, path,
+                                  sizeof(path))) {
+      continue;
+    }
+    if (!bd_feedback_write_text(path, "0\n")) {
+      bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO, "cannot write %s",
+                            path);
+      return BD_FEEDBACK_ERR_IO;
+    }
+  }
+  return BD_FEEDBACK_OK;
+}
+
+/* ---------------------------------------------------------------------- */
+/* TG4040 vendor motor                                                     */
+/* ---------------------------------------------------------------------- */
+
+static int motor_voltage_for_percent(const bd_feedback_motor *motor,
+                                     int percent) {
+  if (percent <= 0 || percent >= 100) {
+    return motor->max_voltage_uv;
+  }
+  long long span = (long long)motor->max_voltage_uv - motor->min_voltage_uv;
+  return motor->min_voltage_uv +
+         (int)((long long)percent * span / 100);
+}
+
+bd_feedback_result bd_feedback_motor_open(bd_feedback_motor *motor,
+                                          const bd_feedback_motor_config *config,
+                                          bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (motor == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "motor is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  memset(motor, 0, sizeof(*motor));
+  const char *root = config != NULL && config->sysfs_root != NULL
+                         ? config->sysfs_root
+                         : "";
+  motor->min_voltage_uv =
+      config != NULL && config->min_voltage_uv != 0 ? config->min_voltage_uv
+                                                     : 500000;
+  motor->max_voltage_uv =
+      config != NULL && config->max_voltage_uv != 0 ? config->max_voltage_uv
+                                                     : 2500000;
+  motor->max_percent =
+      config != NULL && config->max_percent != 0 ? config->max_percent : 100;
+  motor->gpio = config != NULL && config->gpio != 0 ? config->gpio : 227;
+  if (motor->min_voltage_uv <= 0 ||
+      motor->max_voltage_uv <= motor->min_voltage_uv ||
+      motor->max_percent < 1 || motor->max_percent > 100 || motor->gpio < 0) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "invalid motor voltage/percent/gpio configuration");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+
+  char relative[BD_FEEDBACK_PATH_MAX];
+  snprintf(relative, sizeof(relative), "/sys/class/motor/voltage");
+  if (!bd_feedback_path_join(root, relative, motor->voltage,
+                             sizeof(motor->voltage)) ||
+      !bd_feedback_file_exists(motor->voltage)) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "%s is not present", motor->voltage);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  snprintf(relative, sizeof(relative), "/sys/class/gpio/gpio%d/value",
+           motor->gpio);
+  if (!bd_feedback_path_join(root, relative, motor->value,
+                             sizeof(motor->value))) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "motor GPIO path is too long");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  snprintf(relative, sizeof(relative), "/sys/class/gpio/gpio%d/direction",
+           motor->gpio);
+  if (!bd_feedback_path_join(root, relative, motor->direction,
+                             sizeof(motor->direction))) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT,
+                          "motor GPIO direction path is too long");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+
+  if (!bd_feedback_file_exists(motor->value)) {
+    char export_path[BD_FEEDBACK_PATH_MAX];
+    snprintf(relative, sizeof(relative), "/sys/class/gpio/export");
+    if (!bd_feedback_path_join(root, relative, export_path,
+                               sizeof(export_path)) ||
+        !bd_feedback_file_exists(export_path)) {
+      bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                            "%s is not exported and %s is missing",
+                            motor->value, export_path);
+      return BD_FEEDBACK_ERR_UNSUPPORTED;
+    }
+    char number[16];
+    snprintf(number, sizeof(number), "%d\n", motor->gpio);
+    if (!bd_feedback_write_text(export_path, number) &&
+        !bd_feedback_file_exists(motor->value)) {
+      bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO,
+                            "cannot export GPIO %d through %s", motor->gpio,
+                            export_path);
+      return BD_FEEDBACK_ERR_IO;
+    }
+    motor->exported_by_us = true;
+    if (bd_feedback_file_exists(motor->direction) &&
+        !bd_feedback_write_text(motor->direction, "out\n")) {
+      bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO,
+                            "cannot set %s to output", motor->direction);
+      return BD_FEEDBACK_ERR_IO;
+    }
+  }
+  if (access(motor->value, W_OK) != 0) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_UNSUPPORTED,
+                          "%s is not writable", motor->value);
+    return BD_FEEDBACK_ERR_UNSUPPORTED;
+  }
+  motor->available = true;
+  motor->active = false;
+  return BD_FEEDBACK_OK;
+}
+
+bd_feedback_result bd_feedback_motor_set(bd_feedback_motor *motor, int percent,
+                                         bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (motor == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "motor is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!motor->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
+                          "motor was not opened or is unavailable");
+    return BD_FEEDBACK_ERR_STATE;
+  }
+  if (percent < 0 || percent > 100 || percent > motor->max_percent) {
+    bd_feedback_set_error(
+        error, BD_FEEDBACK_ERR_RANGE,
+        "motor strength %d is outside 0..%d", percent, motor->max_percent);
+    return BD_FEEDBACK_ERR_RANGE;
+  }
+  int voltage = motor_voltage_for_percent(motor, percent);
+  char text[32];
+  snprintf(text, sizeof(text), "%d\n", voltage);
+  if (!bd_feedback_write_text(motor->voltage, text)) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO, "cannot write %s",
+                          motor->voltage);
+    return BD_FEEDBACK_ERR_IO;
+  }
+  snprintf(text, sizeof(text), "%d\n", percent > 0 ? 1 : 0);
+  if (!bd_feedback_write_text(motor->value, text)) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO, "cannot write %s",
+                          motor->value);
+    return BD_FEEDBACK_ERR_IO;
+  }
+  motor->active = percent > 0;
+  return BD_FEEDBACK_OK;
+}
+
+bd_feedback_result bd_feedback_motor_stop(bd_feedback_motor *motor,
+                                          bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (motor == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "motor is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!motor->available) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_STATE,
+                          "motor was not opened or is unavailable");
+    return BD_FEEDBACK_ERR_STATE;
+  }
+  if (!bd_feedback_write_text(motor->value, "0\n")) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_IO, "cannot write %s",
+                          motor->value);
+    return BD_FEEDBACK_ERR_IO;
+  }
+  motor->active = false;
+  return BD_FEEDBACK_OK;
+}
+
+bd_feedback_result bd_feedback_motor_close(bd_feedback_motor *motor,
+                                           bd_feedback_error *error) {
+  bd_feedback_error_clear(error);
+  if (motor == NULL) {
+    bd_feedback_set_error(error, BD_FEEDBACK_ERR_ARGUMENT, "motor is NULL");
+    return BD_FEEDBACK_ERR_ARGUMENT;
+  }
+  if (!motor->available) {
+    return BD_FEEDBACK_OK;
+  }
+  bd_feedback_result result = bd_feedback_motor_stop(motor, error);
+  motor->available = false;
+  motor->active = false;
+  return result;
+}

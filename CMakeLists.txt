@@ -316,6 +316,8 @@ add_library(brickdesk_shell STATIC
   src/app/shell.c
   src/app/notice.c
   src/app/perf_client.c
+  src/app/led.c
+  src/app/haptics.c
 )
 target_include_directories(brickdesk_shell
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -332,6 +334,7 @@ target_link_libraries(brickdesk_shell
     brickdesk_device
     brickdesk_battery
     brickdesk_power
+    brickdesk_feedback
   PRIVATE brickdesk_warnings
 )
 

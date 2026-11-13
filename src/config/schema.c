@@ -21,6 +21,14 @@ static const char *const g_power_long_press[] = {"shutdown", "reboot", "none",
                                                  NULL};
 static const char *const g_accents[] = {"persimmon", "coral", "teal", "blue",
                                         "green", "violet", NULL};
+static const char *const g_led_colors[] = {
+    "white", "red", "orange", "yellow", "green",
+    "cyan",  "blue", "violet", "magenta", "off", NULL};
+static const char *const g_led_effects[] = {
+    "linear",  "breathe", "interval_breathe", "static", "blink1",
+    "blink2",  "blink3",  "rainbow",          "twinkle", "fire",
+    "glitter", "neonglow", "firefly",         "aurora",  "reactive",
+    NULL};
 
 const bd_config_spec bd_config_specs[] = {
     /* theme */
@@ -52,6 +60,31 @@ const bd_config_spec bd_config_specs[] = {
     {"input", "chord_window_ms", BD_CONFIG_INT, "50", 10, 500, NULL, 0, 0, 0},
     {"input", "long_press_ms", BD_CONFIG_INT, "500", 100, 3000, NULL, 0, 0, 0},
     {"input", "double_tap_ms", BD_CONFIG_INT, "300", 100, 1000, NULL, 0, 0, 0},
+    {"input", "haptics", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"input", "haptic_strength", BD_CONFIG_INT, "60", 0, 100, NULL, 0, 0, 0},
+    {"input", "haptic_duration_ms", BD_CONFIG_INT, "35", 5, 500, NULL, 0, 0, 0},
+
+    /* led: Brick Pro vendor zones (m, lr, f1, f2, rear) */
+    {"led", "enabled", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
+    {"led", "duration_ms", BD_CONFIG_INT, "1000", 100, 60000, NULL, 0, 0, 0},
+    {"led", "indicator_brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led", "ambient", BD_CONFIG_BOOL, "false", 0, 0, NULL, 0, 0, 0},
+    {"led", "ambient_brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led.m", "brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led.m", "color", BD_CONFIG_ENUM, "white", 0, 0, g_led_colors, 0, 0, 0},
+    {"led.m", "effect", BD_CONFIG_ENUM, "static", 0, 0, g_led_effects, 0, 0, 0},
+    {"led.lr", "brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led.lr", "color", BD_CONFIG_ENUM, "white", 0, 0, g_led_colors, 0, 0, 0},
+    {"led.lr", "effect", BD_CONFIG_ENUM, "static", 0, 0, g_led_effects, 0, 0, 0},
+    {"led.f1", "brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led.f1", "color", BD_CONFIG_ENUM, "white", 0, 0, g_led_colors, 0, 0, 0},
+    {"led.f1", "effect", BD_CONFIG_ENUM, "static", 0, 0, g_led_effects, 0, 0, 0},
+    {"led.f2", "color", BD_CONFIG_ENUM, "white", 0, 0, g_led_colors, 0, 0, 0},
+    {"led.f2", "effect", BD_CONFIG_ENUM, "static", 0, 0, g_led_effects, 0, 0, 0},
+    {"led.rear", "brightness", BD_CONFIG_INT, "100", 0, 100, NULL, 0, 0, 0},
+    {"led.rear", "color", BD_CONFIG_ENUM, "white", 0, 0, g_led_colors, 0, 0, 0},
+    {"led.rear", "effect", BD_CONFIG_ENUM, "static", 0, 0, g_led_effects, 0, 0, 0},
+    {"led.app.*", "ambient", BD_CONFIG_BOOL, "true", 0, 0, NULL, 0, 0, 0},
 
     /* power */
     {"power", "sleep_after", BD_CONFIG_DURATION, "60s", 0, 86400000, NULL, 0,

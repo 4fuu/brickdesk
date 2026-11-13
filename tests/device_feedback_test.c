@@ -83,6 +83,12 @@ static bool join_path(char *out, size_t out_size, const char *base,
   return written > 0 && (size_t)written < out_size;
 }
 
+/* Single-threaded test helper: one joined path is live at a time. */
+static const char *join_temp(const char *base, const char *relative) {
+  static char buffer[512];
+  return join_path(buffer, sizeof(buffer), base, relative) ? buffer : NULL;
+}
+
 static bool mkdir_p(const char *path) {
   char buffer[512];
   int written = snprintf(buffer, sizeof(buffer), "%s", path);
@@ -1404,6 +1410,153 @@ static void test_cli_play_lifecycle(void) {
         "NULL rumble helper status");
 }
 
+static void test_vendor_led_anim(void) {
+  char *root = make_temp_dir();
+  bd_feedback_error error;
+  bd_feedback_error_clear(&error);
+  static const char *const ZONES[] = {"m", "lr", "f1", "f2", "rear"};
+  char path[512];
+  for (size_t i = 0; i < sizeof(ZONES) / sizeof(ZONES[0]); ++i) {
+    snprintf(path, sizeof(path), "sys/class/led_anim/effect_%s", ZONES[i]);
+    CHECK(write_fixture(root, path, "0"), "create effect_%s", ZONES[i]);
+    snprintf(path, sizeof(path), "sys/class/led_anim/effect_cycles_%s",
+             ZONES[i]);
+    CHECK(write_fixture(root, path, "-1"), "create cycles_%s", ZONES[i]);
+    snprintf(path, sizeof(path), "sys/class/led_anim/effect_duration_%s",
+             ZONES[i]);
+    CHECK(write_fixture(root, path, "1000\n"), "create duration_%s",
+          ZONES[i]);
+    snprintf(path, sizeof(path), "sys/class/led_anim/effect_rgb_hex_%s",
+             ZONES[i]);
+    CHECK(write_fixture(root, path, "FFFFFF\n"), "create rgb_%s", ZONES[i]);
+  }
+  CHECK(write_fixture(root, "sys/class/led_anim/max_scale", "0"),
+        "create max_scale");
+  CHECK(write_fixture(root, "sys/class/led_anim/max_scale_lr", "0"),
+        "create max_scale_lr");
+  CHECK(write_fixture(root, "sys/class/led_anim/max_scale_f1f2", "0"),
+        "create max_scale_f1f2");
+  CHECK(write_fixture(root, "sys/class/led_anim/max_scale_rear", "0"),
+        "create max_scale_rear");
+
+  bd_feedback_led_anim led;
+  bd_feedback_led_anim_config config;
+  memset(&config, 0, sizeof(config));
+  config.sysfs_root = root;
+  CHECK_RESULT(bd_feedback_led_anim_probe(&led, &config, &error),
+               BD_FEEDBACK_OK);
+  for (int i = 0; i < BD_FEEDBACK_LED_ZONE_COUNT; ++i) {
+    CHECK(bd_feedback_led_anim_has_zone(&led, (bd_feedback_led_zone)i),
+          "zone %d present", i);
+  }
+  CHECK(led.f1f2_shared, "f1f2 shared");
+
+  bd_feedback_led_anim_settings settings;
+  memset(&settings, 0, sizeof(settings));
+  settings.brightness = 42;
+  settings.effect = 4;
+  settings.cycles = -1;
+  settings.duration_ms = 1200;
+  settings.rgb = 0xFF3300;
+  CHECK_RESULT(bd_feedback_led_anim_apply(&led, BD_FEEDBACK_LED_ZONE_M,
+                                          &settings, &error),
+               BD_FEEDBACK_OK);
+  char text[64];
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/max_scale"),
+                  text, sizeof(text)) &&
+            strcmp(text, "42") == 0,
+        "max_scale=%s", text);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/effect_cycles_m"),
+                  text, sizeof(text)) &&
+            strcmp(text, "-1") == 0,
+        "cycles=%s", text);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/effect_duration_m"),
+                  text, sizeof(text)) &&
+            strcmp(text, "1200") == 0,
+        "duration=%s", text);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/effect_rgb_hex_m"),
+                  text, sizeof(text)) &&
+            strcmp(text, "FF3300") == 0,
+        "rgb=%s", text);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/effect_m"),
+                  text, sizeof(text)) &&
+            strcmp(text, "4") == 0,
+        "effect=%s", text);
+
+  settings.brightness = 30;
+  CHECK_RESULT(bd_feedback_led_anim_apply(&led, BD_FEEDBACK_LED_ZONE_F1,
+                                          &settings, &error),
+               BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/max_scale_f1f2"),
+                  text, sizeof(text)) &&
+            strcmp(text, "30") == 0,
+        "f1f2 brightness=%s", text);
+  settings.brightness = 80;
+  CHECK_RESULT(bd_feedback_led_anim_apply(&led, BD_FEEDBACK_LED_ZONE_F2,
+                                          &settings, &error),
+               BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/max_scale_f1f2"),
+                  text, sizeof(text)) &&
+            strcmp(text, "30") == 0,
+        "f2 must not change shared brightness=%s", text);
+
+  settings.brightness = 101;
+  CHECK_RESULT(bd_feedback_led_anim_apply(&led, BD_FEEDBACK_LED_ZONE_M,
+                                          &settings, &error),
+               BD_FEEDBACK_ERR_RANGE);
+  CHECK_RESULT(bd_feedback_led_anim_off(&led, &error), BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/led_anim/max_scale"),
+                  text, sizeof(text)) &&
+            strcmp(text, "0") == 0,
+        "off brightness=%s", text);
+  remove_temp_dir(root);
+}
+
+static void test_vendor_motor(void) {
+  char *root = make_temp_dir();
+  CHECK(write_fixture(root, "sys/class/motor/voltage", "2500000"),
+        "create motor voltage");
+  CHECK(write_fixture(root, "sys/class/gpio/gpio227/value", "0"),
+        "create gpio227 value");
+  CHECK(write_fixture(root, "sys/class/gpio/gpio227/direction", "out\n"),
+        "create gpio227 direction");
+
+  bd_feedback_motor motor;
+  bd_feedback_motor_config config;
+  memset(&config, 0, sizeof(config));
+  config.sysfs_root = root;
+  bd_feedback_error error;
+  bd_feedback_error_clear(&error);
+  CHECK_RESULT(bd_feedback_motor_open(&motor, &config, &error),
+               BD_FEEDBACK_OK);
+  CHECK(motor.available, "motor available");
+
+  char text[64];
+  CHECK_RESULT(bd_feedback_motor_set(&motor, 50, &error), BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/motor/voltage"),
+                  text, sizeof(text)) &&
+            strcmp(text, "1500000") == 0,
+        "motor voltage=%s", text);
+  CHECK(read_file(join_temp(root, "sys/class/gpio/gpio227/value"),
+                  text, sizeof(text)) &&
+            strcmp(text, "1") == 0,
+        "motor enable=%s", text);
+  CHECK_RESULT(bd_feedback_motor_set(&motor, 100, &error), BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/motor/voltage"),
+                  text, sizeof(text)) &&
+            strcmp(text, "2500000") == 0,
+        "motor max voltage=%s", text);
+  CHECK_RESULT(bd_feedback_motor_set(&motor, 101, &error),
+               BD_FEEDBACK_ERR_RANGE);
+  CHECK_RESULT(bd_feedback_motor_stop(&motor, &error), BD_FEEDBACK_OK);
+  CHECK(read_file(join_temp(root, "sys/class/gpio/gpio227/value"),
+                  text, sizeof(text)) &&
+            strcmp(text, "0") == 0,
+        "motor stop=%s", text);
+  CHECK_RESULT(bd_feedback_motor_close(&motor, &error), BD_FEEDBACK_OK);
+  remove_temp_dir(root);
+}
+
 int main(void) {
   test_led_real_sysfs();
   test_led_fake_io();
@@ -1412,6 +1565,8 @@ int main(void) {
   test_rumble_capabilities();
   test_rumble_failures();
   test_rumble_vendor_motor();
+  test_vendor_led_anim();
+  test_vendor_motor();
   test_cli_play_lifecycle();
 
   if (g_failures != 0) {

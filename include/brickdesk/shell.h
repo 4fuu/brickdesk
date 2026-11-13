@@ -112,6 +112,20 @@ bool bd_shell_confirm(bd_shell *shell, const char *title, const char *text,
 bool bd_shell_confirm_open(const bd_shell *shell);
 
 /*
+ * LED and haptic entry points shared with the power/battery work.
+ *
+ * bd_shell_led_refresh() re-evaluates charging/low-battery/ambient state and
+ * applies the matching profile.  bd_shell_led_sleep_pulse() applies the
+ * five-cycle sleep breathe and arms the shell's off deadline;
+ * bd_shell_led_wake() cancels that pulse and restores the user profile.
+ * bd_shell_haptic() plays one short vendor-motor pulse.
+ */
+bool bd_shell_led_refresh(bd_shell *shell);
+bool bd_shell_led_sleep_pulse(bd_shell *shell);
+void bd_shell_led_wake(bd_shell *shell);
+bool bd_shell_haptic(bd_shell *shell, int strength, int duration_ms);
+
+/*
  * Test hooks: the scenario harness feeds timestamped logical keys through the
  * same hotkey state machine even when a real inputd is present. Actions still
  * go through the single dispatch path used by the daemon and the SDL fallback.

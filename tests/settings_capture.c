@@ -275,6 +275,8 @@ int main(int argc, char **argv) {
   now += 16;
   ok = open_page(settings, BD_SETTINGS_CATEGORY_DISPLAY) &&
        capture(platform, gfx, settings, out_dir, "settings_display", now) && ok;
+  ok = open_page(settings, BD_SETTINGS_CATEGORY_LIGHTS) &&
+       capture(platform, gfx, settings, out_dir, "settings_lights", now) && ok;
   now += 16;
   bd_settings_update(settings, now);
   bd_settings_hold(settings, BD_SETTINGS_ACTION_RIGHT, true);

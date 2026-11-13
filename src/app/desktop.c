@@ -626,7 +626,8 @@ const char *bd_desktop_focused_app_id(const bd_desktop *desktop) {
 }
 
 static bool load_last_frame(bd_desktop *desktop, bd_desktop_app_state *app,
-                            const char *path) {
+                            const char *path, int target_width,
+                            int target_height) {
   bd_app_last_frame frame;
   memset(&frame, 0, sizeof(frame));
   char error[192] = {0};
@@ -645,27 +646,46 @@ static bool load_last_frame(bd_desktop *desktop, bd_desktop_app_state *app,
       copied.height > 0) {
     rgba = (uint8_t *)malloc((size_t)copied.width * copied.height * 4u);
     if (rgba != NULL) {
-      size_t row = (size_t)copied.width * 4u;
-      for (uint32_t y = 0; y < copied.height; ++y) {
-        memcpy(rgba + (size_t)y * row,
-               pixels + (size_t)(copied.height - 1u - y) * row, row);
+      uint32_t out_width = copied.width;
+      uint32_t out_height = copied.height;
+      if (target_width > 16 && target_height > 16) {
+        out_width = (uint32_t)target_width;
+        out_height = (uint32_t)target_height;
       }
-      /*
-       * Nearest avoids 1-LSB linear-sampling differences between Mesa
-       * versions, which would otherwise make the scenario baseline
-       * driver-dependent.
-       */
-      bd_texture *texture = bd_gfx_texture_create(
-          desktop->gfx, (int)copied.width, (int)copied.height, BD_TEXTURE_NEAREST,
-          rgba);
-      if (texture != NULL) {
+      uint8_t *scaled =
+          (uint8_t *)malloc((size_t)out_width * out_height * 4u);
+      if (scaled != NULL) {
+        /*
+         * Downsample to the exact on-screen size. Drawing a 1024x768
+         * texture into a smaller tile makes adjacent texel selection depend
+         * on the driver's UV interpolation; a 1:1 blit is stable, and nearest
+         * resampling avoids mixing adjacent source pixels.
+         */
+        for (uint32_t y = 0; y < out_height; ++y) {
+          uint32_t source_y =
+              (uint32_t)((uint64_t)y * copied.height / out_height);
+          uint32_t source_row = copied.height - 1u - source_y;
+          for (uint32_t x = 0; x < out_width; ++x) {
+            uint32_t source_x =
+                (uint32_t)((uint64_t)x * copied.width / out_width);
+            memcpy(scaled + ((size_t)y * out_width + x) * 4u,
+                   pixels + ((size_t)source_row * copied.width + source_x) * 4u,
+                   4u);
+          }
+        }
+        bd_texture *texture = bd_gfx_texture_create(
+            desktop->gfx, (int)out_width, (int)out_height, BD_TEXTURE_NEAREST,
+            scaled);
+        free(scaled);
+        if (texture != NULL) {
         if (app->frame != NULL) {
           bd_gfx_texture_destroy(desktop->gfx, app->frame);
         }
-        app->frame = texture;
-        app->frame_seq = copied.frame_seq;
-        copy_string(app->frame_path, sizeof(app->frame_path), path);
-        ok = true;
+          app->frame = texture;
+          app->frame_seq = copied.frame_seq;
+          copy_string(app->frame_path, sizeof(app->frame_path), path);
+          ok = true;
+        }
       }
     }
   }
@@ -689,7 +709,17 @@ void bd_desktop_set_app_running(bd_desktop *desktop, const char *app_id,
     app->running = running;
     if (running && last_frame_path != NULL && last_frame_path[0] != '\0') {
       if (strcmp(app->frame_path, last_frame_path) != 0 || app->frame == NULL) {
-        if (load_last_frame(desktop, app, last_frame_path)) {
+        int target_width = 0;
+        int target_height = 0;
+        for (int item = 0; item < desktop->item_count; ++item) {
+          if (desktop->item_app[item] == i) {
+            target_width = desktop->items[item].rect.w;
+            target_height = desktop->items[item].rect.h - 80;
+            break;
+          }
+        }
+        if (load_last_frame(desktop, app, last_frame_path, target_width,
+                            target_height)) {
           changed = true;
         }
       }

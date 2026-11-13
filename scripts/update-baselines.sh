@@ -3,7 +3,7 @@
 #
 # Usage: scripts/update-baselines.sh [target ...]
 # Targets: boot focus_move hint_hold launch_menu primitives text tiles blur
-#          plugin_hello plugin_settings menu home settings
+#          plugin_hello plugin_settings plugin_settings_off menu home settings
 # Default: all of them.
 # Baseline updates must be reviewed and committed separately from feature work.
 set -euo pipefail
@@ -13,7 +13,7 @@ BUILD_DIR=${BUILD_DIR:-"$ROOT/build-host"}
 BASELINE_DIR=${BASELINE_DIR:-"$ROOT/tests/baselines/host"}
 
 if [ "$#" -eq 0 ]; then
-  set -- boot focus_move hint_hold launch_menu primitives text tiles blur plugin_hello plugin_settings menu home settings
+  set -- boot focus_move hint_hold launch_menu primitives text tiles blur plugin_hello plugin_settings plugin_settings_off menu home settings
 fi
 
 scenarios=()
@@ -26,7 +26,7 @@ for target in "$@"; do
   case "$target" in
     boot|focus_move|hint_hold) scenarios+=("$target") ;;
     launch_menu) launch_menu=1 ;;
-    primitives|text|tiles|blur|plugin_hello|plugin_settings) captures+=("$target") ;;
+    primitives|text|tiles|blur|plugin_hello|plugin_settings|plugin_settings_off) captures+=("$target") ;;
     menu) menu=1 ;;
     home) home=1 ;;
     settings) settings=1 ;;

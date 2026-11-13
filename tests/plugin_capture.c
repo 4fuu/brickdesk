@@ -200,17 +200,31 @@ int main(int argc, char **argv) {
   const bd_plugin_ui *settings = bd_plugin_ui_settings(plugin);
   bool settings_saved = false;
   if (settings != NULL) {
-    bd_gfx_damage_all(gfx);
-    bd_gfx_begin_frame(gfx);
-    bd_desktop_draw(desktop, gfx);
-    bd_desktop_draw_plugin_settings(desktop, gfx, settings);
-    bd_gfx_end_frame(gfx);
-    bd_platform_present(platform);
-    int settings_written =
-        snprintf(path, sizeof(path), "%s/plugin_settings.png", argv[1]);
-    if (settings_written > 0 && (size_t)settings_written < sizeof(path)) {
-      settings_saved = bd_gfx_save_png(gfx, path);
-      printf("plugin_capture: settings file=%s\n", path);
+    settings_saved = true;
+    for (int off = 0; off < 2; ++off) {
+      bd_plugin_ui capture_ui = *settings;
+      if (off) {
+        for (int i = 0; i < capture_ui.node_count; ++i) {
+          if (capture_ui.nodes[i].type == BD_PLUGIN_UI_TOGGLE) {
+            capture_ui.nodes[i].boolean = false;
+          }
+        }
+      }
+      bd_gfx_damage_all(gfx);
+      bd_gfx_begin_frame(gfx);
+      bd_desktop_draw(desktop, gfx);
+      bd_desktop_draw_plugin_settings(desktop, gfx, &capture_ui);
+      bd_gfx_end_frame(gfx);
+      bd_platform_present(platform);
+      int settings_written = snprintf(path, sizeof(path),
+                                      "%s/plugin_settings%s.png", argv[1],
+                                      off ? "_off" : "");
+      if (settings_written > 0 && (size_t)settings_written < sizeof(path)) {
+        settings_saved = bd_gfx_save_png(gfx, path) && settings_saved;
+        printf("plugin_capture: settings file=%s\n", path);
+      } else {
+        settings_saved = false;
+      }
     }
   }
 

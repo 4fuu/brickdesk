@@ -128,8 +128,10 @@ frame to the declared tree (capped at the table viewport), and
 `bd_plugin_ui_node_rect()` drives focus-following scroll: moving to a control
 outside the table scrolls the tree until the whole control is visible. An
 overflowing tree reserves 12 px of bottom scroll padding and uses the same
-table scrollbar as the row pages. Plugin controls keep the host renderer's own
-radii; only the settings frame follows the square direction.
+table scrollbar as the row pages. Native and plugin toggles share the 44×24 px
+track (4 px radius) and 18×18 px knob (3 px radius) in `bd_ui_draw_toggle()`.
+The knob moves 20 px between off and on; row focus stays separate from value.
+Other plugin controls keep the host renderer's own radii.
 
 ## Values and persistence
 

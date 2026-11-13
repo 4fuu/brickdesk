@@ -174,3 +174,10 @@ void bd_ui_draw_battery(bd_gfx *gfx, int center_x, int center_y, int percent,
   }
 }
 
+void bd_ui_draw_toggle(bd_gfx *gfx, int x, int y, bool on,
+                       bd_color track, bd_color knob) {
+  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y, BD_UI_TOGGLE_W,
+                                          BD_UI_TOGGLE_H), 4, track);
+  int knob_x = on ? x + BD_UI_TOGGLE_W - 21 : x + 3;
+  bd_gfx_fill_round_rect(gfx, bd_rect_make(knob_x, y + 3, 18, 18), 3, knob);
+}

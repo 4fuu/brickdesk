@@ -227,17 +227,15 @@ static void draw_toggle_node(ui_draw_context *context,
                              int index) {
   if (context->fonts != NULL) {
     bd_gfx_draw_text_ellipsized(context->gfx, context->fonts->body, rect.x,
-                                rect.y + 20, rect.w - 52, context->colors.text,
+                                rect.y + 20, rect.w - BD_UI_TOGGLE_W - 16,
+                                context->colors.text,
                                 node->text);
   }
-  bd_rect pill = bd_rect_make(rect.x + rect.w - 40, rect.y + 5, 40, 20);
-  bd_gfx_fill_round_rect(context->gfx, pill, 10,
-                         node->boolean ? context->colors.accent
-                                       : context->colors.soft);
-  bd_color knob = context->colors.text;
-  int knob_x = node->boolean ? pill.x + 21 : pill.x + 3;
-  bd_gfx_fill_round_rect(context->gfx, bd_rect_make(knob_x, pill.y + 2, 16, 16),
-                         8, knob);
+  bd_ui_draw_toggle(context->gfx, rect.x + rect.w - BD_UI_TOGGLE_W - 4,
+                     rect.y + (rect.h - BD_UI_TOGGLE_H) / 2, node->boolean,
+                     node->boolean ? context->colors.accent
+                                   : context->colors.soft,
+                     context->colors.text);
   if (index == context->focused_node) {
     bd_gfx_stroke_round_rect(context->gfx, bd_rect_make(rect.x - 2, rect.y - 1,
                                                         rect.w + 4, rect.h + 2),

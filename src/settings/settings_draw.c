@@ -295,15 +295,11 @@ static bd_color knob_color(void) {
 static void draw_toggle(const bd_settings *settings, bd_gfx *gfx,
                         const bd_settings_row *row, bd_rect rect, int right) {
   bool value = bd_config_get_bool(settings->config, row->key, false);
-  int pill_w = 44;
-  int pill_h = 24;
-  int x = right - pill_w;
-  int y = rect.y + (rect.h - pill_h) / 2;
+  int x = right - BD_UI_TOGGLE_W;
+  int y = rect.y + (rect.h - BD_UI_TOGGLE_H) / 2;
   bd_color track = value ? settings->accent.accent : settings->palette.surface3;
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(x, y, pill_w, pill_h), 4, track);
-  int knob_x = value ? x + pill_w - 21 : x + 3;
   bd_color knob = value ? knob_color() : settings->palette.ink2;
-  bd_gfx_fill_round_rect(gfx, bd_rect_make(knob_x, y + 3, 18, 18), 3, knob);
+  bd_ui_draw_toggle(gfx, x, y, value, track, knob);
   char label[8];
   snprintf(label, sizeof(label), "%s", value ? "开" : "关");
   int width = bd_font_measure_text(settings->fonts.caption, label);

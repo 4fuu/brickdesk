@@ -55,4 +55,11 @@ void bd_ui_draw_wifi(bd_gfx *gfx, int center_x, int center_y,
 void bd_ui_draw_battery(bd_gfx *gfx, int center_x, int center_y, int percent,
                         bd_color outline, bd_color fill);
 
+/* Shared switch geometry. x/y is the track's top-left; callers own colours,
+ * labels and row focus so a switch does not look selected merely by being on. */
+#define BD_UI_TOGGLE_W 44
+#define BD_UI_TOGGLE_H 24
+void bd_ui_draw_toggle(bd_gfx *gfx, int x, int y, bool on,
+                       bd_color track, bd_color knob);
+
 #endif /* BRICKDESK_UI_H */

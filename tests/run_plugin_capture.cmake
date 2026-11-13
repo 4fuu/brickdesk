@@ -1,5 +1,5 @@
-# Runs the plugin desktop capture and compares plugin_hello.png with its
-# baseline. Required: CAPTURE, OUT_DIR, BASELINE_DIR, IMAGEDIFF, PYTHON
+# Runs plugin desktop and settings on/off captures against their baselines.
+# Required: CAPTURE, OUT_DIR, BASELINE_DIR, IMAGEDIFF, PYTHON
 
 if(NOT DEFINED CAPTURE OR NOT DEFINED OUT_DIR OR NOT DEFINED BASELINE_DIR OR
    NOT DEFINED IMAGEDIFF OR NOT DEFINED PYTHON)
@@ -27,14 +27,14 @@ if(NOT capture_result EQUAL 0)
   message(FATAL_ERROR "plugin capture failed (exit ${capture_result})")
 endif()
 
-foreach(name IN ITEMS plugin_hello plugin_settings)
+foreach(name IN ITEMS plugin_hello plugin_settings plugin_settings_off)
   set(actual "${OUT_DIR}/${name}.png")
   set(expected "${BASELINE_DIR}/${name}.png")
   if(NOT EXISTS "${actual}")
     message(FATAL_ERROR "plugin capture produced no ${name}.png")
   endif()
   if(NOT EXISTS "${expected}")
-    message(FATAL_ERROR "missing baseline ${expected} (run scripts/update-baselines.sh plugin_hello plugin_settings)")
+    message(FATAL_ERROR "missing baseline ${expected} (run scripts/update-baselines.sh plugin_hello plugin_settings plugin_settings_off)")
   endif()
 
   set(diff "${OUT_DIR}/${name}.diff.png")

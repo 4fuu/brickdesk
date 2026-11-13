@@ -329,6 +329,11 @@ Node types:
 | `button` | `id`, `label`, `action` | Interactive; `id` and `action` are required. |
 | `spacer` | — | Flexible space. |
 
+Toggles share the native settings switch geometry: a 44×24 px track with a
+4 px radius and an 18×18 px knob. The renderer reserves a 12 px label gap and
+4 px right inset so the switch stays clear of the row focus outline. Colours
+come from the host theme; plugins cannot override the switch shape.
+
 Common optional fields: `id` (up to 39 bytes), `padding` and `gap` (0–64).
 Strings are limited to 127 bytes; icon names, actions, and ids to 39 bytes;
 select options to 31 bytes. Unknown node types, missing required fields,

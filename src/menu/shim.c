@@ -378,51 +378,87 @@ static void load_system_ops(void) {
   if (g_installed_ops_valid) {
     g_shim.system_ops = g_installed_ops;
   } else {
-    bd_menu_system_ops_stub(&g_shim.system_ops);
+    const char *selection = getenv("BRICKDESK_MENU_SYSTEM");
+    if (selection != NULL && strcmp(selection, "stub") == 0) {
+      bd_menu_system_ops_stub(&g_shim.system_ops);
+    } else {
+      if (selection != NULL && selection[0] != '\0' &&
+          strcmp(selection, "device") != 0) {
+        debug_log("unknown BRICKDESK_MENU_SYSTEM; using device backends");
+      }
+      bd_menu_system_ops_device(&g_shim.system_ops);
+    }
   }
   pthread_mutex_unlock(&g_ops_lock);
 }
 
-static void adjust_brightness(int delta) {
-  int value = g_shim.model.brightness;
-  if (g_shim.system_ops.brightness_get != NULL) {
-    int current = g_shim.system_ops.brightness_get(g_shim.system_ops.user);
-    if (current >= 0) {
-      value = current;
-    }
+typedef enum menu_control {
+  MENU_CONTROL_BRIGHTNESS = 0,
+  MENU_CONTROL_VOLUME
+} menu_control;
+
+static int menu_control_get(menu_control control) {
+  if (control == MENU_CONTROL_BRIGHTNESS) {
+    return g_shim.system_ops.brightness_get != NULL
+               ? g_shim.system_ops.brightness_get(g_shim.system_ops.user)
+               : -1;
   }
-  value += delta;
-  if (value < 0) {
-    value = 0;
-  }
-  if (value > 100) {
-    value = 100;
-  }
-  if (g_shim.system_ops.brightness_set != NULL) {
-    g_shim.system_ops.brightness_set(g_shim.system_ops.user, value);
-  }
-  g_shim.model.brightness = value;
+  return g_shim.system_ops.volume_get != NULL
+             ? g_shim.system_ops.volume_get(g_shim.system_ops.user)
+             : -1;
 }
 
-static void adjust_volume(int delta) {
-  int value = g_shim.model.volume;
-  if (g_shim.system_ops.volume_get != NULL) {
-    int current = g_shim.system_ops.volume_get(g_shim.system_ops.user);
-    if (current >= 0) {
-      value = current;
-    }
+static bool menu_control_set(menu_control control, int percent) {
+  if (control == MENU_CONTROL_BRIGHTNESS) {
+    return g_shim.system_ops.brightness_set != NULL &&
+           g_shim.system_ops.brightness_set(g_shim.system_ops.user, percent);
   }
-  value += delta;
-  if (value < 0) {
-    value = 0;
+  return g_shim.system_ops.volume_set != NULL &&
+         g_shim.system_ops.volume_set(g_shim.system_ops.user, percent);
+}
+
+static const char *menu_control_label(menu_control control) {
+  return control == MENU_CONTROL_BRIGHTNESS ? "亮度" : "音量";
+}
+
+static int *menu_control_model(menu_control control) {
+  return control == MENU_CONTROL_BRIGHTNESS ? &g_shim.model.brightness
+                                            : &g_shim.model.volume;
+}
+
+static void adjust_control(menu_control control, int delta) {
+  int *value = menu_control_model(control);
+  const char *label = menu_control_label(control);
+  int current = menu_control_get(control);
+  if (current < 0) {
+    *value = -1;
+    snprintf(g_shim.model.status, sizeof(g_shim.model.status), "%s不可用",
+             label);
+    return;
   }
-  if (value > 100) {
-    value = 100;
+  int requested = current + delta;
+  if (requested < 0) {
+    requested = 0;
   }
-  if (g_shim.system_ops.volume_set != NULL) {
-    g_shim.system_ops.volume_set(g_shim.system_ops.user, value);
+  if (requested > 100) {
+    requested = 100;
   }
-  g_shim.model.volume = value;
+  bool wrote = menu_control_set(control, requested);
+  /*
+   * Never show the requested value.  A successful device_av write has already
+   * been read back by the backend; this second read reports the quantized
+   * percent the hardware actually confirms.  A failed write keeps whatever the
+   * device still reports (or unknown when it cannot be read).
+   */
+  int confirmed = menu_control_get(control);
+  *value = confirmed;
+  if (!wrote) {
+    snprintf(g_shim.model.status, sizeof(g_shim.model.status), "%s设置失败",
+             label);
+  } else if (confirmed < 0) {
+    snprintf(g_shim.model.status, sizeof(g_shim.model.status), "%s回读失败",
+             label);
+  }
 }
 
 static void cycle_profile(int delta) {
@@ -500,10 +536,10 @@ static void menu_key(const bd_menu_present *present, const char *key,
   if (strcmp(key, "LEFT") == 0 || strcmp(key, "RIGHT") == 0) {
     int delta = strcmp(key, "LEFT") == 0 ? -5 : 5;
     if (g_shim.model.focus == BD_MENU_ITEM_BRIGHTNESS) {
-      adjust_brightness(delta);
+      adjust_control(MENU_CONTROL_BRIGHTNESS, delta);
       redraw_menu(present);
     } else if (g_shim.model.focus == BD_MENU_ITEM_VOLUME) {
-      adjust_volume(delta);
+      adjust_control(MENU_CONTROL_VOLUME, delta);
       redraw_menu(present);
     } else if (g_shim.model.focus == BD_MENU_ITEM_PERF) {
       cycle_profile(strcmp(key, "LEFT") == 0 ? -1 : 1);
@@ -619,19 +655,8 @@ static bool open_menu(const bd_menu_present *present) {
   g_shim.model.focus = BD_MENU_ITEM_RESUME;
   g_shim.model.accent = accent;
   load_system_ops();
-  g_shim.model.brightness =
-      g_shim.system_ops.brightness_get != NULL
-          ? g_shim.system_ops.brightness_get(g_shim.system_ops.user)
-          : 70;
-  g_shim.model.volume = g_shim.system_ops.volume_get != NULL
-                            ? g_shim.system_ops.volume_get(g_shim.system_ops.user)
-                            : 50;
-  if (g_shim.model.brightness < 0) {
-    g_shim.model.brightness = 70;
-  }
-  if (g_shim.model.volume < 0) {
-    g_shim.model.volume = 50;
-  }
+  g_shim.model.brightness = menu_control_get(MENU_CONTROL_BRIGHTNESS);
+  g_shim.model.volume = menu_control_get(MENU_CONTROL_VOLUME);
   bd_menu_perf_open(&g_shim.perf, g_shim.app_id, &g_shim.model);
 
   write_last_frame(gl);

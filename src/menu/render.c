@@ -1176,27 +1176,32 @@ void bd_menu_gl_draw_menu(bd_menu_gl *gl, const bd_menu_model *model) {
     if (i == BD_MENU_ITEM_BRIGHTNESS || i == BD_MENU_ITEM_VOLUME) {
       int percent = i == BD_MENU_ITEM_BRIGHTNESS ? model->brightness
                                                  : model->volume;
-      snprintf(value, sizeof(value), "%d%%", percent);
-      draw_text_right(gl, &gl->body_font, right, baseline, ink2, value);
-      float value_width = (float)text_width(gl, &gl->body_font, value);
-      float track_w = 118.0f;
-      float track_right = right - value_width - 16.0f;
-      float track_left = track_right - track_w;
-      float track_y = row_y + 23.0f;
-      float track_h = 4.0f;
-      round_rect(gl, track_left, track_y, track_w, track_h, 2, surface3);
-      float fill_w = track_w * (float)(percent < 0 ? 0 : percent) / 100.0f;
-      if (fill_w > 0) {
-        round_rect(gl, track_left, track_y, fill_w, track_h, 2,
-                   model->accent);
+      if (percent < 0) {
+        /* No device, or the device did not confirm a value. */
+        draw_text_right(gl, &gl->body_font, right, baseline, ink3, "不可用");
+      } else {
+        snprintf(value, sizeof(value), "%d%%", percent);
+        draw_text_right(gl, &gl->body_font, right, baseline, ink2, value);
+        float value_width = (float)text_width(gl, &gl->body_font, value);
+        float track_w = 118.0f;
+        float track_right = right - value_width - 16.0f;
+        float track_left = track_right - track_w;
+        float track_y = row_y + 23.0f;
+        float track_h = 4.0f;
+        round_rect(gl, track_left, track_y, track_w, track_h, 2, surface3);
+        float fill_w = track_w * (float)percent / 100.0f;
+        if (fill_w > 0) {
+          round_rect(gl, track_left, track_y, fill_w, track_h, 2,
+                     model->accent);
+        }
+        float knob = 12.0f;
+        float knob_x = track_left + fill_w - knob / 2.0f;
+        if (knob_x < track_left - knob / 2.0f) {
+          knob_x = track_left - knob / 2.0f;
+        }
+        round_rect(gl, knob_x, track_y + track_h / 2.0f - knob / 2.0f, knob,
+                   knob, knob / 2.0f, model->accent);
       }
-      float knob = 12.0f;
-      float knob_x = track_left + fill_w - knob / 2.0f;
-      if (knob_x < track_left - knob / 2.0f) {
-        knob_x = track_left - knob / 2.0f;
-      }
-      round_rect(gl, knob_x, track_y + track_h / 2.0f - knob / 2.0f, knob,
-                 knob, knob / 2.0f, model->accent);
     } else if (i == BD_MENU_ITEM_PERF) {
       if (model->perf_available && model->profile_count > 0) {
         const char *profile = model->profiles[model->profile_index];

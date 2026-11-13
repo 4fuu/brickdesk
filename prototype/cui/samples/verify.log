@@ -1,0 +1,16 @@
+gl: OpenGL ES 2.0 Mesa 22.3.6 / OpenGL ES GLSL ES 1.0.16
+self-check: bayer permutation/subset/clamp ok
+01_cell2_zero: 2px cells, 183x5 texels, 0/915 lit (0.000), 366x10, rows at 214
+02_cell2_506: 2px cells, 183x5 texels, 458/915 lit (0.494), 366x10, rows at 214
+03_cell2_full: 2px cells, 183x5 texels, 915/915 lit (1.000), 366x10, rows at 214
+04_cell2_unknown: 2px cells, 183x5 texels, 276/915 lit (0.250), 366x10, rows at 214
+05_cell3_zero: 3px cells, 122x4 texels, 0/488 lit (0.000), 366x12, rows at 216
+06_cell3_506: 3px cells, 122x4 texels, 244/488 lit (0.494), 366x12, rows at 216
+07_cell3_full: 3px cells, 122x4 texels, 488/488 lit (1.000), 366x12, rows at 216
+08_cell3_unknown: 3px cells, 122x4 texels, 122/488 lit (0.250), 366x12, rows at 216
+09_cell4_zero: 4px cells, 91x4 texels, 0/364 lit (0.000), 364x16, rows at 220
+10_cell4_506: 4px cells, 91x4 texels, 182/364 lit (0.494), 364x16, rows at 220
+11_cell4_full: 4px cells, 91x4 texels, 364/364 lit (1.000), 364x16, rows at 220
+12_cell4_unknown: 4px cells, 91x4 texels, 92/364 lit (0.250), 364x16, rows at 220
+
+all 14 shots verified: pixels, layout, grid, idle

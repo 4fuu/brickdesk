@@ -1,0 +1,3 @@
+bayer_permutation=ok
+bayer_subset=ok
+density_clamp=ok

@@ -1,0 +1,4 @@
+vendor=Mesa/X.org
+renderer=llvmpipe (LLVM 15.0.6, 256 bits)
+version=OpenGL ES 2.0 Mesa 22.3.6
+shading_language=OpenGL ES GLSL ES 1.0.16

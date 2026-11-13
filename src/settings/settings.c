@@ -121,12 +121,12 @@ static bool fonts_load(bd_settings_fonts *fonts, bd_gfx *gfx) {
   memset(fonts, 0, sizeof(*fonts));
   fonts->serif34 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 34);
   fonts->serif25 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 25);
-  /* Body copy and values are 16 px so the 1024x768 panel stays legible. */
-  fonts->title = load_font(gfx, "NotoSansSC-700-subset.ttf", 18);
-  fonts->value = load_font(gfx, "NotoSansSC-500-subset.ttf", 16);
-  fonts->body = load_font(gfx, "NotoSansSC-500-subset.ttf", 16);
-  fonts->badge = load_font(gfx, "NotoSansSC-700-subset.ttf", 15);
-  fonts->caption = load_font(gfx, "NotoSansSC-500-subset.ttf", 15);
+  /* Body copy and values are 22 px so the 1024x768 panel stays legible. */
+  fonts->title = load_font(gfx, "NotoSansSC-700-subset.ttf", 24);
+  fonts->value = load_font(gfx, "NotoSansSC-500-subset.ttf", 22);
+  fonts->body = load_font(gfx, "NotoSansSC-500-subset.ttf", 22);
+  fonts->badge = load_font(gfx, "NotoSansSC-700-subset.ttf", 20);
+  fonts->caption = load_font(gfx, "NotoSansSC-500-subset.ttf", 20);
   fonts->fallback = load_optional_full_font(gfx);
   if (fonts->serif34 == NULL || fonts->serif25 == NULL ||
       fonts->title == NULL || fonts->value == NULL ||

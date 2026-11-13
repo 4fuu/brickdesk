@@ -489,7 +489,7 @@ static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
       title_color, row->label);
   if (has_description) {
     bd_gfx_draw_text_ellipsized(
-        gfx, settings->fonts.body, text_x, rect.y + 50,
+        gfx, settings->fonts.body, text_x, rect.y + 56,
         table.x + table.w - text_x - 190, palette->ink2, row->description);
   }
   int right = table.x + table.w - 20;
@@ -628,7 +628,7 @@ void bd_settings_draw_hint(bd_settings *settings, bd_gfx *gfx) {
   int baseline = top + 25;
   bd_gfx_draw_text(gfx, settings->fonts.caption, 34, baseline, palette->ink2,
                    "B 返回 · ←→ 调整 · A 选择");
-  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 45,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 48,
                    palette->ink3, "L1/R1 切换分类");
   bd_gfx_fill_round_rect(gfx, bd_rect_make(280, top + 30, 4, 4), 2,
                          settings->accent.accent);

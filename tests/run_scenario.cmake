@@ -62,7 +62,9 @@ foreach(actual IN LISTS shots)
   endif()
 
   # Mesa versions differ by rare 1-LSB rounding in SDF/text/blur output.
-  # Keep strict pixel deltas but allow those driver-level differences.
+  # Mesa 22 (orb) and Mesa 25 (Ubuntu 24.04 CI) can put that drift on a whole
+  # text line, so allow a small fraction of 1-LSB pixels and a wide cluster;
+  # any larger delta or a real layout shift still fails.
   set(diff "${OUT_DIR}/${stem}.diff.png")
   execute_process(
     COMMAND "${PYTHON}" "${IMAGEDIFF}"
@@ -71,9 +73,9 @@ foreach(actual IN LISTS shots)
             --diff "${diff}"
             --mode tolerance
             --max-delta 1
-            --max-diff-ratio 0.001
+            --max-diff-ratio 0.005
             --min-ssim 0.9999
-            --max-cluster 4
+            --max-cluster 1024
     RESULT_VARIABLE compare_result
     OUTPUT_VARIABLE compare_stdout
     ERROR_VARIABLE compare_stderr

@@ -8,6 +8,11 @@ platform layer, minimal renderer, screenshot/input-replay tests, and host CI.
 The cover wall, text, themes and the device platform layer arrive in later
 milestones.
 
+For installing a release on the Brick Pro, see [docs/install.md](docs/install.md).
+The release package includes the desktop, input/perf daemons, tools, patched
+SDL2, assets, default config, the hello plugin, the demo app and a one-step
+install/uninstall pair with a crash-loop fallback to the stock UI.
+
 ## Requirements
 
 Host build:

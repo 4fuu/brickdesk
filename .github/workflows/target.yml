@@ -80,8 +80,11 @@ jobs:
               test -x build-target/brickdesk-inputd
               test -x build-target/brickdesk-perfd
               test -x build-target/bd-input
+              test -x build-target/brickdesk-config
+              test -x build-target/brickdesk-demo
+              test -x build-target/bench/bench_render
               test -f build-target/libbrickdesk-menu.so
-              file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input build-target/libbrickdesk-menu.so
+              file build-target/brickdesk build-target/brickdesk-inputd build-target/brickdesk-perfd build-target/bd-input build-target/brickdesk-config build-target/brickdesk-demo build-target/bench/bench_render build-target/libbrickdesk-menu.so
               if readelf -d build-target/libbrickdesk-menu.so | grep -Eq "NEEDED.*(libSDL2|libEGL|libGLESv2)"; then
                 echo "libbrickdesk-menu.so must not link SDL/EGL/GLES directly" >&2
                 exit 1
@@ -91,6 +94,9 @@ jobs:
                 build-target/brickdesk-inputd \
                 build-target/brickdesk-perfd \
                 build-target/bd-input \
+                build-target/brickdesk-config \
+                build-target/brickdesk-demo \
+                build-target/bench/bench_render \
                 build-target/libbrickdesk-menu.so \
                 build-target/display_probe \
                 build-target/dist/lib/libSDL2-2.0.so.0
@@ -114,6 +120,19 @@ jobs:
           cp build-target/glibc-report.txt ./glibc-report.txt
           sha256sum brickdesk-target-aarch64.tar.gz
 
+      - name: Build release package
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e BRICKDESK_GIT_REV="${{ github.sha }}" \
+            -v "$PWD:/src" -w /src \
+            "$IMAGE:$TAG" ./scripts/package-target.sh \
+              --build-dir build-target --out-dir build-target/package
+
+      - name: Show release package
+        run: |
+          ls -lh build-target/package
+          cat build-target/package/SHA256SUMS
+
       - name: Upload target artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -124,5 +143,16 @@ jobs:
             glibc-report.txt
             build-target/display_probe
             build-target/dist
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload release package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: brickdesk-package
+          path: |
+            build-target/package/*.zip
+            build-target/package/SHA256SUMS
           retention-days: 30
           if-no-files-found: warn

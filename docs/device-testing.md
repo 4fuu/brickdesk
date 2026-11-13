@@ -5,8 +5,10 @@
 > 以及桌面/CI 侧的交叉编译验证。拿到设备后按本文顺序执行，并把实际输出补回本文
 > 或对应调研文档。
 
-本文覆盖 M1-03（SDL2 分辨率 patch、显示探针）和 M1-12（设备脚本）。它不修改原厂
-分区：所有部署文件都在 SD 卡的 `/mnt/SDCARD/Apps/brickdesk/` 下。
+本文覆盖 M1-03（SDL2 分辨率 patch、显示探针）、M1-12（设备脚本）和 M8-A
+（发布包、安装/卸载、启动回退）。它不修改原厂分区：所有部署文件都在 SD 卡的
+`/mnt/SDCARD/brickdesk/` 下，启动钩子只新增
+`/mnt/SDCARD/System/starts/zz_brickdesk.sh`。
 
 ## 1. 组件与完成度
 
@@ -17,6 +19,7 @@
 | SDL2 fb0 分辨率 patch | `patches/sdl2/0001-read-fb-mode.patch` | 源码可应用、aarch64 共享库可构建、GLIBC 2.17 | `SDL_GetWindowSize()`/EGL surface 是否 1024×768 |
 | 显示探针 | `tools/display_probe.c` | aarch64 交叉编译、`file`/`readelf` 检查 | fb0/EGL/GL/swap 的真实值 |
 | 部署/运行/日志/截图/性能/恢复/冒烟 | `scripts/device/` | shellcheck + 假 adb 全流程 | 真实 adb、真实 SD 路径、原厂进程 |
+| 发布包 + 安装/卸载 + 启动钩子 | `scripts/package-target.sh`、`scripts/package/` | 假 target 构建、假 SD 根目录、升级/回退/卸载测试 | `System/starts` 语义、真机启动/回退/恢复 |
 | 交叉编译 CI | `.github/workflows/target.yml` | GitHub Actions 绿灯（见最新 push） | — |
 
 ## 2. 构建与部署
@@ -41,18 +44,28 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 
 ```text
 build-target/brickdesk
+build-target/brickdesk-inputd
+build-target/brickdesk-perfd
+build-target/bd-input
+build-target/brickdesk-config
+build-target/brickdesk-demo
 build-target/display_probe
-build-target/dist/bin/brickdesk
-build-target/dist/bin/display_probe
+build-target/bench/bench_render
+build-target/libbrickdesk-menu.so
+build-target/dist/bin/...
 build-target/dist/lib/libSDL2-2.0.so.0 -> libSDL2-2.0.so.0.2600.1
 build-target/glibc-report.txt
+build-target/package/brickdesk-<version>-aarch64.zip
+build-target/package/SHA256SUMS
 ```
 
 `scripts/build-target.sh` 会优先使用 `/opt/trimui/sysroot` 里预装好的 patched SDL2；
 没有时才调用 `scripts/build-sdl2.sh`。它随后用 `cmake/toolchain-aarch64.cmake` 和
-`-DBRICKDESK_BACKEND=target` 构建真正的 `brickdesk` 目标（当前 target 后端暂时复用
-`src/platform/host_sdl.c`），把 `brickdesk` 和 `display_probe` 一起放进 `dist/bin/`，
-并对两者和 SDL2 跑 glibc 检查。
+`-DBRICKDESK_BACKEND=target` 构建目标（当前 target 后端暂时复用
+`src/platform/host_sdl.c`），把桌面、两个守护进程、工具、demo、菜单 shim、
+`display_probe` 和 `bench_render` 一起放进 `dist/bin/`，并对它们和 SDL2 跑
+glibc 检查。`scripts/package-target.sh` 再把 `dist/`、assets、config、plugins、
+apps 和安装脚本打成版本化 zip。
 
 ### 2.2 本机直接交叉编译
 
@@ -63,13 +76,14 @@ build-target/glibc-report.txt
 ```sh
 scripts/build-sdl2.sh --prefix /opt/trimui/sysroot
 scripts/build-target.sh
-file build-target/brickdesk build-target/display_probe
+file build-target/brickdesk build-target/brickdesk-inputd build-target/bench/bench_render
 aarch64-linux-gnu-readelf --version-info build-target/brickdesk \
   | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1
+scripts/package-target.sh --build-dir build-target
 ```
 
-预期：`brickdesk` 和 `display_probe` 都是 `ELF 64-bit LSB executable, ARM aarch64`，
-最高 `GLIBC_2.17`（上限 2.23）。SDL2 共享库也应是 `GLIBC_2.17`。
+预期：所有二进制都是 `ELF 64-bit LSB executable, ARM aarch64`，最高 `GLIBC_2.17`
+（上限 2.23）。SDL2 共享库也应是 `GLIBC_2.17`。
 只构建探针可用 `scripts/build-target.sh --skip-cmake`。
 
 ### 2.3 工具链文件
@@ -103,10 +117,11 @@ adb shell 'mount | grep -E "SDCARD|UDISK"'
 - `/mnt/SDCARD` 已挂载且可写；下面所有部署只写这个目录。
 - `adb root` 不一定可用；脚本不依赖 root，失败时只影响 `dmesg` 等可选采集。
 
-先备份 SD 卡上已有的 `Apps/` 配置（如果用户已经装了其它前端）：
+先备份 SD 卡上已有的 `brickdesk/` 配置（如果用户已经装了其它前端，也备份 `Apps/`）：
 
 ```sh
-adb pull /mnt/SDCARD/Apps /tmp/sdcard-apps-backup
+adb pull /mnt/SDCARD/brickdesk /tmp/sdcard-brickdesk-backup 2>/dev/null || true
+adb pull /mnt/SDCARD/Apps /tmp/sdcard-apps-backup 2>/dev/null || true
 ```
 
 ## 4. 设备到货后第一次要跑的命令
@@ -362,16 +377,16 @@ settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
 ## 5. 设备脚本
 
 所有脚本都用 `ADB`（默认 `adb`）和 `ANDROID_SERIAL` 选择设备；默认部署目录
-`/mnt/SDCARD/Apps/brickdesk`。
+`/mnt/SDCARD/brickdesk`。
 
 | 脚本 | 作用 | 关键行为 |
 |---|---|---|
-| `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、patched `libSDL2-2.0.so.0` | 只写 SD 卡应用目录；`sync` |
+| `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、patched `libSDL2-2.0.so.0`、assets 和默认 config | 只写 SD 卡应用目录；不覆盖 `config/local.ini`；`sync` |
 | `run.sh` | 停原厂 UI，启动二进制；`--foreground` 直接跑 | 日志 `$DEST/logs/<name>.log` |
 | `logs.sh` | 拉应用日志、dmesg、logread、系统信息 | 默认输出 `build-device/logs` |
 | `screenshot.sh` | 通过 `display_probe --dump-fb` 读 fb0，拉回 PPM/PNG | 需要应用不占用 fb0 或能读 |
 | `perf.sh` | 采 CPU/RSS/频率/温度/电量 CSV | 不依赖 `top`/`pidof` |
-| `bench.sh` | 运行已部署的 `bench_render` 并拉回 JSON | 需要 target 版 `bench_render` |
+| `bench.sh` | 运行已部署的 `bench_render` 并拉回 JSON | 发布包已包含 target 版 `bench_render` |
 | `recover.sh` | 杀掉 brickdesk/display_probe，启动原厂 UI | 不修改原厂分区 |
 | `smoke.sh` | deploy → probe → logs → recover | 失败也会尝试恢复 |
 
@@ -407,10 +422,154 @@ scripts/device/test/run-tests.sh
 deploy/run/screenshot/logs/perf/recover/smoke，并检查：
 
 - 所有脚本通过 `shellcheck -x`；
-- `push` 目标只在 `/mnt/SDCARD/Apps/brickdesk/` 下；
+- `push` 目标只在 `/mnt/SDCARD/brickdesk/` 下；
 - 探针输出、日志、性能 CSV、smoke 结果都存在。
 
-这只证明脚本逻辑和路径正确，不证明任何真实设备行为。
+这只证明脚本逻辑和路径正确，不证明任何真实设备行为。`package-tests.sh` 还会用
+假 target 构建跑 `scripts/package-target.sh`，然后在假 SD 根目录里执行
+install → 升级 → 健康启动 → 3 次崩溃回退 → 重置 → 卸载 → purge，并检查
+`local.ini`/`state/` 是否保留、原厂钩子是否恢复。
+
+### 5.2 发布包、安装、升级、回退、卸载（M8-A）
+
+#### 5.2.1 先确认原厂 `System/starts` 语义
+
+调研文档没有记录这个机制。当前实现依据的是 TrimUI 原厂 Smart Pro rootfs 的公开
+说明：`/usr/trimui/bin/runtrimui.sh` 会执行 `/mnt/SDCARD/System/starts` 下的脚本；
+CrossMix 也把固件检查放在这个目录。Brick Pro 1.1.1 上必须逐项确认：
+
+```sh
+adb shell 'ls -l /mnt/SDCARD/System/starts/'
+adb shell 'cat /mnt/SDCARD/System/starts/zz_brickdesk.sh'
+adb shell 'ls -l /mnt/SDCARD/brickdesk/boot-hook.sh'
+```
+
+要记录：
+
+- [ ] `runtrimui.sh` 是否真的遍历 `/mnt/SDCARD/System/starts/*`；排序规则是什么。
+- [ ] 脚本是同步执行还是后台执行；脚本返回 0 后是否继续启动 MainUI。
+- [ ] 脚本返回非 0 时 `runtrimui.sh` 是否继续启动 MainUI。
+- [ ] `zz_brickdesk.sh` 阻塞期间，排在它后面的 `System/starts` 脚本是否被延后；
+      原厂是否有必须执行的后续脚本。
+- [ ] 如果脚本先于 MainUI 执行，钩子里的 `killall MainUI` 分支是否永远不会命中；
+      如果 MainUI 已经启动，杀掉后原厂循环是否会重启它。
+- [ ] 如果原厂在钩子返回后不启动 MainUI，需要把回退改成显式启动
+      `/etc/init.d/runtrimui start`，并重新验证不会递归。
+
+这些结果决定 `docs/install.md` 第 4、5、8 节是否要改写。在确认前，安装包只能
+标记为“离线测试通过，真机未验证”。
+
+#### 5.2.2 安装包内容与路径
+
+```sh
+scripts/package-target.sh --build-dir build-target --out-dir build-target/package
+unzip -l build-target/package/brickdesk-*.zip
+cat build-target/package/SHA256SUMS
+```
+
+检查 zip 里至少有：
+
+```text
+brickdesk-<version>-aarch64/install.sh
+brickdesk-<version>-aarch64/uninstall.sh
+brickdesk-<version>-aarch64/payload/bin/{brickdesk,brickdesk-inputd,brickdesk-perfd,
+  bd-input,brickdesk-config,display_probe,bench_render,brickdesk-demo}
+brickdesk-<version>-aarch64/payload/lib/{libSDL2-2.0.so.0,libbrickdesk-menu.so}
+brickdesk-<version>-aarch64/payload/assets/fonts/*
+brickdesk-<version>-aarch64/payload/assets/covers/*
+brickdesk-<version>-aarch64/payload/config/*.ini
+brickdesk-<version>-aarch64/payload/plugins/hello/*
+brickdesk-<version>-aarch64/payload/apps/brickdesk-demo/*
+brickdesk-<version>-aarch64/payload/boot-hook.sh
+```
+
+确认 `libSDL2-2.0.so.0` 是真实文件而不是符号链接：FAT32 不能保留符号链接。
+`bench_render` 必须出现在 target workflow 的 `GLIBC <= 2.23` 检查里。
+
+#### 5.2.3 安装与首次启动
+
+在设备上：
+
+```sh
+sh /mnt/SDCARD/brickdesk-<version>-aarch64/install.sh
+```
+
+确认：
+
+- [ ] `/mnt/SDCARD/brickdesk/` 下有 `bin/`、`lib/`、`assets/`、`config/`、
+      `plugins/`、`apps/`、`state/`、`logs/`。
+- [ ] `/mnt/SDCARD/System/starts/zz_brickdesk.sh` 存在，内容包含
+      `brickdesk-boot-hook`，并 `exec sh '/mnt/SDCARD/brickdesk/boot-hook.sh'`。
+- [ ] 如果安装前有同名钩子，原文件在 `brickdesk/state/stock-hook.bak`。
+- [ ] `/mnt/SDCARD/brickdesk-uninstall.sh` 存在。
+- [ ] 安装脚本没有写 `/mnt/SDCARD` 以外的文件；`/tmp` 只在运行时出现 socket。
+- [ ] 重启后先出现 brickdesk，而不是 MainUI；`logs/boot.log` 里能看到
+      `starting brickdesk-inputd`、`starting brickdesk-perfd`、`starting desktop`，
+      且顺序是 inputd/perfd 在 desktop 之前。
+- [ ] `logs/inputd.log`、`logs/perfd.log` 没有立即退出；`state/run/*.pid` 在桌面
+      运行时存在。
+- [ ] 桌面退出后两个守护进程被停止，原厂 MainUI 能回来。
+
+#### 5.2.4 升级保留用户数据
+
+1. 在 `config/local.ini` 写一个非默认值（例如 `[ui] theme = light`）。
+2. 在 `state/` 下写一个测试文件。
+3. 安装新版本。
+4. 确认 `local.ini`、`state/`、用户自己的 `apps/`/`plugins/` 都还在，新的
+   `VERSION` 和二进制已替换。
+
+#### 5.2.5 崩溃回退
+
+安全的真机步骤：
+
+1. 备份 `/mnt/SDCARD/brickdesk/bin/brickdesk`。
+2. 用 `exit 1` 的脚本替换它（或临时改名后放一个假程序）。
+3. 重启，观察 `logs/boot.log`：应尝试 3 次，然后出现
+   `crash limit reached; falling back to the stock UI`，并进入 MainUI。
+4. 再重启一次，确认 `state/boot/attempts` 为 3 且不再启动 brickdesk。
+5. 运行 `sh install.sh --reset-fallback`，恢复真实二进制，再重启。
+
+确认：
+
+- [ ] 3 次失败后当前启动能回到原厂 MainUI。
+- [ ] 计数跨重启保留；重置后能再次尝试。
+- [ ] `config/boot-skip` 空文件能让下一次启动直接进入 MainUI。
+- [ ] 正常桌面运行超过 20 秒或正常退出后，`state/boot/attempts` 归零。
+- [ ] 开机按住某个键跳过 brickdesk：调研没有给出可靠方法，当前未实现；记录
+      在该阶段 `evtest`/`dd` 是否能读到按键，作为后续设备项。
+
+#### 5.2.6 卸载与原厂恢复
+
+```sh
+sh /mnt/SDCARD/brickdesk-uninstall.sh
+```
+
+确认：
+
+- [ ] `System/starts/zz_brickdesk.sh` 被删除；如果安装前有原厂钩子，原文件被恢复。
+- [ ] `brickdesk/state/stock-hook.bak` 不再存在（恢复后应被移走）。
+- [ ] `brickdesk/bin`、`lib`、`assets`、`plugins`、`apps`、`VERSION` 被删除。
+- [ ] `config/local.ini` 和 `state/` 保留。
+- [ ] `/mnt/SDCARD/brickdesk-uninstall.sh` 自身被删除。
+- [ ] 原厂 MainUI 被启动；如果 `/etc/init.d/runtrimui start` 不可用，
+      `runtrimui.sh` 回退路径有效。
+- [ ] `--purge` 会删除整个 `/mnt/SDCARD/brickdesk/`，包括 `local.ini` 和 `state/`。
+- [ ] 卸载后重启能正常进入原厂 UI。
+
+#### 5.2.7 手动恢复演练
+
+- [ ] 关机拔卡，不插 SD 卡能进原厂 UI。
+- [ ] 在电脑上删除 `System/starts/zz_brickdesk.sh` 后插卡开机，能进原厂 UI。
+- [ ] 把 `brickdesk/state/stock-hook.bak` 复制回 `System/starts/zz_brickdesk.sh` 后，原厂行为恢复。
+- [ ] 只读 SD 卡/写满 SD 卡时，安装和回退计数失败的行为可预期（不静默破坏原厂 UI）。
+
+#### 5.2.8 发布包性能工具
+
+- [ ] `scripts/device/bench.sh --scenario idle --idle-ms 3000` 能从发布包里的
+      `bench_render` 跑出 JSON；`presented=0`、`cpu_ms` 接近 0。
+- [ ] `bench_render` 的 `BRICKDESK_ASSET_DIR` 指向
+      `/mnt/SDCARD/brickdesk/assets`，不依赖仓库路径。
+- [ ] target workflow 的 GLIBC 检查包含 `bench_render`，且最高版本 <= 2.23。
 
 ## 6. SDL2 patch 说明
 
@@ -451,9 +610,9 @@ fb0_res: 1024x768
 如果 `sdl_window_size` 是 1280×720：
 
 ```sh
-adb shell 'ls -l /mnt/SDCARD/Apps/brickdesk/lib/'
-adb shell 'LD_LIBRARY_PATH=/mnt/SDCARD/Apps/brickdesk/lib ldd /mnt/SDCARD/Apps/brickdesk/bin/display_probe'
-adb shell 'readelf -d /mnt/SDCARD/Apps/brickdesk/bin/display_probe | grep NEEDED'
+adb shell 'ls -l /mnt/SDCARD/brickdesk/lib/'
+adb shell 'LD_LIBRARY_PATH=/mnt/SDCARD/brickdesk/lib ldd /mnt/SDCARD/brickdesk/bin/display_probe'
+adb shell 'readelf -d /mnt/SDCARD/brickdesk/bin/display_probe | grep NEEDED'
 ```
 
 确认 `libSDL2-2.0.so.0` 来自 `$DEST/lib`，而不是 `/usr/trimui/lib`。
@@ -475,8 +634,15 @@ adb shell 'readelf -d /mnt/SDCARD/Apps/brickdesk/bin/display_probe | grep NEEDED
   卡上限。
 - CI 的 GHCR 镜像、Dockerfile 和 target workflow 已在 GitHub Actions 验证；Docker
   在本 orb 不可用，不能本地复跑容器。
+- `System/starts` 的路径和“同步执行、返回后继续 MainUI”的语义来自外部公开资料，
+  不是 `docs/research/device-features.md` 的结论；Brick Pro 1.1.1 上未验证。
+- 发布包的崩溃回退依赖 SD 卡可写；`state/boot/attempts` 写入失败时不会触发回退。
+- 安装脚本在 FAT32 上使用 rename 做整树替换；如果 SD 卡有文件系统错误或写入被
+  中断，可能留下 `.new.<pid>`/`.old.<pid>` 目录，需要手动删除。
+- 安装包不包含厂商 `libEGL.so`/`libGLESv2.so`，运行时依赖设备的
+  `/usr/trimui/lib` 或 `/usr/lib`。
 
-## 8. M1 验收对应
+## 8. M1/M8-A 验收对应
 
 - M1-03：`scripts/device/smoke.sh` 输出 `sdl_window_size: 1024x768`、
   `egl_surface_size: 1024x768`、`RESULT: PASS`；SDL2 patch 在源码和构建产物中生效。
@@ -484,3 +650,6 @@ adb shell 'readelf -d /mnt/SDCARD/Apps/brickdesk/bin/display_probe | grep NEEDED
   在真机跑通；`recover.sh` 能回到原厂 MainUI；所有写操作只在 SD 卡应用目录。
 - M1-11（target 部分）：target workflow 绿、GHCR 镜像可拉取、`brickdesk`、
   `display_probe` 和 SDL2 产物可下载、`GLIBC <= 2.23`。
+- M8-A：target workflow 产出 `brickdesk-<version>-aarch64.zip` + `SHA256SUMS`；
+  `bench_render` 在包里并通过 GLIBC 检查；`package-tests.sh` 覆盖安装、升级保留
+  `local.ini`/`state`、3 次崩溃回退、卸载恢复原厂钩子；真机完成 5.2 的全部检查项。

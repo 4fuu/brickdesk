@@ -497,6 +497,9 @@ ctest --test-dir build-host -R device_power --output-on-failure
 100% tests passed, 0 tests failed out of 1
 ```
 
+同一配置的全量 CTest 为 32/32 通过；ASan/UBSan 构建也通过
+`device_power_test: OK`。
+
 测试覆盖：
 
 - 轻睡 enter/leave 的精确调用顺序；重复轻睡 `ALREADY` 不调用 hook。
@@ -536,6 +539,16 @@ file /tmp/power-cross/bd-power
 Debian 交叉链接的 `__libc_start_main` 显示 `GLIBC_2.34` 是 Debian 12 启动
 文件造成的，不是本模块的符号。正式 target CI 使用官方 GCC 7.5 工具链/GLIBC
 上限检查，结果见本分支的 GitHub Actions。
+
+本分支的 CI 记录（提交 `e4dfcb5`，2026-11-13）：
+
+- host：<https://github.com/4fuu/brickdesk/actions/runs/43379408035>，
+  `success`；全量 32/32 CTest 通过。
+- target：<https://github.com/4fuu/brickdesk/actions/runs/43379408364>，
+  `success`；日志显示官方工具链构建了 `libbrickdesk_power.a`、`bd-power` 和
+  `tests/bd_device_power_test`（aarch64）。
+- `bd-power` 仍未加入 `scripts/build-target.sh` 的 `dist/bin` 列表；target
+  构建产物在 `build-target/bd-power`，需要手动推送。
 
 ### 7.3 探测 CLI
 

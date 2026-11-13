@@ -98,14 +98,14 @@ static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
   } else if (settings->subpage == BD_SETTINGS_SUBPAGE_PLUGIN) {
     category = "插件";
   }
-  bd_gfx_draw_text(gfx, settings->fonts.value15, 64 + title_width + 18, 73,
+  bd_gfx_draw_text(gfx, settings->fonts.value, 64 + title_width + 18, 73,
                    palette->ink2, category);
 
   int right = settings->style.width - 28;
   if (settings->clock[0] != '\0') {
-    draw_text_right(gfx, settings->fonts.value15, right, 73, palette->ink2,
+    draw_text_right(gfx, settings->fonts.value, right, 73, palette->ink2,
                     settings->clock);
-    right -= bd_font_measure_text(settings->fonts.value15, settings->clock) + 16;
+    right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 16;
   }
   if (settings->status.battery_percent >= 0) {
     right -= 28;
@@ -232,7 +232,7 @@ static void draw_categories(const bd_settings *settings, bd_gfx *gfx) {
           settings->accent.accent);
     }
     draw_category_icon(gfx, i, BD_SETTINGS_CATEGORY_X + 24, cy, color);
-    bd_gfx_draw_text(gfx, settings->fonts.title16,
+    bd_gfx_draw_text(gfx, settings->fonts.title,
                      BD_SETTINGS_CATEGORY_X + 56, cy + 6,
                      selected ? settings->accent.accent : palette->ink2,
                      BD_SETTINGS_PAGES[i].title);
@@ -260,7 +260,7 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
   }
   bd_gfx_draw_text(gfx, settings->fonts.serif34, BD_SETTINGS_TABLE_X,
                    title_baseline, palette->ink, title);
-  bd_gfx_draw_text(gfx, settings->fonts.body14, BD_SETTINGS_TABLE_X, 156,
+  bd_gfx_draw_text(gfx, settings->fonts.body, BD_SETTINGS_TABLE_X, 156,
                    palette->ink2, subtitle);
   if (settings->subpage == BD_SETTINGS_SUBPAGE_ACCENT) {
     int size = 58;
@@ -274,7 +274,7 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
         bd_config_get_string(settings->config, "theme.accent", "persimmon");
     const char *hex = bd_config_accent_hex(accent, settings->style.dark);
     if (hex != NULL) {
-      draw_text_right(gfx, settings->fonts.body14, x + size, 166,
+      draw_text_right(gfx, settings->fonts.body, x + size, 166,
                       palette->ink2, hex);
     }
   }
@@ -323,9 +323,9 @@ static void draw_toggle(const bd_settings *settings, bd_gfx *gfx,
   bd_gfx_fill_round_rect(gfx, bd_rect_make(knob_x, y + 3, 18, 18), 3, knob);
   char label[8];
   snprintf(label, sizeof(label), "%s", value ? "开" : "关");
-  int width = bd_font_measure_text(settings->fonts.caption13, label);
-  bd_gfx_draw_text(gfx, settings->fonts.caption13, x - width - 12,
-                   text_baseline(settings->fonts.caption13, rect.y, rect.h),
+  int width = bd_font_measure_text(settings->fonts.caption, label);
+  bd_gfx_draw_text(gfx, settings->fonts.caption, x - width - 12,
+                   text_baseline(settings->fonts.caption, rect.y, rect.h),
                    settings->palette.ink2, label);
 }
 
@@ -335,8 +335,8 @@ static void draw_slider(const bd_settings *settings, bd_gfx *gfx,
   bd_settings_row_value(settings, row, text, sizeof(text));
   long value = bd_settings_row_slider_value(settings, row);
   int value_right = right;
-  draw_text_right(gfx, settings->fonts.value15, value_right,
-                  text_baseline(settings->fonts.value15, rect.y, rect.h),
+  draw_text_right(gfx, settings->fonts.value, value_right,
+                  text_baseline(settings->fonts.value, rect.y, rect.h),
                   settings->palette.ink2, text);
   int track_w = 96;
   int track_x = right - 64 - 12 - track_w;
@@ -368,9 +368,9 @@ static void draw_accent_row(const bd_settings *settings, bd_gfx *gfx,
                             bool focused) {
   char text[48];
   bd_settings_row_value(settings, row, text, sizeof(text));
-  int value_width = bd_font_measure_text(settings->fonts.value15, text);
-  draw_text_right(gfx, settings->fonts.value15, right,
-                  text_baseline(settings->fonts.value15, rect.y, rect.h),
+  int value_width = bd_font_measure_text(settings->fonts.value, text);
+  draw_text_right(gfx, settings->fonts.value, right,
+                  text_baseline(settings->fonts.value, rect.y, rect.h),
                   settings->palette.ink2, text);
   const char *current =
       bd_config_get_string(settings->config, "theme.accent", "persimmon");
@@ -424,15 +424,15 @@ static void draw_plain_value(const bd_settings *settings, bd_gfx *gfx,
   }
   if (row->kind == BD_SETTINGS_ROW_PLUGIN ||
       row->kind == BD_SETTINGS_ROW_ACTION) {
-    draw_text_right_ellipsized(gfx, settings->fonts.value15, right - 14,
-                               text_baseline(settings->fonts.value15, rect.y,
+    draw_text_right_ellipsized(gfx, settings->fonts.value, right - 14,
+                               text_baseline(settings->fonts.value, rect.y,
                                              rect.h),
                                right - 20, color, text);
     draw_chevron_right(gfx, right - 8, rect.y + rect.h / 2, color);
     return;
   }
-  draw_text_right_ellipsized(gfx, settings->fonts.value15, right,
-                             text_baseline(settings->fonts.value15, rect.y,
+  draw_text_right_ellipsized(gfx, settings->fonts.value, right,
+                             text_baseline(settings->fonts.value, rect.y,
                                            rect.h),
                              right - (rect.x + 220), color, text);
 }
@@ -484,12 +484,12 @@ static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
       row->kind == BD_SETTINGS_ROW_CONFLICT ? settings->accent.accent
                                             : palette->ink;
   bd_gfx_draw_text_ellipsized(
-      gfx, settings->fonts.title16, text_x, title_top + 16, table.x + table.w -
+      gfx, settings->fonts.title, text_x, title_top + 16, table.x + table.w -
                                                                     text_x - 200,
       title_color, row->label);
   if (has_description) {
     bd_gfx_draw_text_ellipsized(
-        gfx, settings->fonts.body14, text_x, rect.y + 50,
+        gfx, settings->fonts.body, text_x, rect.y + 50,
         table.x + table.w - text_x - 190, palette->ink2, row->description);
   }
   int right = table.x + table.w - 20;
@@ -555,9 +555,9 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
   const bd_plugin_ui *ui = bd_plugin_ui_settings(plugin);
   if (ui == NULL || ui->root < 0) {
     const bd_settings_palette *palette = &settings->palette;
-    bd_gfx_draw_text(gfx, settings->fonts.title16, table.x + 24, table.y + 48,
+    bd_gfx_draw_text(gfx, settings->fonts.title, table.x + 24, table.y + 48,
                      palette->ink, "插件尚未提供设置界面");
-    bd_gfx_draw_text(gfx, settings->fonts.body14, table.x + 24, table.y + 76,
+    bd_gfx_draw_text(gfx, settings->fonts.body, table.x + 24, table.y + 76,
                      palette->ink2, "等待插件发送 plugin.ui.set");
     return;
   }
@@ -574,7 +574,7 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
 
 static void draw_empty(const bd_settings *settings, bd_gfx *gfx) {
   bd_rect table = bd_settings_table_rect(settings);
-  bd_gfx_draw_text(gfx, settings->fonts.body14, table.x + 22, table.y + 42,
+  bd_gfx_draw_text(gfx, settings->fonts.body, table.x + 22, table.y + 42,
                    settings->palette.ink3, "没有可显示的设置");
 }
 
@@ -626,13 +626,13 @@ void bd_settings_draw_hint(bd_settings *settings, bd_gfx *gfx) {
   bd_gfx_fill_rect(gfx, bd_rect_make(0, top, settings->style.width, 1),
                    palette->line_strong);
   int baseline = top + 25;
-  bd_gfx_draw_text(gfx, settings->fonts.caption13, 34, baseline, palette->ink2,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, baseline, palette->ink2,
                    "B 返回 · ←→ 调整 · A 选择");
-  bd_gfx_draw_text(gfx, settings->fonts.caption13, 34, top + 45,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 45,
                    palette->ink3, "L1/R1 切换分类");
   bd_gfx_fill_round_rect(gfx, bd_rect_make(280, top + 30, 4, 4), 2,
                          settings->accent.accent);
-  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.caption13, 294, top + 35,
+  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.caption, 294, top + 35,
                               settings->style.width - 328, palette->ink3,
                               page_hint(settings));
 }
@@ -645,7 +645,7 @@ static void draw_error_line(const bd_settings *settings, bd_gfx *gfx) {
   bd_gfx_fill_round_rect(gfx, bd_rect_make(BD_SETTINGS_TABLE_X, baseline - 5,
                                            4, 4),
                          2, settings->accent.accent);
-  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.caption13,
+  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.caption,
                               BD_SETTINGS_TABLE_X + 12, baseline,
                               BD_SETTINGS_TABLE_W - 12,
                               settings->accent.accent, settings->error);
@@ -676,10 +676,10 @@ static void draw_button(bd_gfx *gfx, const bd_settings *settings, bd_rect rect,
   }
   bd_color color = primary ? settings->accent.on_accent
                           : (danger ? settings->accent.accent : palette->ink);
-  int width = bd_font_measure_text(settings->fonts.title16, label);
-  bd_gfx_draw_text(gfx, settings->fonts.title16,
+  int width = bd_font_measure_text(settings->fonts.title, label);
+  bd_gfx_draw_text(gfx, settings->fonts.title,
                    rect.x + (rect.w - width) / 2,
-                   rect.y + rect.h / 2 + bd_font_ascent(settings->fonts.title16) / 2 -
+                   rect.y + rect.h / 2 + bd_font_ascent(settings->fonts.title) / 2 -
                        2,
                    color, label);
 }
@@ -702,11 +702,11 @@ void bd_settings_draw_confirm(bd_settings *settings, bd_gfx *gfx) {
                            palette->line_strong);
   bd_gfx_draw_text(gfx, settings->fonts.serif25, x + 24, y + 52, palette->ink,
                    "恢复默认设置？");
-  bd_gfx_draw_text(gfx, settings->fonts.body14, x + 24, y + 84, palette->ink2,
+  bd_gfx_draw_text(gfx, settings->fonts.body, x + 24, y + 84, palette->ink2,
                    "所有本地修改将被默认值覆盖，");
-  bd_gfx_draw_text(gfx, settings->fonts.body14, x + 24, y + 106, palette->ink2,
+  bd_gfx_draw_text(gfx, settings->fonts.body, x + 24, y + 106, palette->ink2,
                    "并立即写入 local.ini。");
-  bd_gfx_draw_text(gfx, settings->fonts.caption13, x + 24, y + 136,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, x + 24, y + 136,
                    palette->ink3, "热键与按应用性能覆盖不会删除。");
   int button_w = 120;
   int button_h = 36;

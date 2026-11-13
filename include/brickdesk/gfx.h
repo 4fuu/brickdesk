@@ -261,6 +261,8 @@ int bd_gfx_draw_text_ellipsized(bd_gfx *gfx, const bd_font *font, int x,
  */
 bool bd_gfx_read_image(bd_gfx *gfx, bd_image *out);
 void bd_image_free(bd_image *image);
+/* Writes a tightly packed top-down RGBA8 image; used by framebuffer captures. */
+bool bd_image_write_png(const bd_image *image, const char *path);
 bool bd_gfx_save_png(bd_gfx *gfx, const char *path);
 
 /* Last renderer error, or "" when there is none. Never NULL. */

@@ -72,6 +72,15 @@ bool bd_gfx_read_image(bd_gfx *gfx, bd_image *out) {
   return true;
 }
 
+bool bd_image_write_png(const bd_image *image, const char *path) {
+  if (image == NULL || image->pixels == NULL || path == NULL ||
+      image->width <= 0 || image->height <= 0) {
+    return false;
+  }
+  return stbi_write_png(path, image->width, image->height, 4, image->pixels,
+                        image->width * 4) != 0;
+}
+
 bool bd_gfx_save_png(bd_gfx *gfx, const char *path) {
   if (gfx == NULL || path == NULL) {
     return false;

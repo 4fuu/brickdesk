@@ -5,12 +5,15 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fb.h>
 #include <poll.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -203,6 +206,7 @@ struct bd_shell {
   bool plugin_error_notified;
   bool crash_prompt;
   char crash_retry_app[BD_APP_ID_MAX];
+  unsigned screenshot_seq;
 
   bool dirty;
   bool visible;
@@ -2878,6 +2882,135 @@ static bool shell_terminate_foreground(bd_shell *shell) {
   return false;
 }
 
+static unsigned fb_channel(uint32_t pixel, const struct fb_bitfield *field) {
+  if (field->length == 0 || field->length >= 32) {
+    return 0;
+  }
+  uint32_t mask = (1u << field->length) - 1u;
+  return (((pixel >> field->offset) & mask) * 255u) / mask;
+}
+
+static bool shell_capture_framebuffer(bd_image *out) {
+  if (out == NULL) {
+    return false;
+  }
+  memset(out, 0, sizeof(*out));
+  int fd = open("/dev/fb0", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return false;
+  }
+  struct fb_var_screeninfo var;
+  struct fb_fix_screeninfo fix;
+  if (ioctl(fd, FBIOGET_VSCREENINFO, &var) < 0 ||
+      ioctl(fd, FBIOGET_FSCREENINFO, &fix) < 0 ||
+      (var.bits_per_pixel != 16 && var.bits_per_pixel != 32) ||
+      var.xres == 0 || var.yres == 0 || fix.line_length == 0) {
+    close(fd);
+    return false;
+  }
+  size_t needed = (size_t)fix.line_length * var.yres;
+  if (fix.smem_len != 0 && needed > fix.smem_len) {
+    close(fd);
+    return false;
+  }
+  unsigned char *mapping =
+      (unsigned char *)mmap(NULL, needed, PROT_READ, MAP_SHARED, fd, 0);
+  if (mapping == MAP_FAILED) {
+    close(fd);
+    return false;
+  }
+  size_t pixels_size = (size_t)var.xres * var.yres * 4u;
+  uint8_t *pixels = (uint8_t *)malloc(pixels_size);
+  bool ok = pixels != NULL;
+  for (unsigned y = 0; ok && y < var.yres; ++y) {
+    const unsigned char *row =
+        mapping + (size_t)y * fix.line_length +
+        (size_t)var.yoffset * fix.line_length;
+    for (unsigned x = 0; x < var.xres; ++x) {
+      uint32_t pixel;
+      if (var.bits_per_pixel == 32) {
+        memcpy(&pixel, row + (size_t)x * 4u, sizeof(pixel));
+      } else {
+        uint16_t value;
+        memcpy(&value, row + (size_t)x * 2u, sizeof(value));
+        pixel = value;
+      }
+      uint8_t *dst = pixels + ((size_t)y * var.xres + x) * 4u;
+      dst[0] = (uint8_t)fb_channel(pixel, &var.red);
+      dst[1] = (uint8_t)fb_channel(pixel, &var.green);
+      dst[2] = (uint8_t)fb_channel(pixel, &var.blue);
+      dst[3] = 255;
+    }
+  }
+  munmap(mapping, needed);
+  close(fd);
+  if (!ok) {
+    return false;
+  }
+  out->width = (int)var.xres;
+  out->height = (int)var.yres;
+  out->pixels = pixels;
+  return true;
+}
+
+static void shell_screenshot(bd_shell *shell) {
+  if (shell == NULL) {
+    return;
+  }
+  const char *config_dir =
+      shell->settings != NULL ? bd_config_dir(shell->settings) : NULL;
+  char directory[BD_SHELL_PATH_MAX];
+  int written = snprintf(directory, sizeof(directory), "%s/screenshots",
+                         config_dir != NULL && config_dir[0] != '\0'
+                             ? config_dir
+                             : "/tmp");
+  if (written <= 0 || (size_t)written >= sizeof(directory)) {
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "截图失败：路径过长", 0);
+    return;
+  }
+  if (mkdir(directory, 0755) != 0 && errno != EEXIST) {
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "截图失败：无法创建目录", 0);
+    return;
+  }
+  time_t wall = time(NULL);
+  struct tm local;
+  char stamp[32] = "00000000-000000";
+  if (wall != (time_t)-1 && localtime_r(&wall, &local) != NULL) {
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+  }
+  char path[BD_SHELL_PATH_MAX];
+  written = snprintf(path, sizeof(path), "%s/screenshot-%s-%03u.png", directory,
+                     stamp, ++shell->screenshot_seq % 1000u);
+  if (written <= 0 || (size_t)written >= sizeof(path)) {
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "截图失败：文件名过长", 0);
+    return;
+  }
+
+  bool ok = false;
+  if (shell->visible && shell->gfx != NULL) {
+    ok = bd_gfx_save_png(shell->gfx, path);
+  } else {
+    bd_image image;
+    if (shell_capture_framebuffer(&image)) {
+      ok = bd_image_write_png(&image, path);
+      bd_image_free(&image);
+    }
+  }
+  if (!ok && shell->gfx != NULL) {
+    ok = bd_gfx_save_png(shell->gfx, path);
+  }
+  if (ok) {
+    char message[256];
+    char name[96];
+    const char *slash = strrchr(path, '/');
+    copy_text(name, sizeof(name), slash != NULL ? slash + 1 : path);
+    snprintf(message, sizeof(message), "截图已保存：%s", name);
+    bd_shell_notice(shell, BD_NOTICE_SUCCESS, message, 2500);
+  } else {
+    bd_shell_notice(shell, BD_NOTICE_ERROR, "截图失败：无法写入 PNG", 0);
+  }
+}
+
 static void shell_dispatch_action(bd_shell *shell, const char *action,
                                   bool pressed) {
   if (action == NULL) {
@@ -2904,6 +3037,9 @@ static void shell_dispatch_action(bd_shell *shell, const char *action,
     if (shell_terminate_foreground(shell)) {
       shell->dirty = true;
     }
+  }
+  if (pressed && strcmp(action, "builtin.screenshot") == 0) {
+    shell_screenshot(shell);
   }
   if (shell->verbose &&
       (strcmp(action, "menu.open") == 0 || strcmp(action, "perf.cycle") == 0 ||

@@ -27,6 +27,15 @@ static bool reject_brightness(void *user, int percent) {
   return false;
 }
 
+static bool accept_perf(void *user, const char *profile, char *error,
+                        size_t error_size) {
+  (void)user;
+  (void)profile;
+  (void)error;
+  (void)error_size;
+  return true;
+}
+
 static bool save(bd_gfx *gfx, const char *dir, const char *name) {
   char path[2048];
   int written = snprintf(path, sizeof(path), "%s/%s.png", dir, name);
@@ -204,6 +213,9 @@ int main(int argc, char **argv) {
   bd_settings_system system;
   bd_settings_system_stub_init(&stub, &system);
   bd_settings_set_system(settings, &system);
+  bd_settings_perf perf = {.user = NULL,
+                           .apply_global_profile = accept_perf};
+  bd_settings_set_perf(settings, &perf);
   if (host != NULL) {
     bd_settings_set_plugins(settings, host);
   }
@@ -319,14 +331,6 @@ int main(int argc, char **argv) {
 
   ok = open_page(settings, BD_SETTINGS_CATEGORY_SYSTEM) &&
        capture(platform, gfx, settings, out_dir, "settings_system", now) && ok;
-  now += 16;
-  if (focus_key(settings, "!reset") &&
-      bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT)) {
-    ok = capture(platform, gfx, settings, out_dir, "settings_confirm", now) &&
-         ok;
-  } else {
-    ok = false;
-  }
   now += 16;
 
   ok = open_page(settings, BD_SETTINGS_CATEGORY_APPEARANCE) &&
@@ -479,6 +483,55 @@ int main(int argc, char **argv) {
          ok;
     now += 16;
     bd_settings_set_system(settings, &system);
+  }
+
+  if (ok && open_page(settings, BD_SETTINGS_CATEGORY_SYSTEM) &&
+      focus_key(settings, "!reset") &&
+      bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT)) {
+    ok = capture(platform, gfx, settings, out_dir, "settings_confirm", now) &&
+         ok;
+    now += 16;
+    ok = bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+         capture(platform, gfx, settings, out_dir, "settings_confirm_reset",
+                 now) &&
+         ok;
+    now += 16;
+    ok = bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT) &&
+         capture(platform, gfx, settings, out_dir, "settings_confirm_roundtrip",
+                 now) &&
+         ok;
+    now += 16;
+    ok = bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL) &&
+         capture(platform, gfx, settings, out_dir, "settings_confirm_cancelled",
+                 now) &&
+         ok;
+    now += 16;
+    ok = focus_key(settings, "!reset") &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+         bd_settings_last_error(settings)[0] == '\0' &&
+         capture(platform, gfx, settings, out_dir, "settings_reset_success",
+                 now) &&
+         ok;
+    now += 16;
+    bd_settings_system failing;
+    memset(&failing, 0, sizeof(failing));
+    failing.set_brightness = reject_brightness;
+    bd_settings_set_system(settings, &failing);
+    ok = focus_key(settings, "!reset") &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT) &&
+         bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT) &&
+         bd_settings_last_error(settings)[0] != '\0' &&
+         capture(platform, gfx, settings, out_dir,
+                 "settings_reset_partial_error", now) &&
+         ok;
+    now += 16;
+    bd_settings_set_system(settings, &system);
+  } else {
+    ok = false;
   }
 
   bd_settings_destroy(settings);

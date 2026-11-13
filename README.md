@@ -120,8 +120,9 @@ The suite includes:
   repeat, two-row focus damage with an exact partial/full match, hotkey
   conflicts, perf overrides, long plugin-tree scrolling, reset confirm and
   sub-pages
-- `settings_capture`: 14 dark screenshots for every category, accent, moved
-  slider, hotkey conflict, long plugin settings scroll and confirm dialog
+- `settings_capture`: 28 dark screenshots for every category, accent, moved
+  slider, hotkey conflict, long plugin settings scroll and reset confirm focus
+  states, roundtrip, cancel, success and partial failure
 - `determinism_boot`: runs a scenario three times and requires identical pixels
 - `imagediff_unit`: image comparison self-tests, including a 1 px shift
 - `session`: app manifest parsing, SIGSTOP/SIGCONT lifecycle, IPC hooks,

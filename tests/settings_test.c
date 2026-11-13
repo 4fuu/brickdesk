@@ -787,6 +787,27 @@ static void test_reset_and_subpages(bd_platform *platform, bd_gfx *gfx,
         "cancel should keep the accent");
 
   CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "reopen reset confirm for focus roundtrip");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
+        "focus reset button");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_LEFT),
+        "return focus to cancel");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "cancel after focus roundtrip");
+  CHECK(!bd_settings_confirm_open(settings),
+        "focus roundtrip should cancel");
+  CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "coral") == 0,
+        "roundtrip cancel should keep the accent");
+
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
+        "reopen reset confirm for B");
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_CANCEL),
+        "B closes reset confirm");
+  CHECK(!bd_settings_confirm_open(settings), "B should cancel");
+  CHECK(strcmp(bd_config_get_string(config, "theme.accent", ""), "coral") == 0,
+        "B cancel should keep the accent");
+
+  CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT),
         "reopen reset confirm");
   CHECK(bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT),
         "focus reset button");

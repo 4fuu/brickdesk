@@ -89,7 +89,7 @@ static void draw_top_bar(const bd_settings *settings, bd_gfx *gfx) {
   if (settings->clock[0] != '\0') {
     draw_text_right(gfx, settings->fonts.value, right, 73, palette->ink2,
                     settings->clock);
-    right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 16;
+    right -= bd_font_measure_text(settings->fonts.value, settings->clock) + 12;
   }
   int battery_left = right - BD_UI_BATTERY_ICON_W;
   bd_ui_draw_battery(gfx, battery_left + (BD_UI_BATTERY_ICON_W - 1) / 2, 66,
@@ -240,8 +240,9 @@ static void draw_page_header(const bd_settings *settings, bd_gfx *gfx) {
     }
     subtitle = "插件设置 · 由插件声明";
   }
-  bd_gfx_draw_text(gfx, settings->fonts.serif34, BD_SETTINGS_TABLE_X,
-                   title_baseline, palette->ink, title);
+  bd_gfx_draw_text_ellipsized(gfx, settings->fonts.serif34,
+                              BD_SETTINGS_TABLE_X, title_baseline,
+                              BD_SETTINGS_TABLE_W, palette->ink, title);
   bd_gfx_draw_text(gfx, settings->fonts.body, BD_SETTINGS_TABLE_X, 156,
                    palette->ink2, subtitle);
   if (settings->subpage == BD_SETTINGS_SUBPAGE_ACCENT) {
@@ -491,34 +492,26 @@ static void draw_row(const bd_settings *settings, bd_gfx *gfx, int index) {
   }
   if (focused) {
     bd_gfx_stroke_round_rect(
-        gfx, bd_rect_make(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 1), 2,
+        gfx, bd_rect_make(rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4), 2,
         2, settings->accent.accent);
   }
   bd_gfx_pop_clip(gfx);
 }
 
 static void draw_scrollbar(const bd_settings *settings, bd_gfx *gfx) {
-  int total = 0;
-  for (int i = 0; i < settings->row_count; ++i) {
-    total += BD_SETTINGS_ROW_MIN;
-    if (settings->rows[i].description[0] != '\0') {
-      total += BD_SETTINGS_ROW_TALL - BD_SETTINGS_ROW_MIN;
-    }
-  }
   bd_rect table = bd_settings_table_rect(settings);
-  int limit = total - table.h;
+  int limit = bd_settings_max_scroll(settings);
   if (limit <= 0) {
     return;
   }
+  int total = table.h + limit;
   int track_h = table.h - 16;
   int thumb_h = track_h * table.h / total;
   if (thumb_h < 28) {
     thumb_h = 28;
   }
   int thumb_y = table.y + 8;
-  if (limit > 0) {
-    thumb_y += (track_h - thumb_h) * settings->scroll / limit;
-  }
+  thumb_y += (track_h - thumb_h) * settings->scroll / limit;
   bd_gfx_fill_round_rect(
       gfx, bd_rect_make(table.x + table.w - 6, table.y + 8, 2, track_h), 1,
       settings->palette.line);
@@ -552,6 +545,7 @@ static void draw_plugin_table(const bd_settings *settings, bd_gfx *gfx) {
                  ? settings->plugin_nodes[settings->plugin_node_focus]
                  : -1;
   bd_plugin_ui_draw(ui, gfx, table, &style, node, settings->scroll);
+  draw_scrollbar(settings, gfx);
 }
 
 static void draw_empty(const bd_settings *settings, bd_gfx *gfx) {
@@ -607,10 +601,10 @@ void bd_settings_draw_hint(bd_settings *settings, bd_gfx *gfx) {
                         BD_GRADIENT_VERTICAL);
   bd_gfx_fill_rect(gfx, bd_rect_make(0, top, settings->style.width, 1),
                    palette->line_strong);
-  int baseline = top + 25;
+  int baseline = top + 21;
   bd_gfx_draw_text(gfx, settings->fonts.caption, 34, baseline, palette->ink2,
                    "B 返回 · ←→ 调整 · A 选择");
-  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 48,
+  bd_gfx_draw_text(gfx, settings->fonts.caption, 34, top + 44,
                    palette->ink3, "L1/R1 切换分类");
   bd_gfx_fill_round_rect(gfx, bd_rect_make(280, top + 30, 4, 4), 2,
                          settings->accent.accent);

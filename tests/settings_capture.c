@@ -18,6 +18,15 @@
 #define BRICKDESK_TEST_PLUGIN_DIR "plugins"
 #endif
 
+#define LONG_PLUGIN_NAME                                                     \
+  "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW"
+
+static bool reject_brightness(void *user, int percent) {
+  (void)user;
+  (void)percent;
+  return false;
+}
+
 static bool save(bd_gfx *gfx, const char *dir, const char *name) {
   char path[2048];
   int written = snprintf(path, sizeof(path), "%s/%s.png", dir, name);
@@ -237,6 +246,18 @@ int main(int argc, char **argv) {
   bd_settings_set_hint_visible(settings, false);
   now += 16;
 
+  {
+    const char *last_key =
+        bd_settings_row_count(settings) > 0
+            ? bd_settings_row_key(settings, bd_settings_row_count(settings) - 1)
+            : NULL;
+    ok = last_key != NULL && focus_key(settings, last_key) &&
+         capture(platform, gfx, settings, out_dir, "settings_appearance_last",
+                 now) &&
+         ok;
+    now += 16;
+  }
+
   ok = open_page(settings, BD_SETTINGS_CATEGORY_SOUND) &&
        capture(platform, gfx, settings, out_dir, "settings_sound", now) && ok;
   now += 16;
@@ -267,6 +288,17 @@ int main(int argc, char **argv) {
   ok = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) &&
        capture(platform, gfx, settings, out_dir, "settings_plugins", now) && ok;
   now += 16;
+  bd_settings_set_plugins(settings, NULL);
+  ok = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) && ok &&
+       capture(platform, gfx, settings, out_dir, "settings_plugins_empty",
+               now) &&
+       ok;
+  now += 16;
+  if (host != NULL) {
+    bd_settings_set_plugins(settings, host);
+    ok = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) && ok;
+    now += 16;
+  }
   if (hello_ready && focus_key(settings, "!plugin.com.brickdesk.hello")) {
     if (bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT)) {
       for (int i = 0; i < 5; ++i) {
@@ -338,6 +370,11 @@ int main(int argc, char **argv) {
         bool opened = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) &&
                       focus_key(settings, "!plugin.com.test.long") &&
                       bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT);
+        ok = opened &&
+             capture(platform, gfx, settings, out_dir,
+                     "settings_plugin_long_initial", now) &&
+             ok;
+        now += 16;
         for (int i = 0; opened && i < 30; ++i) {
           bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN);
         }
@@ -345,6 +382,15 @@ int main(int argc, char **argv) {
              capture(platform, gfx, settings, out_dir,
                      "settings_plugin_long", now) &&
              ok;
+        now += 16;
+        for (int i = 0; opened && i < 30; ++i) {
+          bd_settings_input(settings, BD_SETTINGS_ACTION_UP);
+        }
+        ok = opened &&
+             capture(platform, gfx, settings, out_dir,
+                     "settings_plugin_long_back", now) &&
+             ok;
+        now += 16;
         bd_settings_set_plugins(settings, NULL);
       } else {
         fprintf(stderr, "settings_capture: long plugin not ready\n");
@@ -360,6 +406,79 @@ int main(int argc, char **argv) {
       fprintf(stderr, "settings_capture: cannot create long plugin\n");
       ok = false;
     }
+  }
+
+  {
+    char named_dir[2048] = {0};
+    char named_runtime[] = "/tmp/bd-settings-long-name-XXXXXX";
+    if (sf_make_named_fixture_plugin(named_dir, sizeof(named_dir), "long",
+                                     LONG_PLUGIN_NAME) &&
+        mkdtemp(named_runtime) != NULL) {
+      bd_plugin_host_config named_config = host_config;
+      named_config.plugin_dir = named_dir;
+      named_config.runtime_dir = named_runtime;
+      bd_plugin_host *named_host = bd_plugin_host_create(&named_config);
+      bd_plugin *named_plugin = NULL;
+      if (named_host != NULL) {
+        (void)bd_plugin_host_scan(named_host, error, sizeof(error));
+        named_plugin = bd_plugin_host_find(named_host, "com.test.long");
+      }
+      bool named_ready = false;
+      if (named_plugin != NULL) {
+        bd_plugin_activate(named_plugin);
+        uint64_t deadline = sf_now_ms() + 5000;
+        while (sf_now_ms() < deadline) {
+          bd_plugin_host_poll(named_host, 20);
+          if (bd_plugin_ui_settings(named_plugin) != NULL) {
+            named_ready = true;
+            break;
+          }
+        }
+      }
+      if (named_host != NULL && named_ready) {
+        bd_settings_set_plugins(settings, named_host);
+        bool opened = open_page(settings, BD_SETTINGS_CATEGORY_PLUGINS) &&
+                      focus_key(settings, "!plugin.com.test.long") &&
+                      bd_settings_input(settings, BD_SETTINGS_ACTION_ACCEPT);
+        ok = opened &&
+             capture(platform, gfx, settings, out_dir,
+                     "settings_plugin_long_name", now) &&
+             ok;
+        now += 16;
+        bd_settings_set_plugins(settings, NULL);
+      } else {
+        fprintf(stderr, "settings_capture: long-name plugin not ready\n");
+        ok = false;
+      }
+      if (named_host != NULL) {
+        bd_plugin_host_stop_all(named_host);
+        bd_plugin_host_destroy(named_host);
+      }
+      sf_remove_tree(named_runtime);
+      sf_remove_tree(named_dir);
+    } else {
+      fprintf(stderr, "settings_capture: cannot create long-name plugin\n");
+      ok = false;
+    }
+  }
+
+  {
+    bd_settings_system failing;
+    memset(&failing, 0, sizeof(failing));
+    failing.set_brightness = reject_brightness;
+    bd_settings_set_system(settings, &failing);
+    ok = open_page(settings, BD_SETTINGS_CATEGORY_DISPLAY) &&
+         focus_key(settings, "display.brightness") && ok;
+    (void)bd_settings_input(settings, BD_SETTINGS_ACTION_RIGHT);
+    if (bd_settings_last_error(settings)[0] == '\0') {
+      fprintf(stderr, "settings_capture: display error was not rejected\n");
+      ok = false;
+    }
+    ok = capture(platform, gfx, settings, out_dir, "settings_display_error",
+                 now) &&
+         ok;
+    now += 16;
+    bd_settings_set_system(settings, &system);
   }
 
   bd_settings_destroy(settings);

@@ -51,12 +51,15 @@ The page is designed at 1024x768 and follows the v3 settings reference
   page title stays 34 px and the top-bar `设置` stays 25 px. Nothing is below
   20 px. This 24/22/22/20 scale is a provisional legibility pass; re-check it
   on the 1024x768 device before treating it as final.
-- the focused row gets a 2 px accent ring (square, radius 2) and a 7% accent
+- the focused row gets a 2 px accent ring (square, radius 2), inset 2 px on
+  every side so the last row never shares the table border, plus a 7% accent
   veil. The table border is redrawn per row so a partial repaint is exact.
 - the bottom strip is **not** a persistent Steam-style bar. It is 58 px and
   only visible while Select is held (`bd_settings_set_hint_visible`). It
   mirrors the reference: two left lines for B/←→/A and L1/R1, and the page
-  hint behind an accent bullet on the right.
+  hint behind an accent bullet on the right. Both left baselines sit 4 px
+  higher than the strip's original text placement for bottom safe area; the
+  line spacing is unchanged and the right-side hint stays centred.
 
 ## Schema-driven rows
 
@@ -123,9 +126,10 @@ focuses toggle/slider/select/button nodes with ↑↓, sends `ui.activate` on A,
 and closes the settings page on B. `bd_plugin_ui_measure()` sizes the sub-page
 frame to the declared tree (capped at the table viewport), and
 `bd_plugin_ui_node_rect()` drives focus-following scroll: moving to a control
-outside the table scrolls the tree until the whole control is visible. Plugin
-controls keep the host renderer's own radii; only the settings frame follows
-the square direction.
+outside the table scrolls the tree until the whole control is visible. An
+overflowing tree reserves 12 px of bottom scroll padding and uses the same
+table scrollbar as the row pages. Plugin controls keep the host renderer's own
+radii; only the settings frame follows the square direction.
 
 ## Values and persistence
 
@@ -243,13 +247,20 @@ host and the config it points at.
   confirm/cancel plus rejected/disconnected perf and failed-AV reset paths that
   keep the old values and surface a partial error, custom accent sub-page, hint
   strip damage and B navigation.
+  The last appearance row and the single empty-plugin row stay fully visible.
   A long 16-control plugin tree verifies that focus-following scroll reaches
-  and activates the last control.
-- `settings_capture`: 14 dark screenshots (`settings_appearance`, `_hint`,
-  `_sound`, `_display`, `_brightness`, `_keys`, `_performance`, `_background`,
-  `_plugins`, `_plugin_settings`, `_plugin_long`, `_system`, `_confirm`,
-  `_accent_coral`). They are compared with `tools/imagediff.py` in tolerance
-  mode (max delta 2, SSIM 0.9995), like the other screenshot tests.
+  the last control, scrolls back to the first, and reaches and activates the
+  last control again.
+- `settings_capture`: 23 dark screenshots (`settings_appearance`, `_hint`,
+  `_appearance_last`, `_sound`, `_display`, `_brightness`, `_keys`,
+  `_performance`, `_background`, `_plugins`, `_plugins_empty`,
+  `_plugin_settings`, `_plugin_long_initial`, `_plugin_long`, `_plugin_long_back`,
+  `_plugin_long_name`, `_system`, `_confirm`, `_accent_coral`,
+  `_display_error`, plus the three status states). They cover the default page,
+  the last row, the empty and long plugin pages, scroll-back, a 60-byte plugin
+  name, the Select hint and the error footer. They are compared with
+  `tools/imagediff.py` in tolerance mode (max delta 2, SSIM 0.9995), like the
+  other screenshot tests.
 
 Run:
 

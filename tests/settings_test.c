@@ -459,6 +459,26 @@ static void test_pages(bd_settings *settings, bd_config *config) {
           bd_config_get_string(config, "app.org.libretro.retroarch.profile", ""));
   }
 
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_APPEARANCE),
+        "open appearance for last row");
+  int last = bd_settings_row_count(settings) - 1;
+  CHECK(last >= 0, "appearance has rows");
+  if (last >= 0) {
+    CHECK(focus_row(settings, bd_settings_row_key(settings, last)),
+          "focus last appearance row");
+    bd_settings_stats last_stats = bd_settings_get_stats(settings);
+    CHECK(bd_settings_focus(settings) == last,
+          "last row focus %d != %d", bd_settings_focus(settings), last);
+    CHECK(last_stats.focus_visible, "last row is not fully visible");
+  }
+
+  CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_PLUGINS),
+        "open empty plugins page");
+  bd_settings_stats empty = bd_settings_get_stats(settings);
+  CHECK(empty.plugins == 0 && empty.rows == 1,
+        "empty plugins rows %d plugins %d", empty.rows, empty.plugins);
+  CHECK(empty.focus_visible, "empty plugin row is not fully visible");
+
   CHECK(bd_settings_open(settings, BD_SETTINGS_CATEGORY_BACKGROUND),
         "open background");
   CHECK(focus_row(settings, "session.max_background"), "focus max background");
@@ -710,6 +730,25 @@ static void test_plugin_scroll(bd_platform *platform, bd_gfx *gfx,
   CHECK(stats.scroll > 0, "long plugin: expected scrolling, got %d",
         stats.scroll);
   CHECK(stats.focus_visible, "long plugin: last control is not visible");
+
+  for (int i = 0; i < stats.plugin_nodes; ++i) {
+    bd_settings_input(settings, BD_SETTINGS_ACTION_UP);
+  }
+  stats = bd_settings_get_stats(settings);
+  CHECK(bd_settings_focus(settings) == 0,
+        "long plugin: scroll back focus %d != 0", bd_settings_focus(settings));
+  CHECK(stats.focus_visible,
+        "long plugin: first control is not visible after scrolling back");
+
+  for (int i = 0; i < stats.plugin_nodes - 1; ++i) {
+    bd_settings_input(settings, BD_SETTINGS_ACTION_DOWN);
+  }
+  stats = bd_settings_get_stats(settings);
+  CHECK(bd_settings_focus(settings) == last,
+        "long plugin: return focus %d != %d", bd_settings_focus(settings),
+        last);
+  CHECK(stats.focus_visible,
+        "long plugin: last control is not visible after returning");
   render(platform, gfx, settings, 6000, true);
 
   const bd_plugin_ui *ui = bd_plugin_ui_settings(plugin);

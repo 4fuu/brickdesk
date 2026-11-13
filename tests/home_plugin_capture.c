@@ -74,25 +74,36 @@ static void remove_tree(const char *path) {
   nftw(path, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
 }
 
+enum { FIXTURE_APP_COUNT = 24 };
+
 static bool prepare_apps(const char *root, char *apps, size_t apps_size) {
   if (!join(apps, apps_size, root, "apps") || !make_dir(apps)) {
     return false;
   }
-  char app_dir[TEST_PATH];
-  if (!join(app_dir, sizeof(app_dir), apps, "fixture") ||
-      !make_dir(app_dir)) {
-    return false;
+  for (int i = 0; i < FIXTURE_APP_COUNT; ++i) {
+    char name[16];
+    char app_dir[TEST_PATH];
+    char manifest[TEST_PATH];
+    snprintf(name, sizeof(name), "fixture%02d", i);
+    if (!join(app_dir, sizeof(app_dir), apps, name) ||
+        !make_dir(app_dir) ||
+        !join(manifest, sizeof(manifest), app_dir, "app.json")) {
+      return false;
+    }
+    char json[512];
+    int needed = snprintf(
+        json, sizeof(json),
+        "{\"schema\":1,\"id\":\"test.fixture%02d\",\"name\":\"Fixture %02d\","
+        "\"subtitle\":\"plugin tile test\",\"type\":\"app\","
+        "\"category\":\"app\",\"exec\":[\"/bin/true\"],\"cwd\":\".\","
+        "\"capabilities\":{},\"hooks\":{},\"accent\":\"#5b6b7a\"}\n",
+        i, i);
+    if (needed <= 0 || (size_t)needed >= sizeof(json) ||
+        !write_file(manifest, json)) {
+      return false;
+    }
   }
-  char manifest[TEST_PATH];
-  if (!join(manifest, sizeof(manifest), app_dir, "app.json")) {
-    return false;
-  }
-  static const char *json =
-      "{\"schema\":1,\"id\":\"test.fixture\",\"name\":\"Fixture\","
-      "\"subtitle\":\"plugin tile test\",\"type\":\"app\","
-      "\"category\":\"app\",\"exec\":[\"/bin/true\"],\"cwd\":\".\","
-      "\"capabilities\":{},\"hooks\":{},\"accent\":\"#5b6b7a\"}\n";
-  return write_file(manifest, json);
+  return true;
 }
 
 int main(int argc, char **argv) {
@@ -198,18 +209,31 @@ int main(int argc, char **argv) {
   }
 
   bd_home *home = bd_shell_home(shell);
-  CHECK(bd_home_item_count(home) == 2,
-        "home should have the app plus the plugin tile, got %d",
+  int plugin_index = bd_home_item_count(home) - 1;
+  CHECK(bd_home_item_count(home) == FIXTURE_APP_COUNT + 1,
+        "home should have all apps plus the plugin tile, got %d",
         bd_home_item_count(home));
   CHECK(hello != NULL && bd_plugin_state_of(hello) != BD_PLUGIN_RUNNING,
         "shell creation alone must not start the plugin tile");
   bd_rect plugin_rect;
-  CHECK(bd_home_item_rect(home, 1, &plugin_rect), "plugin item rect");
-  CHECK(plugin_rect.x < 1024 && plugin_rect.x + plugin_rect.w > 0 &&
-            plugin_rect.y < 768 && plugin_rect.y + plugin_rect.h > 0,
-        "plugin tile starts on screen");
+  CHECK(bd_home_item_rect(home, plugin_index, &plugin_rect),
+        "plugin item rect");
+  CHECK(plugin_rect.x >= 1024,
+        "plugin tile starts outside the viewport, got x=%d", plugin_rect.x);
   CHECK(bd_shell_test_session(shell) != NULL, "shell session");
 
+  /* An off-screen tile must not activate the plugin. */
+  bd_shell_render(shell);
+  for (int i = 0; i < 30; ++i) {
+    bd_shell_iterate(shell, 5);
+    sleep_ms(5);
+  }
+  CHECK(hello != NULL && bd_plugin_state_of(hello) != BD_PLUGIN_RUNNING,
+        "off-screen plugin tile must not start");
+
+  /* Bring the tile into view; the home callback starts it on demand. */
+  bd_home_set_focus(home, plugin_index);
+  bd_shell_render(shell);
   for (int i = 0; i < 500; ++i) {
     bd_shell_iterate(shell, 10);
     if (hello != NULL && bd_plugin_state_of(hello) == BD_PLUGIN_RUNNING &&
@@ -224,6 +248,11 @@ int main(int argc, char **argv) {
         "hello plugin tile UI arrived");
   CHECK(bd_session_running_count(bd_shell_test_session(shell)) == 0,
         "plugin tile must not enter the session launch path");
+  bd_rect visible_rect;
+  CHECK(bd_home_item_rect(home, plugin_index, &visible_rect),
+        "focused plugin item rect");
+  CHECK(visible_rect.x - bd_home_get_stats(home).pan_x < 1024,
+        "focused plugin tile is on screen");
 
   for (int i = 0; i < 40; ++i) {
     bd_shell_iterate(shell, 10);
@@ -243,7 +272,31 @@ int main(int argc, char **argv) {
     printf("capture: %s\n", output);
   }
 
-  /* Hiding the production home must release the plugin tile's visibility. */
+  /* Moving the tile out of the viewport must release visibility. */
+  bd_home_set_focus(home, 0);
+  bd_shell_render(shell);
+  for (int i = 0; i < 200; ++i) {
+    bd_shell_iterate(shell, 5);
+    if (hello == NULL || bd_plugin_state_of(hello) == BD_PLUGIN_STOPPED) {
+      break;
+    }
+    sleep_ms(5);
+  }
+  CHECK(hello != NULL && bd_plugin_state_of(hello) == BD_PLUGIN_STOPPED,
+        "off-screen plugin tile stops after its idle timeout");
+
+  /* A hidden home must release visibility the same way. */
+  bd_home_set_focus(home, plugin_index);
+  bd_shell_render(shell);
+  for (int i = 0; i < 500; ++i) {
+    bd_shell_iterate(shell, 10);
+    if (hello != NULL && bd_plugin_state_of(hello) == BD_PLUGIN_RUNNING) {
+      break;
+    }
+    sleep_ms(10);
+  }
+  CHECK(hello != NULL && bd_plugin_state_of(hello) == BD_PLUGIN_RUNNING,
+        "hello restarts when its tile returns");
   bd_home_set_surface_visible(home, false);
   for (int i = 0; i < 200; ++i) {
     bd_plugin_host_poll(plugin_host, 0);

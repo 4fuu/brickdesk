@@ -210,7 +210,10 @@ hidden.  Visible frames go through `bd_plugin_tile_begin_frame()`; a changed
 frame/UI queues tile damage before `bd_plugin_tile_draw()`.  Off-screen items
 are not drawn.
 
-`tests/home_plugin_capture.c` scans the real `plugins/` directory, starts the
-real `hello` plugin through this production home path, asserts it did not enter
-the session, and captures `home_plugin.png`.  It replaces the old
-`bd_desktop_set_plugin_tile()` path rather than testing that legacy scene.
+`tests/home_plugin_capture.c` scans the real `plugins/` directory and runs the
+real `hello` plugin through this production home path.  It fills the wall so the
+tile starts outside the viewport, asserts the plugin stays stopped, focuses the
+tile to start it, and captures `home_plugin.png`.  It then checks that moving
+the tile off-screen or hiding the home stops it again, and that the plugin never
+enters the session.  It replaces the old `bd_desktop_set_plugin_tile()` path
+rather than testing that legacy scene.

@@ -260,6 +260,12 @@ set_tests_properties(shell_inputd_reconnect PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
   TIMEOUT 120)
 
+add_test(NAME shell_power
+  COMMAND bd_shell_power_test $<TARGET_FILE:bd_session_child>)
+set_tests_properties(shell_power PROPERTIES
+  ENVIRONMENT "${BD_HEADLESS_ENV}"
+  TIMEOUT 180)
+
 add_test(NAME settings COMMAND bd_settings_test)
 set_tests_properties(settings PROPERTIES
   ENVIRONMENT "${BD_HEADLESS_ENV}"
@@ -453,6 +459,18 @@ add_executable(bd_session_child session_child.c)
 target_include_directories(bd_session_child PRIVATE
   "${PROJECT_SOURCE_DIR}/third_party/jsmn")
 target_link_libraries(bd_session_child PRIVATE brickdesk_warnings)
+
+add_executable(bd_shell_power_test shell_power_test.c)
+target_link_libraries(bd_shell_power_test PRIVATE
+  brickdesk_shell
+  brickdesk_plugin
+  brickdesk_config
+  brickdesk_warnings)
+target_compile_definitions(bd_shell_power_test PRIVATE
+  BRICKDESK_TEST_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+  BRICKDESK_TEST_BATTERY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/battery/full"
+  BRICKDESK_TEST_FIXTURE="$<TARGET_FILE:bd_plugin_fixture>")
+add_dependencies(bd_shell_power_test bd_plugin_fixture bd_session_child)
 
 add_executable(bd_session_test session_test.c)
 target_link_libraries(bd_session_test PRIVATE brickdesk_session brickdesk_warnings)

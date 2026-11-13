@@ -336,11 +336,25 @@ static int send_ready(int fd, const char *hello) {
   return bd_plugin_send_line(fd, reply, (size_t)written) ? 0 : -1;
 }
 
+static void log_heartbeat_ping(void) {
+  const char *path = getenv("BRICKDESK_TEST_PLUGIN_PING_LOG");
+  if (path == NULL || path[0] == '\0') {
+    return;
+  }
+  FILE *file = fopen(path, "a");
+  if (file == NULL) {
+    return;
+  }
+  fputs("ping\n", file);
+  fclose(file);
+}
+
 static int serve_host_message(int fd, const char *line) {
   if (strstr(line, "\"host.shutdown\"") != NULL) {
     return 0;
   }
   if (strstr(line, "\"host.ping\"") != NULL) {
+    log_heartbeat_ping();
     long id = 0;
     find_long_field(line, "\"id\":", &id);
     char reply[128];
@@ -483,6 +497,25 @@ static int run_settings_mode(void) {
   return 0;
 }
 
+static int run_heartbeat(void) {
+  int fd = raw_connect();
+  if (fd < 0) {
+    return 1;
+  }
+  char line[BD_PLUGIN_LINE_MAX];
+  if (read_line(fd, line, sizeof(line)) < 0 || send_ready(fd, line) != 0) {
+    close(fd);
+    return 1;
+  }
+  while (read_line(fd, line, sizeof(line)) > 0) {
+    if (serve_host_message(fd, line) <= 0) {
+      break;
+    }
+  }
+  close(fd);
+  return 0;
+}
+
 static int run_spin(void) {
   int fd = raw_connect();
   if (fd < 0) {
@@ -530,7 +563,7 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr,
             "usage: bd_plugin_fixture "
-            "good|long|silent|crash|badui|spin|alloc|settings\n");
+            "good|long|silent|crash|badui|spin|alloc|settings|heartbeat\n");
     return 2;
   }
   const char *mode = argv[1];
@@ -542,6 +575,9 @@ int main(int argc, char **argv) {
   }
   if (strcmp(mode, "settings") == 0) {
     return run_settings_mode();
+  }
+  if (strcmp(mode, "heartbeat") == 0) {
+    return run_heartbeat();
   }
   return run_client_mode(mode);
 }

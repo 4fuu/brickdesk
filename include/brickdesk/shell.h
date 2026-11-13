@@ -7,6 +7,7 @@
 
 #include "brickdesk/app.h"
 #include "brickdesk/config.h"
+#include "brickdesk/device_power.h"
 #include "brickdesk/gfx.h"
 #include "brickdesk/home.h"
 #include "brickdesk/platform.h"
@@ -45,6 +46,12 @@ typedef struct bd_shell_config {
    * silent stub success.
    */
   const bd_settings_system *settings_system;
+  /*
+   * Explicit test backend for the light-sleep state machine.  Production
+   * leaves this NULL and always uses bd_power_linux with state changes
+   * disabled; there is deliberately no runtime arming switch.
+   */
+  const bd_power_backend *power_backend;
   bool verbose;
   /* Attach the first tile-capable plugin to the production home wall.
    * Production main enables it; the idle-check path leaves it off so the
@@ -99,5 +106,12 @@ bool bd_shell_test_launch(bd_shell *shell, const char *app_id);
 /* Test/diagnostic view of the battery policy cadence. */
 bool bd_shell_test_battery_policy(const bd_shell *shell, uint64_t *next_ms,
                                   bool *policy_ready, int *percent);
+/*
+ * Test/diagnostic view of the queued light-sleep path.  `state` is the
+ * bd_power state, `sleeping` covers LIGHT_SLEEP and DEGRADED (both suppress
+ * rendering), and `input_suspended` reflects the input_release/acquire hook.
+ */
+bool bd_shell_test_power(const bd_shell *shell, bd_power_state *state,
+                         bool *sleeping, bool *input_suspended);
 
 #endif /* BRICKDESK_SHELL_H */

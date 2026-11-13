@@ -329,6 +329,7 @@ target_link_libraries(brickdesk_shell
     brickdesk_sysinfo
     brickdesk_device
     brickdesk_battery
+    brickdesk_power
   PRIVATE brickdesk_warnings
 )
 

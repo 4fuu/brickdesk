@@ -1,13 +1,14 @@
 # 电源、休眠与关机（M4-Power）
 
 > **状态：未在 Brick Pro 真机验证。**
-> 宿主状态机、故障注入测试和 aarch64 交叉编译已通过；真实休眠/唤醒、电源键、
-> 标准关机、PMIC 和 20 轮连续休眠恢复都还没有真机证据。本文不声称任何未经
-> 真机验证的恢复可靠性。真机步骤见第 8 节。
+> 宿主状态机、shell 轻睡接线、故障注入测试和 aarch64 交叉编译已通过；真实
+> 休眠/唤醒、电源键、标准关机、PMIC 和 20 轮连续休眠恢复都还没有真机证据。
+> 本文不声称任何未经真机验证的恢复可靠性。真机步骤见第 8 节。
 
 本文记录 `m4/power` 的电源后端：可注入操作的轻睡/深睡/唤醒/关机/重启状态机，
-以及只使用公开 Linux 接口的后端。音频和亮度由 M4-A 负责，本文不实现也不写入
-ALSA、`/dev/disp`、背光或 LED；home/app/settings 也不在范围内。
+只使用公开 Linux 接口的后端，以及 shell 的 POWER 短按轻睡切片。power 模块不写
+ALSA、`/dev/disp`、背光或 LED；shell 的显示 hook 通过既有 AV getter/setter
+读写亮度。home/app/settings 的内部实现不在 power 模块范围内。
 
 ## 1. 范围与边界
 
@@ -18,16 +19,21 @@ ALSA、`/dev/disp`、背光或 LED；home/app/settings 也不在范围内。
 - `src/device/power_linux.c`：只读能力探测；`/sys/power/state` 深睡；
   `reboot(2)` 标准关机/重启；PMIC 安全关机的显式 unsupported。
 - `src/device/power_probe_main.c`：`bd-power` 探测/诊断 CLI，默认只读。
-- `tests/device_power_test.c`、`tests/fixtures/power/`：宿主状态机和故障注入测试。
+- `src/app/shell.c`、`include/brickdesk/shell.h`：排队 POWER 短按、前台冻结、
+  亮度快照/恢复、轻睡服务循环和测试注入点。
+- `tests/device_power_test.c`、`tests/fixtures/power/`：宿主状态机和故障注入
+  测试；`tests/shell_power_test.c`：真实 shell 循环、ticking 子进程、真实插件
+  heartbeat 与运行后接入的 inputd。
 
 不做：
 
-- 不实现音频暂停/恢复、背光、LED、震动。它们通过调用方 hook 接入。
-- 不实现自动休眠定时器、电源键长按判定、充电策略。shell 拥有这些策略。
+- 不实现音频暂停/恢复、背光驱动本身、LED、震动。轻睡只使用 shell 已有的 AV
+  getter/setter；不声称面板断电或音频 codec 已挂起。
+- 本切片不实现深睡、关机/重启、电源键长按配置、自动休眠或低电量策略消费。
 - 不实现输入守护进程、应用会话或服务监管；只定义调用顺序和失败语义。
 - 不写 AXP2202 寄存器，不打开 I2C，不实现 PMIC 安全关机序列。
-- 不把“关背光”当作休眠。`display_off` 只是轻睡的一个 hook；深睡必须由
-  Linux 后端写 `mem`，失败时不会自动降级成轻睡。
+- 不把“关背光”当作休眠。`display_off` 只是轻睡的一个 hook；RAM 冻结不是
+  `app.pause`、存档或掉电保护。
 
 ## 2. 证据、版本与许可
 
@@ -364,122 +370,78 @@ NextUI 的 suspend 脚本在写 `mem` 失败时重试 5 次，并在“实际睡
 - CLI：`bd-power`（`src/device/power_probe_main.c`）；target 构建进入
   `dist/bin/bd-power`，发布包安装到 `bin/bd-power`，并附带
   `docs/device-power.md`。默认只读，危险动作需要显式参数。
-- 测试：`bd_device_power_test`（CTest 名称 `device_power`）。
+- 测试：`bd_device_power_test`（CTest 名称 `device_power`）和
+  `bd_shell_power_test`（CTest 名称 `shell_power`）。
 
 库不链接 SDL/GLES/ALSA；target 构建和 host 构建使用同一份源码。
 
-### 6.2 最小接线示例
+### 6.2 Shell 轻睡接线（本切片已实现）
 
-下面是 shell 侧未来的接线形状，不是当前已实现的 `src/app/shell.c`。它只展示
-API 的所有权和顺序；实际 hook 应调用 inputd、session、M4-A 的显示/音频接口。
+`src/app/shell.c` 持有 `bd_power_linux` 和 `bd_power`，生命周期覆盖事件循环。
+生产路径固定：
 
-```c
-#include "brickdesk/device_power.h"
+- `bd_power_linux_init(..., allow_state_changes=false, ...)`；本切片没有运行时
+  arming 开关，也不会从配置读取深睡/关机开关。
+- `allow_light_sleep=true`，`allow_deep_sleep/allow_poweroff/allow_reboot=false`。
+- `bd_shell_config.power_backend` 只用于测试注入；生产总是使用上面只读的 Linux
+  后端。轻睡本身不调用深睡或关机 backend。
 
-/* Shell-owned: both members must outlive the bd_power handle. */
-struct shell_power {
-  struct shell *shell;
-  bd_power_linux linux;
-  bd_power *power;
-};
+hooks 的职责：
 
-static int shell_input_release(void *user) {
-  /* Release EVIOCGRAB / stop dispatching, keep the power-key wake source. */
-  return shell_input_suspend((struct shell *)user) ? 0 : -1;
-}
+- `input_release/input_acquire` 只设置/清除 shell 的 `input_suspended`。它们不
+  关闭 inputd、不发送 EVIOCGRAB、不发送全局 `release_all`；POWER 仍可进入。
+- `app_pause` 在请求执行前捕获**确切的前台 app id**，只调用
+  `bd_session_freeze(session, app_id)`；`app_resume` 只对这个 id 调用
+  `bd_session_thaw()`。session 保持 `FOREGROUND`，不占后台配额、不发
+  `app.pause/state.save`。如果 freeze/thaw 的 SIGCONT 被拒绝，hook 保留同一
+  id 和 frozen 所有权，下一次 rollback/wake 继续重试；`IO_ERROR` 不当作已恢复。
+  只有 session 确认该 id 不再 frozen 或已退出后才清除所有权。没有前台 app 时
+  `NOT_FOUND` 视为成功。
+- `display_off` 先通过现有 `bd_settings_system.get_brightness` 读取当前值，成功
+  后才写 0。读取失败、越界或缺少 getter/setter 都让轻睡失败，绝不盲写，也不
+  把失败报告成已睡。零写入或恢复写入失败时保留快照，由 bd_power 的 rollback 或
+  下一次 `DEGRADED` wake 重试；只有恢复成功才清除快照。
+- 不提供 `resource_prepare/restore`。本切片不暂停音频、Wi-Fi、BT、面板电源或
+  inputd；音频线程只随前台进程组的 SIGSTOP 停止，不能声称 codec/功放已挂起。
 
-static int shell_input_acquire(void *user) {
-  return shell_input_resume((struct shell *)user) ? 0 : -1;
-}
+亮度 0 只是现有 AV 后端的背光写入，不是面板断电；本切片没有 panel power API。
+RAM 冻结不是 `app.pause`、存档或掉电保护。
 
-static int shell_app_pause(void *user) {
-  return session_pause_foreground((struct shell *)user) ? 0 : -1;
-}
+### 6.3 POWER 请求与休眠循环
 
-static int shell_app_resume(void *user) {
-  return session_resume_foreground((struct shell *)user) ? 0 : -1;
-}
-
-static int shell_resource_prepare(void *user, bd_power_sleep_mode mode) {
-  /* LIGHT: stop non-essential work. DEEP: also stop Wi-Fi/BT/audio if the
-     shell decides so. Every change must be reversible. */
-  return shell_quiesce((struct shell *)user, mode) ? 0 : -1;
-}
-
-static int shell_resource_restore(void *user, bd_power_sleep_mode mode) {
-  return shell_unquiesce((struct shell *)user, mode) ? 0 : -1;
-}
-
-static int shell_display_off(void *user) {
-  /* M4-A owns brightness; this is a hook, not implemented here. */
-  return display_off((struct shell *)user) ? 0 : -1;
-}
-
-static int shell_display_on(void *user) {
-  return display_on((struct shell *)user) ? 0 : -1;
-}
-
-static bool shell_power_create(struct shell_power *sp, struct shell *shell) {
-  char error[256];
-  sp->shell = shell;
-  if (!bd_power_linux_init(&sp->linux, NULL, true, NULL, error,
-                           sizeof(error))) {
-    return false;
-  }
-  bd_power_config config = {
-      .hooks = {
-          .user = shell,
-          .input_release = shell_input_release,
-          .app_pause = shell_app_pause,
-          .resource_prepare = shell_resource_prepare,
-          .display_off = shell_display_off,
-          .display_on = shell_display_on,
-          .resource_restore = shell_resource_restore,
-          .app_resume = shell_app_resume,
-          .input_acquire = shell_input_acquire,
-      },
-      .backend = bd_power_linux_backend(&sp->linux),
-      .allow_light_sleep = true,
-      .allow_deep_sleep = true,
-      .allow_poweroff = true,
-      .allow_reboot = true,
-  };
-  sp->power = bd_power_create(&config, error, sizeof(error));
-  return sp->power != NULL;
-}
-```
-
-`bd_power_linux` 和 `bd_power` 必须由 shell 持有；不能把 `bd_power_linux` 放在
-`shell_power_create()` 的栈上返回，否则 `bd_power` 的 backend `user` 指针会悬空。
-`bd_power_linux_init()` 的第三个参数 `allow_state_changes=true` 是破坏性操作的
-显式 opt-in；生产 shell 只能在真机验收（第 8 节）通过后设置，测试/探测默认
-false。
-
-### 6.3 事件循环中的调用点
-
-- 短按电源键：`bd_power_sleep_light()`；返回 `BD_POWER_OK` 后 shell 停止重绘
-  并等待电源键/其他唤醒源。
-- 唤醒：`bd_power_wake()`；返回 `BD_POWER_DEGRADED` 时显示错误并保留
-  `DEGRADED` 状态，直到再次 `wake` 成功。
-- 空闲超时：shell 先 `bd_power_sleep_light()`，再在合适时机
-  `bd_power_sleep_deep()`；深睡超时和充电策略由 shell 决定。
-- 长按电源键：`bd_power_poweroff(power, BD_POWER_POWEROFF_STANDARD, &r)`；
-  不要默认调用。PMIC 安全路径不可用。
-- 重启：`bd_power_reboot()`。
-- 活动事件（按键/触摸/应用请求）：`bd_power_cancel()` 取消排队中的自动休眠。
-- 插件事件：shell 可在 enter/leave 前后发送 `system.suspend`/`system.resume`；
-  这不是 power 模块的职责，当前未接线。
+- `shell_dispatch_key()` 在 `visible` 和设置页检查之前处理 `BD_KEY_POWER`，所以
+  前台应用拥有显示时也能响应。它只入队 `SHELL_POWER_REQUEST_SLEEP/WAKE`，不在
+  输入回调里调用 bd_power。
+- `bd_shell_iterate()` 在普通 service/render 之前执行 `shell_power_service()`；
+  `bd_shell_render()` 也会先执行排队请求并拒绝在睡眠/`DEGRADED` 时出帧。
+- 醒着时 POWER 在 1000 ms 内松开 → 排队轻睡；超过 1000 ms 的长按本切片忽略，
+  长按关机/配置留给后续任务。睡眠中 POWER 按下 → 排队唤醒，按下即唤醒；唤醒
+  后的 1 秒和该次松开都不再触发睡眠。
+- 轻睡期间继续服务 inputd 连接/重连、session IPC/子进程回收、plugin IPC 和
+  heartbeat，并使用它们真实的 poll 截止时间。`bd_plugin_host_poll()` 不会被
+  跳过，否则插件会在唤醒时被 `last_rx` 误判超时。
+- 轻睡期间不调用 `shell_update_home()`、不推进 home/settings 动画、不处理普通
+  按键/动作、设置长按重复或 UI 帧 deadline，也不 present。进入时调用
+  `bd_home_set_surface_visible(false)`，自定义磁贴收到 `visible=false`；
+  `settings_open` 和当前页面/焦点不变。不可见磁贴不再产生 `refresh_hz` deadline，
+  background/autostart/settings 插件仍按原生命周期运行。
+- 唤醒成功后按 `shell->visible && !settings_open` 恢复 surface；设置页保持打开，
+  不强制回主页，也不改变焦点。
+- 进入失败且回滚到 `IDLE` 时 shell 不进入睡眠；回滚不完整时保留 `DEGRADED`，
+  继续抑制输入和绘制，下一次 POWER 唤醒重试失败的 restore。
 
 ### 6.4 与 M4-A 和其他模块的边界
 
-- 亮度/背光：power 只调用 `display_off`/`display_on` hook；不写 `/dev/disp`，
-  不调 M4-A 的亮度 API。M4-A 的恢复顺序（先 raw 8 再实际值）由它自己实现。
-- 音频：power 只调用 `resource_prepare/restore`；不碰 ALSA/tinymix。
-- 应用/session：power 只调用 `app_pause`/`app_resume`；不杀进程、不解析存档。
-- perf/网络：power 不直接停 Wi-Fi/BT；由 shell 在 resource hook 中按真机证据
-  决定。Knulli 的 `99-xradio-wlan` 和 NextUI 的 suspend 脚本是参考，不是本模块
-  的默认行为。
-- 输入：power 不打开 evdev；只要求 inputd 释放占用并保留唤醒源。
+- 亮度/背光：power 模块本身不写 `/dev/disp`；shell 的 display hook 只使用既有
+  AV getter/setter（生产由 device_av 提供，测试可注入）。未知值只报告失败。
+- 音频：本切片不调用 ALSA/tinymix，不声称音量、静音或路由已恢复；只有前台
+  进程组被 SIGSTOP。
+- 应用/session：只调用同步 freeze/thaw；不杀进程、不解析存档、不把冻结当成
+  `app.pause`，也不改后台配额。
+- perf/网络：不停止 perf lease、Wi-Fi 或 BT；这些留给后续深睡任务。
+- 输入：power 不打开 evdev；inputd 继续运行，shell 只丢弃睡眠期间的普通输入，
+  不发送全局 release。
+- 插件：host 继续 poll；不发送 `system.suspend/resume`，插件进程不被冻结。
 
 ## 7. 测试与验证
 
@@ -489,20 +451,45 @@ false。
 cmake -S . -B build-host -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBRICKDESK_WERROR=ON
 cmake --build build-host --parallel
-ctest --test-dir build-host -R device_power --output-on-failure
+ctest --test-dir build-host -R 'device_power|shell_power' --output-on-failure
 ```
 
 结果：
 
 ```text
-1/1 Test #5: device_power .....................   Passed
-100% tests passed, 0 tests failed out of 1
+2/2 Test ... device_power ... Passed
+2/2 Test ... shell_power .... Passed
+100% tests passed, 0 tests failed out of 2
 ```
 
-同一配置的全量 CTest 为 32/32 通过；ASan/UBSan 构建也通过
-`device_power_test: OK`。
+`shell_power` 使用真实 SDL/GLES offscreen、真实 session 与 ticking 子进程、真实
+plugin host/plugin 进程、运行后才出现的 fake inputd，以及 fake AV/backend。
+它覆盖：
 
-测试覆盖：
+- POWER 短按进入/唤醒；前台 app id/pid/`FOREGROUND`/后台配额不变，进程
+  `T` → 运行；亮度快照、0、恢复。
+- 未知亮度不写；零写失败回滚；恢复失败保持 `DEGRADED` 并在下一次 POWER
+  重试；freeze 确认超时且 rollback SIGCONT 被拒绝时保留确切 frozen 实例，
+  下一次 wake 重试 thaw。失败路径不丢 app 身份/配额，也不报告已睡。
+- 睡眠中普通按键/动作、设置长按重复、home/settings 更新与 present 均被抑制；
+  poll 不 busy loop；inputd 在睡眠中重连、断开/再连，未发送 `release_all`。
+- 插件 heartbeat timeout 短于睡眠时长时，插件保持 RUNNING、pid 不变、
+  heartbeat 继续，唤醒后通信继续；不可见磁贴不保留 refresh_hz deadline。
+- 设置页开启时轻睡，`settings_open`、分类、焦点、行、子页和 home 焦点不变，
+  唤醒后 surface 仍按设置页保持隐藏。
+
+测试进程只使用 fake backend 和 fake brightness，没有写 `/sys/power/state`、
+没有调用 `reboot(2)`，也没有真实电源键或面板操作。
+
+本切片本地验证（2026-11-13，host orb）：`BRICKDESK_WERROR=ON` 构建通过；
+`shell_power` 11.03 s 通过；完整 CTest 45/45（157.04 s）；设备脚本
+`scripts/device/test/run-tests.sh` 全部通过。此前同一完整套件的一次运行中
+`plugin`/`shell_inputd_reconnect` 曾因负载超时失败，随后单项复跑和最终整套
+均通过；这里保留首次失败记录，不把重跑当作没有发生过。
+
+之前的 `device_power` 结果仍是独立 backend 证据。
+
+`device_power` 覆盖：
 
 - 轻睡 enter/leave 的精确调用顺序；重复轻睡 `ALREADY` 不调用 hook。
 - 排队取消、取消已排队、轻睡中取消、`DEGRADED` 取消。
@@ -700,13 +687,21 @@ done
 
 ### 8.6 轻睡与取消
 
-- [ ] 短按电源键 → 轻睡；确认 `display_off` 后屏幕黑、音频按 hook 策略暂停、
-      输入不再进入前台应用。
-- [ ] 轻睡中短按/按键唤醒；确认 `display_on`、资源恢复、app resume、input
-      acquire 的顺序没有卡死。
-- [ ] 轻睡中再次短按不产生嵌套；重复请求返回 `ALREADY`（shell 日志）。
-- [ ] 空闲计时中按键 → `cancel` 排队；下一次自动休眠被取消，不进入 sleep。
-- [ ] 轻睡中长按电源 → 关机路径；失败时仍回到轻睡，而不是黑屏无响应。
+当前 shell 切片可先在真机验证：
+
+- [ ] 前台应用拥有显示时短按电源键 → 轻睡；确认背光 0、前台进程组为 `T`、
+      session 仍为 `FOREGROUND`、后台配额不变，且没有 `app.pause/state.save`。
+- [ ] 轻睡中按下电源键 → 唤醒；确认 `SIGCONT`、亮度恢复、同一 app/pid 仍为
+      前台；松开不会再次进入轻睡。
+- [ ] 桌面或设置页中轻睡；确认没有 present、设置页/焦点不变、普通按键和长按
+      重复不生效；唤醒后 surface 按原页面恢复。
+- [ ] 轻睡超过插件 heartbeat timeout；确认插件仍 RUNNING、`last_rx` 未误判，
+      且唤醒后 IPC 继续。
+- [ ] 轻睡中启动/断开 inputd；确认重连继续、没有全局 release、普通输入不穿透。
+- [ ] 进入/恢复失败分别注入读、写、restore 错误；确认不会黑屏或报告已睡，
+      `DEGRADED` 下一次电源键可重试。
+- [ ] 深睡/关机/长按/自动休眠/低电量策略仍不在本切片；不要在本轮测试中
+      打开或写入它们。
 
 ### 8.7 失败与恢复
 
@@ -757,7 +752,14 @@ done
   backport。默认不写它。
 - **未实现**：`wakeup_count` 竞态处理、自动重试、NextUI 式假失败启发式、
   SD 卡卸载、进程杀死、PMIC 软断电。
-- **未实现**：自动休眠定时器、电源键长按判定、充电策略；这些由 shell 拥有。
+- **未实现**：自动休眠定时器、电源键长按配置/关机、充电策略；这些由后续
+  任务拥有。本切片的短按窗口固定 1000 ms，长按只忽略。
+- **未实现**：深睡、关机/重启的 shell 接线；`allow_deep_sleep/poweroff/reboot`
+  在 shell 中固定为 false，Linux backend 也固定 `allow_state_changes=false`。
+- **不声称**：轻睡会停止音频、Wi-Fi、BT、面板电源或 inputd。只有被捕获的前台
+  进程组收到 SIGSTOP；亮度 0 是现有 AV 后端的背光写入。
+- **不声称**：RAM 冻结是 `app.pause`、存档或掉电保护；它不占后台配额，也不
+  改变 session 的 `FOREGROUND` 身份。
 - **不声称**：`bd_power_sleep_deep()` 返回 `OK` 只表示内核接受了 `mem` 且调用
   返回；不代表实际功耗、恢复完整性或 20 轮可靠性。
 - **不声称**：`bd_power_sleep_light()` 是 suspend；它只是调用方 hook 的软件
@@ -778,17 +780,29 @@ done
 | `src/device/power.c` | 状态机、回滚、取消、重复、报告 |
 | `src/device/power_linux.c` | 只读 probe、`mem` 深睡、`reboot(2)`、PMIC unsupported |
 | `src/device/power_probe_main.c` | `bd-power` CLI，默认只读 |
+| `src/app/shell.c` | POWER 排队、冻结/亮度 hook、轻睡 service/render 门控 |
+| `include/brickdesk/shell.h` | 可选 fake backend 与 `bd_shell_test_power()` |
 | `tests/device_power_test.c` | 宿主状态机/故障注入/probe 测试 |
+| `tests/shell_power_test.c` | 真实 shell 循环、进程冻结、插件 heartbeat、inputd |
 | `tests/fixtures/power/` | full/limited sysfs fixture |
-| `brickdesk_power` | CMake 静态库 |
+| `brickdesk_power` | CMake 静态库；`brickdesk_shell` 已链接 |
 | `bd-power` | CMake 可执行文件；target 构建为 `build-target/dist/bin/bd-power`，发布包安装到 `bin/bd-power` |
 | `bd_device_power_test` | 测试可执行文件；CTest 名称 `device_power` |
+| `bd_shell_power_test` | 测试可执行文件；CTest 名称 `shell_power` |
 
-后续 shell 接线需要：
+当前接线：
 
-1. 在 shell 中持有 `bd_power_linux` 和 `bd_power`，生命周期覆盖事件循环。
-2. 把 inputd 的 release/acquire、session 的 pause/resume、M4-A 的 display
-   off/on、服务层的 prepare/restore 接入 hook。
-3. 把电源键短按、空闲超时、长按、活动取消接到 API。
-4. 在真机完成第 8 节，尤其是 8.5 的 20 轮；在此之前保持
-   `allow_state_changes=false`，只使用只读 probe。
+1. shell 持有 `bd_power_linux`/`bd_power`，生产固定
+   `allow_state_changes=false`，只启用 light sleep。
+2. input hook 只做 shell 本地 suspend；session hook 同步 freeze/thaw 确切前台；
+   display hook 通过既有 AV getter/setter 快照/写 0/恢复。
+3. POWER 先入队，在 `bd_shell_iterate()` 的普通 service/render 之前执行；轻睡
+   循环继续 inputd/session/plugin 服务，不推进 UI 或帧 deadline。
+
+后续任务仍需：
+
+1. 深睡/关机/重启的配置门和 shell 消费，保持 backend 的真实写入门在真机验收后
+   才打开。
+2. 长按阈值配置、空闲计时、低电量策略消费。
+3. 面板真正断电、音频 codec/功放、Wi-Fi/BT、inputd 挂起恢复等真实设备路径。
+4. 在真机完成第 8 节，尤其是 8.5 的 20 轮。

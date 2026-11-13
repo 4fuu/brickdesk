@@ -38,6 +38,10 @@
 #define BD_SHELL_INPUTD_BACKOFF_MIN_MS 250u
 #define BD_SHELL_INPUTD_BACKOFF_MAX_MS 5000u
 #define BD_SHELL_INPUTD_CONNECT_TIMEOUT_MS 1000u
+/* A tap shorter than this queues light sleep; long-press policy is separate. */
+#define BD_SHELL_POWER_TAP_MS 1000u
+/* Ignore the wake press and immediate follow-up taps for this long. */
+#define BD_SHELL_POWER_WAKE_IGNORE_MS 1000u
 
 /*
  * Sent once per accepted connection.  subscribe restores the action and key
@@ -54,6 +58,12 @@ typedef enum shell_pending_kind {
   SHELL_PENDING_MENU_ACTION,
   SHELL_PENDING_ATTENTION
 } shell_pending_kind;
+
+typedef enum shell_power_request {
+  SHELL_POWER_REQUEST_NONE = 0,
+  SHELL_POWER_REQUEST_SLEEP,
+  SHELL_POWER_REQUEST_WAKE
+} shell_power_request;
 
 typedef struct shell_pending {
   shell_pending_kind kind;
@@ -108,6 +118,19 @@ struct bd_shell {
 
   bd_session *session;
   int session_next_ms;
+
+  bd_power_linux power_linux;
+  bd_power *power;
+  shell_power_request power_request;
+  bool power_key_down;
+  uint64_t power_down_ms;
+  uint64_t power_ignore_until_ms;
+  bool power_input_suspended;
+  bool power_swallow;
+  bool power_brightness_known;
+  int power_brightness;
+  char power_app_id[BD_APP_ID_MAX];
+  bool power_app_frozen;
 
   bd_hotkey_table hotkeys;
   bd_input_state input;
@@ -684,16 +707,19 @@ static bool json_int(const char *json, const char *key, int *out) {
 
 static void shell_dispatch_action(bd_shell *shell, const char *action,
                                   bool pressed);
-static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed);
+static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
+                               uint64_t time_ms);
 static bool shell_launch_app(bd_shell *shell, const char *app_id);
 static void shell_refresh_running(bd_shell *shell);
 static void shell_service(bd_shell *shell);
 static void shell_close_settings(bd_shell *shell);
+static void shell_power_service(bd_shell *shell);
+static bool shell_power_asleep(const bd_shell *shell);
 
 static void local_emit(void *user, const bd_input_output *event) {
   bd_shell *shell = (bd_shell *)user;
   if (event->kind == BD_INPUT_OUTPUT_KEY) {
-    shell_dispatch_key(shell, event->key, event->pressed);
+    shell_dispatch_key(shell, event->key, event->pressed, event->time_ms);
     return;
   }
   if (event->kind == BD_INPUT_OUTPUT_ACTION && shell->hotkey_table != NULL &&
@@ -727,7 +753,9 @@ static void inputd_release_switch_state(bd_shell *shell) {
     bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
     bd_settings_set_hint_visible(shell->settings_page, false);
   }
-  shell->dirty = true;
+  if (!shell_power_asleep(shell)) {
+    shell->dirty = true;
+  }
 }
 
 static void inputd_disconnect(bd_shell *shell, const char *reason) {
@@ -797,7 +825,9 @@ static void inputd_on_connected(bd_shell *shell) {
   shell->inputd_deadline_ms = 0;
   shell->inputd_backoff_ms = BD_SHELL_INPUTD_BACKOFF_MIN_MS;
   shell->input_length = 0;
-  shell->dirty = true;
+  if (!shell_power_asleep(shell)) {
+    shell->dirty = true;
+  }
   if (shell->verbose) {
     fprintf(stderr, "brickdesk: inputd connected at %s\n",
             shell->input_socket);
@@ -949,7 +979,11 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
     }
     bd_key key = bd_key_from_name(key_name);
     if (key != BD_KEY_UNKNOWN) {
-      shell_dispatch_key(shell, key, pressed);
+      if (key != BD_KEY_POWER &&
+          (shell_power_asleep(shell) || shell->power_input_suspended)) {
+        return;
+      }
+      shell_dispatch_key(shell, key, pressed, monotonic_ms());
     }
     return;
   }
@@ -961,6 +995,9 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
       return;
     }
     if (strcmp(name, "headphone") != 0 || (value != 0 && value != 1)) {
+      return;
+    }
+    if (shell_power_asleep(shell) || shell->power_input_suspended) {
       return;
     }
     if (!shell->av_audio_ready) {
@@ -986,7 +1023,9 @@ static void inputd_handle_line(bd_shell *shell, const char *line) {
       bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
       bd_settings_set_hint_visible(shell->settings_page, false);
     }
-    shell->dirty = true;
+    if (!shell_power_asleep(shell)) {
+      shell->dirty = true;
+    }
   }
 }
 
@@ -1538,19 +1577,23 @@ static void shell_refresh_status(bd_shell *shell, bool force) {
 
 static void shell_service(bd_shell *shell) {
   uint64_t now = shell_now(shell);
+  bool asleep = shell_power_asleep(shell);
   inputd_service(shell, monotonic_ms());
-  shell_update_home(shell, now);
-  shell_refresh_status(shell, false);
-  shell_battery_sample(shell, now);
-  if (shell->settings_page != NULL && bd_settings_is_open(shell->settings_page)) {
-    bd_settings_update(shell->settings_page, now);
-    uint64_t wake_at = 0;
-    if (bd_settings_needs_frame_until(shell->settings_page, &wake_at)) {
-      shell->dirty = true;
+  if (!asleep) {
+    shell_update_home(shell, now);
+    shell_refresh_status(shell, false);
+    shell_battery_sample(shell, now);
+    if (shell->settings_page != NULL &&
+        bd_settings_is_open(shell->settings_page)) {
+      bd_settings_update(shell->settings_page, now);
+      uint64_t wake_at = 0;
+      if (bd_settings_needs_frame_until(shell->settings_page, &wake_at)) {
+        shell->dirty = true;
+      }
     }
-  }
-  if (!shell->inputd_connected) {
-    bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
+    if (!shell->inputd_connected) {
+      bd_input_state_advance(&shell->input, monotonic_ms(), local_emit, shell);
+    }
   }
   shell->session_next_ms = -1;
   if (shell->session != NULL) {
@@ -1564,12 +1607,387 @@ static void shell_service(bd_shell *shell) {
       if (shell->verbose) {
         fprintf(stderr, "brickdesk: plugin poll failed\n");
       }
-    } else if (bd_plugin_host_take_dirty(shell->plugins)) {
+    } else if (!asleep && bd_plugin_host_take_dirty(shell->plugins)) {
+      /*
+       * Leave the host's dirty flag queued while asleep: waking consumes it
+       * and forces one frame without rendering or consuming tile deadlines.
+       */
       shell->dirty = true;
     }
   }
+  /*
+   * Session events stay queued while asleep.  They are UI actions (return to
+   * home, refresh running tiles), not IPC service; poll() above still reaps
+   * exits and serves the app sockets.
+   */
+  if (asleep) {
+    return;
+  }
   shell_process_pending(shell);
   shell_update_home(shell, shell_now(shell));
+}
+
+/* ---------------------------------------------------------- power path */
+
+static bool shell_power_asleep(const bd_shell *shell) {
+  if (shell == NULL || shell->power == NULL) {
+    return false;
+  }
+  bd_power_state state = bd_power_current_state(shell->power);
+  return state == BD_POWER_STATE_LIGHT_SLEEP ||
+         state == BD_POWER_STATE_DEGRADED;
+}
+
+static int shell_power_input_release(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return -1;
+  }
+  shell->power_input_suspended = true;
+  return 0;
+}
+
+static int shell_power_input_acquire(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return -1;
+  }
+  shell->power_input_suspended = false;
+  return 0;
+}
+
+/*
+ * Freezes only the foreground instance captured before the transition.  The
+ * session keeps it FOREGROUND, so the same id/pid is used for thaw even after
+ * a failed restore leaves the machine DEGRADED.
+ */
+static int shell_power_app_pause(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || shell->session == NULL) {
+    return -1;
+  }
+  if (shell->power_app_id[0] == '\0') {
+    return 0;
+  }
+  bd_session_result result =
+      bd_session_freeze(shell->session, shell->power_app_id);
+  if (result == BD_SESSION_OK) {
+    shell->power_app_frozen = true;
+    return 0;
+  }
+  if (result == BD_SESSION_NOT_FOUND) {
+    /* The captured instance exited before the hook ran; nothing to stop. */
+    shell->power_app_id[0] = '\0';
+    shell->power_app_frozen = false;
+    return 0;
+  }
+  /*
+   * A failed freeze can still own a stop when its rollback SIGCONT was
+   * rejected.  Keep the exact instance so the rollback/wake path retries thaw.
+   */
+  bd_session_app_info info;
+  if (bd_session_find(shell->session, shell->power_app_id, &info) &&
+      info.frozen) {
+    shell->power_app_frozen = true;
+    fprintf(stderr,
+            "brickdesk: light sleep freeze %s -> %s; thaw retry required\n",
+            shell->power_app_id, bd_session_result_name(result));
+    return 1;
+  }
+  if (shell->verbose) {
+    fprintf(stderr, "brickdesk: light sleep freeze %s -> %s\n",
+            shell->power_app_id, bd_session_result_name(result));
+  }
+  return 1;
+}
+
+static int shell_power_app_resume(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || shell->session == NULL) {
+    return -1;
+  }
+  if (shell->power_app_id[0] == '\0') {
+    shell->power_app_frozen = false;
+    return 0;
+  }
+  bd_session_app_info info;
+  if (!bd_session_find(shell->session, shell->power_app_id, &info) ||
+      !info.frozen) {
+    shell->power_app_frozen = false;
+    shell->power_app_id[0] = '\0';
+    return 0;
+  }
+  shell->power_app_frozen = true;
+  if (info.state != BD_SESSION_FOREGROUND) {
+    /* Another lifecycle action owns the transition; do not signal blind. */
+    fprintf(stderr, "brickdesk: light sleep thaw %s deferred in state %s\n",
+            shell->power_app_id, bd_session_state_name(info.state));
+    return 1;
+  }
+  bd_session_result result =
+      bd_session_thaw(shell->session, shell->power_app_id);
+  if (result == BD_SESSION_OK) {
+    shell->power_app_frozen = false;
+    shell->power_app_id[0] = '\0';
+    return 0;
+  }
+  /*
+   * IO_ERROR/BUSY is not "resumed".  Ownership is cleared only when the
+   * session confirms the exact instance is no longer frozen or has exited.
+   */
+  if (!bd_session_find(shell->session, shell->power_app_id, &info) ||
+      !info.frozen || info.exited) {
+    shell->power_app_frozen = false;
+    shell->power_app_id[0] = '\0';
+    return 0;
+  }
+  fprintf(stderr, "brickdesk: light sleep thaw %s -> %s (retry on wake)\n",
+          shell->power_app_id, bd_session_result_name(result));
+  return 1;
+}
+
+/*
+ * Brightness is the only display state this slice touches.  An unreadable
+ * value fails the sleep instead of writing a blind zero; a failed write or
+ * restore keeps `power_brightness_known` set so bd_power wake can retry it.
+ */
+static int shell_power_display_off(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || shell->system.get_brightness == NULL ||
+      shell->system.set_brightness == NULL) {
+    if (shell != NULL && shell->verbose) {
+      fprintf(stderr, "brickdesk: light sleep: brightness unavailable\n");
+    }
+    return 1;
+  }
+  int percent = 0;
+  if (!shell->system.get_brightness(shell->system.user, &percent) ||
+      percent < 0 || percent > 100) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: light sleep: brightness read failed; "
+                      "not writing\n");
+    }
+    return 1;
+  }
+  shell->power_brightness = percent;
+  shell->power_brightness_known = true;
+  if (shell->system.set_brightness(shell->system.user, 0)) {
+    return 0;
+  }
+  /* A failed set may still have changed the hardware; put it back now. */
+  if (shell->system.set_brightness(shell->system.user,
+                                   shell->power_brightness)) {
+    shell->power_brightness_known = false;
+  }
+  if (shell->verbose) {
+    fprintf(stderr, "brickdesk: light sleep: brightness write failed%s\n",
+            shell->power_brightness_known ? " (restore pending)" : "");
+  }
+  return 1;
+}
+
+static int shell_power_display_on(void *user) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL || !shell->power_brightness_known) {
+    return 0;
+  }
+  if (shell->system.set_brightness == NULL ||
+      !shell->system.set_brightness(shell->system.user,
+                                    shell->power_brightness)) {
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: light sleep: brightness restore failed "
+                      "(%d%%); retry on wake\n",
+              shell->power_brightness);
+    }
+    return 1;
+  }
+  shell->power_brightness_known = false;
+  return 0;
+}
+
+static void shell_power_clear_local_input(bd_shell *shell) {
+  shell->power_swallow = true;
+  uint64_t now = monotonic_ms();
+  bd_input_state_release_all(&shell->input, now, local_emit, shell);
+  bd_input_state_release_all(&shell->test_input, now, local_emit, shell);
+  shell->power_swallow = false;
+  shell->power_key_down = false;
+  if (shell->home != NULL) {
+    bd_home_set_hint_visible(shell->home, false);
+  }
+  if (shell->settings_page != NULL) {
+    bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_LEFT, false);
+    bd_settings_hold(shell->settings_page, BD_SETTINGS_ACTION_RIGHT, false);
+    bd_settings_set_hint_visible(shell->settings_page, false);
+  }
+}
+
+static void shell_power_enter_ui(bd_shell *shell) {
+  shell_power_clear_local_input(shell);
+  if (shell->home != NULL) {
+    /* Custom tile callbacks receive visible=false without closing settings. */
+    bd_home_set_surface_visible(shell->home, false);
+  }
+  shell->dirty = false;
+}
+
+static void shell_power_leave_ui(bd_shell *shell) {
+  shell_power_clear_local_input(shell);
+  if (shell->home != NULL) {
+    bool settings_open = shell->settings_page != NULL &&
+                         bd_settings_is_open(shell->settings_page);
+    bd_home_set_surface_visible(shell->home,
+                                shell->visible && !settings_open);
+  }
+  shell->dirty = true;
+}
+
+/*
+ * Records the single active session instance before the transition.  A
+ * launching/suspending/resuming/terminating app is captured too: its
+ * bd_session_freeze() returns BUSY, which fails the sleep and rolls it back
+ * instead of turning the display off while the app keeps running.
+ */
+static bool shell_power_capture_foreground(bd_shell *shell) {
+  shell->power_app_id[0] = '\0';
+  shell->power_app_frozen = false;
+  if (shell->session == NULL) {
+    return false;
+  }
+  size_t count = bd_session_running_count(shell->session);
+  char fallback[BD_APP_ID_MAX] = {0};
+  for (size_t i = 0; i < count; ++i) {
+    bd_session_app_info info;
+    if (!bd_session_running_at(shell->session, i, &info)) {
+      continue;
+    }
+    if (info.stopped_by_session) {
+      continue;
+    }
+    if (info.state == BD_SESSION_FOREGROUND) {
+      copy_text(shell->power_app_id, sizeof(shell->power_app_id), info.app_id);
+      return true;
+    }
+    if (session_active_state(info.state) && fallback[0] == '\0') {
+      copy_text(fallback, sizeof(fallback), info.app_id);
+    }
+  }
+  if (fallback[0] != '\0') {
+    copy_text(shell->power_app_id, sizeof(shell->power_app_id), fallback);
+    return true;
+  }
+  return false;
+}
+
+static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {
+  char error[256] = {0};
+  if (!bd_power_linux_init(&shell->power_linux, NULL, false, NULL, error,
+                           sizeof(error))) {
+    fprintf(stderr, "brickdesk: power backend: %s\n", error);
+    return false;
+  }
+  bd_power_backend backend = bd_power_linux_backend(&shell->power_linux);
+  if (config->power_backend != NULL) {
+    backend = *config->power_backend;
+  }
+  bd_power_config power_config;
+  memset(&power_config, 0, sizeof(power_config));
+  power_config.hooks.user = shell;
+  power_config.hooks.input_release = shell_power_input_release;
+  power_config.hooks.app_pause = shell_power_app_pause;
+  power_config.hooks.display_off = shell_power_display_off;
+  power_config.hooks.display_on = shell_power_display_on;
+  power_config.hooks.app_resume = shell_power_app_resume;
+  power_config.hooks.input_acquire = shell_power_input_acquire;
+  power_config.backend = backend;
+  power_config.allow_light_sleep = true;
+  /*
+   * Deep sleep, shutdown and reboot stay disabled in this slice.  The Linux
+   * backend is also permanently initialized with allow_state_changes=false;
+   * there is no configuration or test path that arms it.
+   */
+  power_config.allow_deep_sleep = false;
+  power_config.allow_poweroff = false;
+  power_config.allow_reboot = false;
+  shell->power = bd_power_create(&power_config, error, sizeof(error));
+  if (shell->power == NULL) {
+    fprintf(stderr, "brickdesk: power state machine: %s\n", error);
+    return false;
+  }
+  return true;
+}
+
+static void shell_power_log(const bd_shell *shell, const char *action,
+                            bd_power_result result,
+                            const bd_power_report *report) {
+  if (shell == NULL) {
+    return;
+  }
+  if (!shell->verbose && result == BD_POWER_OK) {
+    return;
+  }
+  fprintf(stderr, "brickdesk: %s -> %s", action,
+          bd_power_result_name(result));
+  if (report != NULL && report->failed_step != BD_POWER_STEP_NONE) {
+    fprintf(stderr, " at %s", bd_power_step_name(report->failed_step));
+  }
+  if (report != NULL && report->detail[0] != '\0') {
+    fprintf(stderr, " (%s)", report->detail);
+  }
+  fputc('\n', stderr);
+}
+
+static void shell_power_service(bd_shell *shell) {
+  if (shell == NULL || shell->power == NULL ||
+      shell->power_request == SHELL_POWER_REQUEST_NONE) {
+    return;
+  }
+  shell_power_request request = shell->power_request;
+  shell->power_request = SHELL_POWER_REQUEST_NONE;
+  bd_power_report report;
+  memset(&report, 0, sizeof(report));
+
+  if (request == SHELL_POWER_REQUEST_WAKE) {
+    if (!shell_power_asleep(shell)) {
+      return;
+    }
+    bd_power_result result = bd_power_wake(shell->power, &report);
+    shell_power_log(shell, "wake", result, &report);
+    if (bd_power_current_state(shell->power) == BD_POWER_STATE_IDLE) {
+      shell->power_input_suspended = false;
+      shell->power_ignore_until_ms =
+          monotonic_ms() + BD_SHELL_POWER_WAKE_IGNORE_MS;
+      shell_power_leave_ui(shell);
+    } else {
+      /*
+       * A failed restore stays DEGRADED; the next POWER press retries wake.
+       * Keep input and drawing suppressed until the restore completes.
+       */
+      shell->power_input_suspended = true;
+      if (shell->home != NULL) {
+        bd_home_set_surface_visible(shell->home, false);
+      }
+      shell->dirty = false;
+    }
+    return;
+  }
+
+  if (shell_power_asleep(shell)) {
+    return;
+  }
+  memset(&report, 0, sizeof(report));
+  shell->power_brightness_known = false;
+  shell_power_capture_foreground(shell);
+  bd_power_result result = bd_power_sleep_light(shell->power, &report);
+  shell_power_log(shell, "light sleep", result, &report);
+  if (shell_power_asleep(shell)) {
+    shell->power_input_suspended = true;
+    shell_power_enter_ui(shell);
+  } else {
+    /* Recovery completed and the machine is IDLE again. */
+    shell->power_input_suspended = false;
+    shell->dirty = true;
+  }
 }
 
 /* ---------------------------------------------------------- dispatch path */
@@ -1769,7 +2187,62 @@ static void shell_accept(bd_shell *shell) {
   }
 }
 
-static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed) {
+static void shell_power_key_event(bd_shell *shell, bool pressed,
+                                  uint64_t time_ms) {
+  if (shell->power == NULL || shell->power_swallow) {
+    return;
+  }
+  if (pressed) {
+    if (shell->power_key_down) {
+      return;
+    }
+    shell->power_key_down = true;
+    shell->power_down_ms = time_ms;
+    if (shell_power_asleep(shell)) {
+      /* Wake on the press so the release cannot re-enter sleep. */
+      shell->power_request = SHELL_POWER_REQUEST_WAKE;
+    }
+    return;
+  }
+  if (!shell->power_key_down) {
+    /* A source switch can synthesize a release without a power down. */
+    return;
+  }
+  shell->power_key_down = false;
+  if (shell_power_asleep(shell)) {
+    /* The release belongs to the press that woke (or will wake) the shell. */
+    return;
+  }
+  if (time_ms < shell->power_ignore_until_ms) {
+    return;
+  }
+  uint64_t held = time_ms >= shell->power_down_ms
+                      ? time_ms - shell->power_down_ms
+                      : 0;
+  if (held > BD_SHELL_POWER_TAP_MS) {
+    /* Long-press shutdown is a separate task; this slice ignores it. */
+    if (shell->verbose) {
+      fprintf(stderr, "brickdesk: power long press ignored (%llu ms)\n",
+              (unsigned long long)held);
+    }
+    return;
+  }
+  if (shell->power_request == SHELL_POWER_REQUEST_NONE) {
+    shell->power_request = SHELL_POWER_REQUEST_SLEEP;
+  }
+}
+
+static void shell_dispatch_key(bd_shell *shell, bd_key key, bool pressed,
+                               uint64_t time_ms) {
+  if (key == BD_KEY_POWER) {
+    /* POWER must work while an app owns the display and while asleep. */
+    shell_power_key_event(shell, pressed, time_ms);
+    return;
+  }
+  if (shell->power_swallow || shell->power_input_suspended ||
+      shell_power_asleep(shell)) {
+    return;
+  }
   if (!shell->visible) {
     return;
   }
@@ -1848,6 +2321,10 @@ static bool shell_terminate_foreground(bd_shell *shell) {
 static void shell_dispatch_action(bd_shell *shell, const char *action,
                                   bool pressed) {
   if (action == NULL) {
+    return;
+  }
+  if (shell->power_swallow || shell->power_input_suspended ||
+      shell_power_asleep(shell)) {
     return;
   }
   if (strcmp(action, "ui.hint") == 0 && shell->visible) {
@@ -2287,7 +2764,13 @@ static void shell_load_apps(bd_shell *shell, const char *apps_dir) {
 /* ------------------------------------------------------------------- loop */
 
 bool bd_shell_render(bd_shell *shell) {
-  if (shell == NULL || !shell->visible || shell->home == NULL) {
+  if (shell == NULL) {
+    return false;
+  }
+  /* A queued POWER request runs outside input and before any frame. */
+  shell_power_service(shell);
+  if (shell->power_input_suspended || shell_power_asleep(shell) ||
+      !shell->visible || shell->home == NULL) {
     return false;
   }
   bool settings_open = shell->settings_page != NULL &&
@@ -2318,6 +2801,11 @@ static void shell_handle_platform_event(bd_shell *shell, const bd_event *event) 
       shell->dirty = true;
       break;
     case BD_EVENT_KEY:
+      if (event->key != BD_KEY_POWER &&
+          (shell->power_input_suspended || shell_power_asleep(shell))) {
+        /* Do not accumulate an ordinary key across the sleep boundary. */
+        break;
+      }
       if (!shell->inputd_connected) {
         bd_input_state_feed(&shell->input, event->key, event->pressed,
                             monotonic_ms(), local_emit, shell);
@@ -2330,6 +2818,7 @@ static void shell_handle_platform_event(bd_shell *shell, const bd_event *event) 
 
 static int shell_poll_timeout(bd_shell *shell) {
   int best = -1;
+  bool asleep = shell_power_asleep(shell);
   best = merge_timeout(best, shell->session_next_ms);
   if (shell->plugins != NULL) {
     best = merge_timeout(best, bd_plugin_host_next_timeout(shell->plugins));
@@ -2347,6 +2836,13 @@ static int shell_poll_timeout(bd_shell *shell) {
       remaining = 60000;
     }
     best = merge_timeout(best, (int)remaining);
+  }
+  if (asleep) {
+    /*
+     * No input tap/hold, battery, home or settings deadline may wake the loop
+     * while asleep.  Only session/plugin/inputd service remains above.
+     */
+    return best;
   }
   if (!shell->inputd_connected) {
     uint64_t deadline = 0;
@@ -2450,11 +2946,14 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
   if (shell == NULL || shell->quit) {
     return -1;
   }
+  /* Execute a queued POWER request before ordinary service or a frame. */
+  shell_power_service(shell);
   shell_service(shell);
   if (shell->quit) {
     return -1;
   }
-  if (shell->visible && shell->home != NULL) {
+  if (!shell->power_input_suspended && !shell_power_asleep(shell) &&
+      shell->visible && shell->home != NULL) {
     uint64_t wake_at = 0;
     bool frame_needed = shell->settings_page != NULL &&
                                 bd_settings_is_open(shell->settings_page)
@@ -2465,9 +2964,10 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
       shell->dirty = true;
     }
   }
-  if (shell->dirty && shell->visible) {
+  if (!shell->power_input_suspended && !shell_power_asleep(shell) &&
+      shell->dirty && shell->visible) {
     bd_shell_render(shell);
-  } else if (shell->dirty && !shell->visible) {
+  } else if (!shell_power_asleep(shell) && shell->dirty && !shell->visible) {
     shell->dirty = false;
   }
 
@@ -2514,8 +3014,10 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
   }
 
   if (handled) {
+    shell_power_service(shell);
     shell_service(shell);
-    if (shell->visible && shell->home != NULL) {
+    if (!shell->power_input_suspended && !shell_power_asleep(shell) &&
+        shell->visible && shell->home != NULL) {
       uint64_t wake_at = 0;
       bool frame_needed =
           shell->settings_page != NULL &&
@@ -2526,9 +3028,10 @@ int bd_shell_iterate(bd_shell *shell, int timeout_ms) {
         shell->dirty = true;
       }
     }
-    if (shell->dirty && shell->visible) {
+    if (!shell->power_input_suspended && !shell_power_asleep(shell) &&
+        shell->dirty && shell->visible) {
       bd_shell_render(shell);
-    } else if (shell->dirty && !shell->visible) {
+    } else if (!shell_power_asleep(shell) && shell->dirty && !shell->visible) {
       shell->dirty = false;
     }
   }
@@ -2643,6 +3146,12 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
 
   shell_open_devices(shell, config);
+  shell->power_input_suspended = false;
+  shell->power_request = SHELL_POWER_REQUEST_NONE;
+  shell->power_brightness_known = false;
+  if (!shell_power_create(shell, config)) {
+    fprintf(stderr, "brickdesk: light sleep disabled\n");
+  }
   bd_home_set_quick_backend(shell->home, &shell->home_quick);
 
   bd_settings_style settings_style;
@@ -2767,6 +3276,18 @@ void bd_shell_destroy(bd_shell *shell) {
   if (shell == NULL) {
     return;
   }
+  if (shell->power != NULL) {
+    if (bd_power_current_state(shell->power) != BD_POWER_STATE_IDLE) {
+      bd_power_report report;
+      memset(&report, 0, sizeof(report));
+      bd_power_result result = bd_power_wake(shell->power, &report);
+      if (result != BD_POWER_OK) {
+        shell_power_log(shell, "shutdown wake", result, &report);
+      }
+    }
+    bd_power_destroy(shell->power);
+    shell->power = NULL;
+  }
   if (shell->session != NULL) {
     bd_session_destroy(shell->session);
   }
@@ -2841,7 +3362,11 @@ bd_settings *bd_shell_settings(bd_shell *shell) {
 
 void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,
                        uint64_t time_ms) {
-  if (shell == NULL) {
+  if (shell == NULL || shell->power_swallow) {
+    return;
+  }
+  if (key != BD_KEY_POWER &&
+      (shell->power_input_suspended || shell_power_asleep(shell))) {
     return;
   }
   bd_input_state_feed(&shell->test_input, key, pressed, time_ms, local_emit,
@@ -2849,7 +3374,8 @@ void bd_shell_test_key(bd_shell *shell, bd_key key, bool pressed,
 }
 
 void bd_shell_test_advance(bd_shell *shell, uint64_t time_ms) {
-  if (shell == NULL) {
+  if (shell == NULL || shell->power_swallow ||
+      shell->power_input_suspended || shell_power_asleep(shell)) {
     return;
   }
   shell->test_clock = true;
@@ -2870,6 +3396,24 @@ bool bd_shell_test_battery_policy(const bd_shell *shell, uint64_t *next_ms,
   }
   if (percent != NULL) {
     *percent = shell->status_battery;
+  }
+  return true;
+}
+
+bool bd_shell_test_power(const bd_shell *shell, bd_power_state *state,
+                         bool *sleeping, bool *input_suspended) {
+  if (shell == NULL) {
+    return false;
+  }
+  if (state != NULL) {
+    *state = shell->power != NULL ? bd_power_current_state(shell->power)
+                                  : BD_POWER_STATE_UNKNOWN;
+  }
+  if (sleeping != NULL) {
+    *sleeping = shell_power_asleep(shell);
+  }
+  if (input_suspended != NULL) {
+    *input_suspended = shell->power_input_suspended;
   }
   return true;
 }

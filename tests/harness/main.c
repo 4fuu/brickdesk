@@ -348,8 +348,11 @@ static int run_scenario(const bd_scenario *scenario,
           }
           bd_shell_render(shell);
         } else {
-          /* One frame at the current transition timestamp. */
-          bd_shell_iterate(shell, 0);
+          /* Exactly one frame at this timestamp. iterate() can render both
+           * before and after polling, accumulating translucent launch edges
+           * a variable number of times when an event is ready. Repaint the
+           * backdrop too, so prior incremental frames cannot affect the shot. */
+          bd_home_damage(bd_shell_home(shell));
           bd_shell_render(shell);
         }
 

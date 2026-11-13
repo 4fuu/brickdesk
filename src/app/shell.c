@@ -25,6 +25,8 @@
 
 #include "brickdesk/device_av.h"
 #include "brickdesk/device_battery.h"
+#include "brickdesk/device_bt.h"
+#include "brickdesk/device_net.h"
 #include "brickdesk/app_history.h"
 #include "brickdesk/device_display.h"
 #include "brickdesk/battery_history.h"
@@ -181,6 +183,7 @@ struct bd_shell {
 
   bd_power_linux power_linux;
   bd_power *power;
+  const bd_shell_power_resources *power_resources;
   shell_power_request power_request;
   bool power_key_down;
   bool power_long_fired;
@@ -3216,6 +3219,72 @@ static bool shell_power_capture_foreground(bd_shell *shell) {
   return false;
 }
 
+static void shell_power_resource_error(const bd_shell *shell,
+                                       const char *what,
+                                       const char *error) {
+  if (shell != NULL && shell->verbose) {
+    fprintf(stderr, "brickdesk: deep sleep %s: %s\n", what,
+            error != NULL && error[0] != '\0' ? error : "failed");
+  }
+}
+
+static int shell_power_resource_prepare(void *user, bd_power_sleep_mode mode) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return 1;
+  }
+  if (shell->power_resources != NULL &&
+      shell->power_resources->prepare != NULL) {
+    return shell->power_resources->prepare(shell->power_resources->user, mode);
+  }
+  if (mode != BD_POWER_SLEEP_DEEP) {
+    return 0;
+  }
+  char error[192] = {0};
+  bool ok = true;
+  if (!bd_net_suspend(error, sizeof(error))) {
+    shell_power_resource_error(shell, "net suspend", error);
+    ok = false;
+  }
+  error[0] = '\0';
+  if (!bd_bt_suspend(error, sizeof(error))) {
+    shell_power_resource_error(shell, "Bluetooth suspend", error);
+    ok = false;
+  }
+  /*
+   * Audio save is best-effort: a missing alsactl must not leave the device
+   * unable to suspend.  The failure is logged, and resume is still called.
+   */
+  return ok ? 0 : 1;
+}
+
+static int shell_power_resource_restore(void *user, bd_power_sleep_mode mode) {
+  bd_shell *shell = (bd_shell *)user;
+  if (shell == NULL) {
+    return 1;
+  }
+  if (shell->power_resources != NULL &&
+      shell->power_resources->restore != NULL) {
+    return shell->power_resources->restore(shell->power_resources->user, mode);
+  }
+  if (mode != BD_POWER_SLEEP_DEEP) {
+    return 0;
+  }
+  char error[192] = {0};
+  bool ok = true;
+  error[0] = '\0';
+  if (!bd_bt_resume(error, sizeof(error))) {
+    shell_power_resource_error(shell, "Bluetooth resume", error);
+    ok = false;
+  }
+  error[0] = '\0';
+  if (!bd_net_resume(error, sizeof(error))) {
+    shell_power_resource_error(shell, "net resume", error);
+    ok = false;
+  }
+  return ok ? 0 : 1;
+}
+
 static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {
   char error[256] = {0};
   long sleep_after =
@@ -3261,6 +3330,8 @@ static bool shell_power_create(bd_shell *shell, const bd_shell_config *config) {
   power_config.hooks.display_on = shell_power_display_on;
   power_config.hooks.app_resume = shell_power_app_resume;
   power_config.hooks.input_acquire = shell_power_input_acquire;
+  power_config.hooks.resource_prepare = shell_power_resource_prepare;
+  power_config.hooks.resource_restore = shell_power_resource_restore;
   power_config.backend = backend;
   power_config.allow_light_sleep = true;
   power_config.allow_deep_sleep = true;
@@ -5183,6 +5254,7 @@ bd_shell *bd_shell_create(const bd_shell_config *config) {
   }
   shell->platform = config->platform;
   shell->gfx = config->gfx;
+  shell->power_resources = config->power_resources;
   shell->settings = config->settings;
   shell->plugins = config->plugins;
   shell->verbose = config->verbose;

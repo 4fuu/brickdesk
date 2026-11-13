@@ -25,6 +25,17 @@
  */
 typedef struct bd_shell bd_shell;
 
+/*
+ * Optional override for the deep-sleep resource hooks.  Production leaves
+ * this NULL and uses the built-in Wi-Fi/Bluetooth/audio suspend helpers;
+ * tests supply a recorder so a fake power backend never touches host services.
+ */
+typedef struct bd_shell_power_resources {
+  void *user;
+  int (*prepare)(void *user, bd_power_sleep_mode mode);
+  int (*restore)(void *user, bd_power_sleep_mode mode);
+} bd_shell_power_resources;
+
 typedef struct bd_shell_config {
   bd_platform *platform;
   bd_gfx *gfx;
@@ -55,6 +66,7 @@ typedef struct bd_shell_config {
    * disabled; there is deliberately no runtime arming switch.
    */
   const bd_power_backend *power_backend;
+  const bd_shell_power_resources *power_resources; /* NULL: built-in hooks */
   bool verbose;
   /* Attach the first tile-capable plugin to the production home wall.
    * Production main enables it; the idle-check path leaves it off so the

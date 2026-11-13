@@ -571,6 +571,26 @@ static bool write_heartbeat_plugin(test_runtime *runtime) {
   return chmod(path, 0755) == 0;
 }
 
+static int test_power_resources_prepare(void *user,
+                                       bd_power_sleep_mode mode) {
+  (void)user;
+  (void)mode;
+  return 0;
+}
+
+static int test_power_resources_restore(void *user,
+                                       bd_power_sleep_mode mode) {
+  (void)user;
+  (void)mode;
+  return 0;
+}
+
+static const bd_shell_power_resources test_power_resources = {
+    .user = NULL,
+    .prepare = test_power_resources_prepare,
+    .restore = test_power_resources_restore,
+};
+
 static bool create_runtime(test_runtime *runtime, const char *label,
                            const char *child_path, bool with_app,
                            bool with_plugin) {
@@ -715,6 +735,7 @@ static bool create_runtime(test_runtime *runtime, const char *label,
   shell_config.battery_root = BRICKDESK_TEST_BATTERY_FIXTURE;
   shell_config.settings_system = &runtime->system;
   shell_config.power_backend = &runtime->power_backend;
+  shell_config.power_resources = &test_power_resources;
   shell_config.attach_plugin_tile = with_plugin;
   shell_config.verbose = false;
   runtime->shell = bd_shell_create(&shell_config);

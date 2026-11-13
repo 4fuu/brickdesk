@@ -1,0 +1,117 @@
+/* brickdesk v3 — tokens
+   1024×768, 4:3, gamepad only. Four fixed rows; the wall grows right. */
+
+@font-face {
+  font-family: "BD Sans";
+  src: url("../../fonts/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "BD Sans CJK";
+  src: url("../../fonts/noto-sans-sc-subset.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "BD Serif CJK";
+  src: url("../../fonts/noto-serif-sc-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  --sans: "BD Sans", "BD Sans CJK", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --serif: "BD Serif CJK", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", serif;
+  --mono: "SFMono-Regular", "Cascadia Mono", "Noto Sans Mono CJK SC", monospace;
+
+  --unit: 188px;
+  --gap: 5px;
+  --pitch: 193px;
+  --radius: 5px;
+  --rows: 4;
+  --topbar-h: 68px;
+  --hintbar-h: 58px;
+
+  --focus-ring: rgba(255, 250, 242, .94);
+  --cover-ink: #fff9f1;
+  --cover-ink-2: rgba(255, 249, 241, .64);
+  --cover-line: rgba(255, 255, 255, .18);
+
+  --ease-out: cubic-bezier(.2, .7, .2, 1);
+  --t-micro: 120ms;
+  --t-panel: 200ms;
+  --t-wall: 220ms;
+}
+
+.stage[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #12100d;
+  --bg-deep: #0b0a08;
+  --surface: #1b1814;
+  --surface-2: #241f19;
+  --surface-3: #2f2a22;
+  --ink: #f3ede2;
+  --ink-2: #bcb2a3;
+  --ink-3: #8f8678;
+  --line: rgba(243, 237, 226, .10);
+  --line-strong: rgba(243, 237, 226, .20);
+  --chrome-bg: rgba(18, 16, 13, .84);
+  --chrome-bg-strong: rgba(18, 16, 13, .94);
+  --scrim: rgba(0, 0, 0, .52);
+  --tile-shade-a: rgba(9, 8, 11, .44);
+  --tile-shade-b: rgba(9, 8, 11, .60);
+  --on-accent: #17110d;
+  --shadow: rgba(0, 0, 0, .45);
+  --ambient-veil: .90;
+  --mat-terminal: #2f2d29;
+  --mat-clock: #3a352d;
+  --mat-calc: #343c3a;
+}
+
+.stage[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f2ede3;
+  --bg-deep: #e7e0d3;
+  --surface: #fbf7ef;
+  --surface-2: #f0e9dc;
+  --surface-3: #e3dacb;
+  --ink: #1e1a15;
+  --ink-2: #5c554a;
+  --ink-3: #6f675b;
+  --line: rgba(30, 26, 21, .11);
+  --line-strong: rgba(30, 26, 21, .20);
+  --chrome-bg: rgba(242, 237, 227, .84);
+  --chrome-bg-strong: rgba(242, 237, 227, .95);
+  --scrim: rgba(26, 21, 16, .36);
+  --tile-shade-a: rgba(20, 17, 14, .40);
+  --tile-shade-b: rgba(20, 17, 14, .56);
+  --on-accent: #fff8f2;
+  --shadow: rgba(30, 26, 21, .20);
+  --ambient-veil: .92;
+  --mat-terminal: #35322c;
+  --mat-clock: #423c32;
+  --mat-calc: #38413e;
+}
+
+/* Accent base: one value per preset. Everything else is derived below. */
+.stage[data-accent="persimmon"] { --accent-base: #e07a5f; }
+.stage[data-accent="coral"]     { --accent-base: #ef5b47; }
+.stage[data-accent="teal"]      { --accent-base: #4fb3a8; }
+.stage[data-accent="blue"]      { --accent-base: #6c8cd5; }
+.stage[data-accent="green"]     { --accent-base: #7fa86b; }
+.stage[data-accent="purple"]    { --accent-base: #a98ad6; }
+
+.stage[data-theme="dark"] {
+  --accent: color-mix(in srgb, var(--accent-base) 90%, white 10%);
+  --accent-strong: color-mix(in srgb, var(--accent-base) 76%, white 24%);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-veil: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.stage[data-theme="light"] {
+  --accent: color-mix(in srgb, var(--accent-base) 78%, black 22%);
+  --accent-strong: color-mix(in srgb, var(--accent-base) 64%, black 36%);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-veil: color-mix(in srgb, var(--accent) 5%, transparent);
+}

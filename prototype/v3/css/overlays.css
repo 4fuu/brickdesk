@@ -1,0 +1,68 @@
+/* brickdesk v3 — toast and the browser-only test harness */
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 82px;
+  z-index: 40;
+  height: 36px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, -6px, 0);
+  transition: opacity var(--t-panel) var(--ease-out), transform var(--t-panel) var(--ease-out);
+}
+.toast.on { opacity: 1; transform: translate3d(-50%, 0, 0); }
+
+/* ---------- harness (not part of the 1024×768 product UI) ---------- */
+#harness {
+  width: min(1024px, 100%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 22px;
+  padding: 9px 12px;
+  border: 1px solid rgba(243, 237, 226, .14);
+  border-radius: 10px;
+  background: #15130f;
+  color: #bcb2a3;
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.hgroup { display: flex; align-items: center; gap: 9px; }
+.hl { color: #8f8678; font-size: 11px; font-weight: 500; letter-spacing: .06em; }
+.swatches, .counts { display: flex; align-items: center; gap: 4px; }
+.swbtn, .hbtn {
+  height: 26px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #bcb2a3;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.swbtn i { display: block; width: 11px; height: 11px; border-radius: 50%; background: var(--sw); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18); }
+.swbtn.on { border-color: #f3ede2; color: #f3ede2; }
+.hbtn { border-color: #3a332a; }
+.hbtn.on { background: #f3ede2; border-color: #f3ede2; color: #12100d; }
+.debug { margin-left: auto; color: #8f8678; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#note { max-width: 1024px; color: #6f675b; font-size: 12px; line-height: 1.6; text-align: center; }
+
+body.capture { padding: 0; gap: 0; background: #000; }
+body.capture #harness, body.capture #note { display: none; }
+body.capture #fit { width: 1024px; height: 768px; }
+body.capture .stage { position: relative; transform: none !important; }

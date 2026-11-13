@@ -358,6 +358,10 @@ bd_av_result bd_av_audio_get_percent_by_name(const bd_av_audio *audio,
                                              const char *name, int *percent,
                                              bd_av_error *error);
 
+/* Deep-sleep hooks: save/restore the ALSA mixer state around mem sleep. */
+bool bd_audio_suspend(char *error, size_t error_size);
+bool bd_audio_resume(char *error, size_t error_size);
+
 #ifdef __cplusplus
 }
 #endif

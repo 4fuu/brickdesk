@@ -692,6 +692,12 @@ typedef struct external_power_scan {
 
 static void accumulate_external_power(const bd_battery_supply *supply,
                                       external_power_scan *scan) {
+  if (supply->type == BD_BATTERY_SUPPLY_UNKNOWN) {
+    /* A failed type read cannot prove that this is not external power. */
+    scan->any_external = true;
+    scan->all_known = false;
+    return;
+  }
   if (supply->type != BD_BATTERY_SUPPLY_USB &&
       supply->type != BD_BATTERY_SUPPLY_MAINS) {
     return;

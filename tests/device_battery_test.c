@@ -731,8 +731,23 @@ static void test_external_power_beyond_public_table(void) {
   CHECK(output.recommendation == BD_BATTERY_RECOMMEND_SHOW_CRITICAL,
         "unknown external must not prepare shutdown");
 
+  /* An unreadable type must not hide a potentially connected supply. */
+  if (!set_supply(root, "usb19", "type", "\n") ||
+      !set_supply(root, "usb19", "online", "1\n")) {
+    exit(1);
+  }
+  CHECK_RESULT(bd_battery_read(&battery, &status, &error), BD_BATTERY_OK);
+  CHECK(!status.external_power_known,
+        "unclassified supply must not become known unplugged");
+  policy = init_policy(&policy_config);
+  bd_battery_policy_update(&policy, &status, 1000, &output);
+  bd_battery_policy_update(&policy, &status, 6000, &output);
+  CHECK(output.recommendation == BD_BATTERY_RECOMMEND_SHOW_CRITICAL,
+        "unclassified supply must not prepare shutdown");
+
   /* All external nodes known offline: only now is shutdown advice allowed. */
-  if (!set_supply(root, "usb19", "online", "0\n")) {
+  if (!set_supply(root, "usb19", "type", "USB\n") ||
+      !set_supply(root, "usb19", "online", "0\n")) {
     exit(1);
   }
   CHECK_RESULT(bd_battery_read(&battery, &status, &error), BD_BATTERY_OK);

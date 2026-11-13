@@ -36,6 +36,14 @@ transitions, and talks to the renderer only through `include/brickdesk/gfx.h`.
   16–18 px insets. Row values and running metadata share an 18 px right inset.
   Brightness and volume use a fixed 40 px value column, a 12 px gap and a 92 px
   track, so "100" never collides with the slider knob.
+- Quick-panel run rows stay 50 px high and controls stay 48 px high. Default
+  quotas (0–3 apps) keep their natural flow. When the list outgrows the space
+  above the controls, the run section becomes a bounded viewport of whole rows
+  (six rows at 1024×768) with focus-follow scrolling and a slim scrollbar; the
+  four control rows are pinned 16 px above the panel bottom and never leave the
+  panel. Opening the panel resets the list to the first row, and adding,
+  removing or reordering a running app preserves the selected app or control
+  and its visibility.
 
 ## Damage and time
 

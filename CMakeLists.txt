@@ -171,6 +171,10 @@ target_include_directories(brickdesk_device
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/device"
 )
 target_link_libraries(brickdesk_device PRIVATE brickdesk_warnings)
+# The in-app menu shim is a shared library and links this static archive.  The
+# device code must therefore be position independent; keep it that way for the
+# shell and the bd-av tool too.
+set_target_properties(brickdesk_device PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- device feedback ----------------------------------------------------
 # Standard Linux LED class and evdev force-feedback backends.  The library is
@@ -381,6 +385,7 @@ add_library(brickdesk-menu SHARED
   src/menu/clients.c
   src/menu/render.c
   src/menu/shim.c
+  src/menu/system.c
   src/session/last_frame.c
 )
 set_target_properties(brickdesk-menu PROPERTIES
@@ -398,6 +403,7 @@ target_compile_definitions(brickdesk-menu PRIVATE
 )
 target_link_libraries(brickdesk-menu PRIVATE
   brickdesk_config
+  brickdesk_device
   bd_stb
   Threads::Threads
   ${CMAKE_DL_LIBS}

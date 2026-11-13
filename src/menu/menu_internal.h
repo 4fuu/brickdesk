@@ -117,6 +117,15 @@ bool bd_menu_perf_apply(bd_menu_perf *perf, const char *app_id,
 /* Sends one {"type":"menu","action":...} line. False when no socket is set. */
 bool bd_menu_session_send(const char *action);
 
+/* ----------------------------------------------------------- system backend */
+
+/*
+ * Fills `out` with the production device_av backend.  Probes brightness and
+ * audio once per process; getters return -1 and setters return false when the
+ * matching device is missing, unreadable or read-only.
+ */
+void bd_menu_system_ops_device(bd_menu_system_ops *out);
+
 /* --------------------------------------------------------------- utilities */
 
 bool bd_menu_json_string(const char *json, const char *field, char *out,

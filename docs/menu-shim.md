@@ -86,16 +86,25 @@ selecting **resume** closes it. `A` activates the focused row; `UP`/`DOWN` move;
 | 继续游戏 | Close the overlay and return to the application. |
 | 返回桌面 | Send `background` on the session menu socket, close the overlay, and let the desktop call `bd_session_background()`. |
 | 退出应用 | Send `quit` on the session menu socket; the desktop calls `bd_session_terminate()`, which runs the declared save hook before the quit hook. If the session socket is unavailable the shim falls back to `SIGTERM` after closing the overlay. |
-| 亮度 | `bd_menu_system_ops.brightness_get/set`; the M1 backend is an in-memory stub. |
-| 音量 | `bd_menu_system_ops.volume_get/set`; the M1 backend is an in-memory stub. |
+| 亮度 | `bd_menu_system_ops.brightness_get/set`; production probes the device_av backlight backend (sysfs or `/dev/disp`). |
+| 音量 | `bd_menu_system_ops.volume_get/set`; production opens the device_av ALSA mixer. |
 | 性能模式 | `perf.list` gives the names, `perf.get` gives the current one, and `perf.apply` changes it. The menu never invents profile names. The perfd connection stays open while the app runs because the applied profile is a lease owned by that connection. |
 
-Brightness and volume are deliberately behind
-`include/brickdesk/menu.h` so M4 can install the real backlight and ALSA
-backends without touching the shim. `bd_menu_set_system_ops()` copies a
-`bd_menu_system_ops` table; `NULL` restores the stub. The session's
-`BRICKDESK_*` environment is the only input; the shim does not read app files
-or perform plugin calls.
+Brightness and volume go through `include/brickdesk/menu.h`. By default the
+shim probes the same `device_av` backends as the shell and settings page: the
+sysfs or `/dev/disp` backlight and the ALSA mixer. A missing device, an
+unreadable control or a failed probe leaves the row at `不可用`; the shim never
+substitutes 70/50. An adjustment calls the device setter and then reads the
+value again, so the row shows the percent the hardware confirmed (including
+backlight rounding and mixer steps). A rejected write keeps the confirmed
+readback and reports `亮度设置失败`/`音量设置失败`; it never displays the
+requested value. Menu adjustments do not write the configuration file.
+
+`bd_menu_set_system_ops()` copies a `bd_menu_system_ops` table; `NULL` restores
+the default device backends. `BRICKDESK_MENU_SYSTEM=stub` explicitly selects
+the in-memory stub for tests and demos; the shim does not read app files or
+perform plugin calls. The session's `BRICKDESK_*` environment is otherwise the
+only input.
 
 Background and quit are reported to the session through the menu control
 socket described in [app-protocol.md](app-protocol.md). The shim closes the
@@ -155,6 +164,12 @@ only when the menu opens.
 | `BRICKDESK_ASSET_DIR` | Font directory root; defaults to `/mnt/SDCARD/brickdesk/assets`, then the build-time directory. |
 | `BRICKDESK_APP_ID` | Sent with menu actions; injected by the session. |
 | `BRICKDESK_MENU_DEBUG` | Logs lifecycle decisions to stderr. |
+| `BRICKDESK_MENU_SYSTEM` | `stub` selects the in-memory test/demo backend; `device` or unset probes `device_av`. |
+| `BRICKDESK_AV_SYSFS_ROOT` | Device-test/diagnostic sysfs prefix; unset uses `/sys`. |
+| `BRICKDESK_AV_BRIGHTNESS_BACKEND` | `auto`, `sysfs` or `disp`; unset is `auto` (sysfs, then `/dev/disp`). |
+| `BRICKDESK_AV_SND_ROOT` | Device-test/diagnostic ALSA control directory; unset uses `/dev/snd`. |
+| `BRICKDESK_AV_PROC_CARDS` | Device-test/diagnostic card list; unset uses `/proc/asound/cards`. |
+| `BRICKDESK_AV_SPEAKER_MUTE` | Device-test/diagnostic speaker mute path; unset uses `/sys/class/speaker/mute`. |
 | `BRICKDESK_MENU_CAPTURE` | Test-only directory; every menu redraw writes `menu-NNNN.png`. |
 
 The desktop adds `LD_PRELOAD=<libbrickdesk-menu.so>` and the input/config/perf
@@ -173,16 +188,26 @@ format. The desktop can show this frame while the app is paused or backgrounded.
 
 ## 9. Tests
 
-`tests/menu_test.c` runs three phases:
+`tests/menu_test.c` runs six phases:
 
 1. `apps/demo` under `bd_session` with `libbrickdesk-menu.so` preloaded and a
-   real `brickdesk-inputd --replay` stream. It checks the menu grab/ungrab,
-   the background/resume path, the menu control action, the saved state, and
-   the last-frame header, and copies `menu_open.png`/`menu_focus.png`/
+   real `brickdesk-inputd --replay` stream. The demo explicitly selects
+   `BRICKDESK_MENU_SYSTEM=stub`. It checks the menu grab/ungrab, the
+   background/resume path, the menu control action, the saved state, and the
+   last-frame header, and copies `menu_open.png`/`menu_focus.png`/
    `menu_brightness.png` (default focus, a moved focus and a slider page).
 2. A second fresh demo run selects **quit** and checks the session save/quit
    path and exit status.
-3. `tests/menu_state_app.c` opens and closes the menu, then compares the full
+3. A writable fake sysfs backlight (max 64, start raw 19) runs the production
+   device backend. The replay focuses brightness and presses RIGHT; the test
+   checks the raw file advanced to 22 and captures `menu_device_readback.png`
+   at the confirmed 34%.
+4. The same fake backlight is made read-only. The RIGHT press must leave raw at
+   19, keep the row at 30% and report a failed adjustment;
+   `menu_device_write_failed.png` captures the state.
+5. An empty fake sysfs tree and missing audio roots run the same navigation;
+   `menu_device_unavailable.png` captures both rows as `不可用`.
+6. `tests/menu_state_app.c` opens and closes the menu, then compares the full
    GL snapshot and the rendered pixels against the pre-menu state.
 
 The screenshots are compared by `tests/run_menu_test.cmake` with the same
@@ -210,8 +235,10 @@ the release at 600 ms cancel the action (see `docs/input.md`).
 - Application probing (`ldd` for libSDL2/libEGL), a first-run blacklist and the
   crash-to-C fallback are not implemented. `menu.mode` in app.json is
   authoritative; `BRICKDESK_MENU_DISABLE=1` is the manual escape hatch.
-- Brightness and volume are the in-memory M1 stubs. The interface is ready for
-  the M4 backlight/ALSA backends.
+- Brightness and volume use the production `device_av` backends; the host
+  tests exercise a fake sysfs backlight and missing audio. The real Brick Pro
+  `/dev/disp`/sysfs and ALSA readback, quantization and rejection paths are
+  still unverified on hardware (see `docs/device-av.md` section 10).
 - The shim does not pause application audio while the menu is open; audio
   threads keep running until the app's own pause hook runs after the menu
   closes.
@@ -234,7 +261,8 @@ These cannot be answered on host:
   overlay would contaminate that read).
 - Context recreation after `app.display_release` for apps other than the demo.
 - perfd socket permissions and the profile list on the real sysfs tree.
-- The M4 backlight/ALSA backends and the real `bd_menu_system_ops` values.
+- The real backlight and ALSA readback/quantization while the menu is open,
+  including whether a rejected write leaves the hardware unchanged.
 - The 1024x768 EGL drawable size and colour format; the shim scales from the
   queried drawable and falls back to 1024x768.
 

@@ -10,12 +10,14 @@
  * keys. The shim opens the overlay, writes the last frame, grabs input, sends
  * the background and quit menu actions through the session menu socket, and
  * releases the grab. The test checks the session state transitions, the state
- * file, the last-frame header, inputd's grab/ungrab log, and copies three
- * deterministic menu screenshots for baseline comparison.
+ * file, the last-frame header, inputd's grab/ungrab log, and copies six
+ * deterministic menu screenshots for baseline comparison.  Three more phases
+ * run apps/demo directly with a fake backlight (writable, read-only, absent) so
+ * the production device backend is exercised without the test stub.
  *
- * Phase 2 runs tests/menu_state_app under the same shim and a replay that
- * opens and closes the menu; that app verifies the GL state and pixels after
- * the overlay has gone.
+ * The final phase runs tests/menu_state_app under the same shim and a replay
+ * that opens and closes the menu; that app verifies the GL state and pixels
+ * after the overlay has gone.
  */
 
 #include <dirent.h>
@@ -313,6 +315,7 @@ static void write_demo_manifest(const char *path, const char *demo,
            "    \"BRICKDESK_DEMO_WIDTH\": \"1024\",\n"
            "    \"BRICKDESK_DEMO_HEIGHT\": \"768\",\n"
            "    \"BRICKDESK_DEMO_FIXED_TIME_MS\": \"1000\",\n"
+           "    \"BRICKDESK_MENU_SYSTEM\": \"stub\",\n"
            "    \"BRICKDESK_MENU_DEBUG\": \"1\"\n"
            "  },\n"
            "  \"capabilities\": {\n"
@@ -630,6 +633,242 @@ static void run_demo_phase(const char *demo, const char *inputd,
   }
 }
 
+typedef enum device_case_kind {
+  DEVICE_CASE_WRITABLE = 0,
+  DEVICE_CASE_READ_ONLY,
+  DEVICE_CASE_ABSENT
+} device_case_kind;
+
+static bool create_backlight_class(const char *root) {
+  char path[PATH_MAX];
+  join_path(path, sizeof(path), root, "sys");
+  if (!make_dir(path)) {
+    return false;
+  }
+  join_path(path, sizeof(path), root, "sys/class");
+  if (!make_dir(path)) {
+    return false;
+  }
+  join_path(path, sizeof(path), root, "sys/class/backlight");
+  return make_dir(path);
+}
+
+static bool write_fake_backlight(const char *root, bool writable) {
+  if (!create_backlight_class(root)) {
+    return false;
+  }
+  char path[PATH_MAX];
+  join_path(path, sizeof(path), root, "sys/class/backlight/bd-test");
+  if (!make_dir(path)) {
+    return false;
+  }
+  char brightness[PATH_MAX];
+  char maximum[PATH_MAX];
+  join_path(brightness, sizeof(brightness), path, "brightness");
+  join_path(maximum, sizeof(maximum), path, "max_brightness");
+  if (!write_file(brightness, "19\n") || !write_file(maximum, "64\n")) {
+    return false;
+  }
+  if (!writable && chmod(brightness, 0444) != 0) {
+    return false;
+  }
+  return true;
+}
+
+static int read_int_file(const char *path) {
+  char *text = read_file(path);
+  if (text == NULL) {
+    return -1;
+  }
+  char *end = NULL;
+  long value = strtol(text, &end, 10);
+  bool ok = end != text;
+  free(text);
+  return ok ? (int)value : -1;
+}
+
+/*
+ * Runs apps/demo directly under the shim and a replay inputd, with device_av
+ * pointed at a fake backlight and no audio card.  The menu therefore uses the
+ * production device backend rather than the explicit test stub.  Capture 5 is
+ * after three DOWN presses (brightness focused) and one RIGHT press.
+ */
+static void run_device_phase(const char *demo, const char *inputd,
+                             const char *shim, const char *config,
+                             const char *assets, const char *out_dir,
+                             device_case_kind kind, const char *capture_name,
+                             int expected_raw) {
+  char root[256];
+  snprintf(root, sizeof(root), "/tmp/bd-menu-device-XXXXXX");
+  if (mkdtemp(root) == NULL) {
+    check(false, "device mkdtemp: %s", strerror(errno));
+    return;
+  }
+  char capture_dir[PATH_MAX];
+  char socket_path[PATH_MAX];
+  char replay_path[PATH_MAX];
+  char log_path[PATH_MAX];
+  char app_log[PATH_MAX];
+  join_path(capture_dir, sizeof(capture_dir), root, "capture");
+  join_path(socket_path, sizeof(socket_path), root, "inputd.sock");
+  join_path(replay_path, sizeof(replay_path), root, "replay.txt");
+  join_path(log_path, sizeof(log_path), root, "inputd.log");
+  join_path(app_log, sizeof(app_log), root, "demo.log");
+  make_dir(capture_dir);
+  if (kind == DEVICE_CASE_ABSENT) {
+    check(create_backlight_class(root),
+          "cannot create empty fake backlight class");
+  } else {
+    check(write_fake_backlight(root, kind == DEVICE_CASE_WRITABLE),
+          "cannot create fake backlight");
+  }
+  write_file(replay_path,
+             "4000 key MENU down\n"
+             "4600 key MENU up\n"
+             "5400 key DOWN down\n"
+             "5450 key DOWN up\n"
+             "5700 key DOWN down\n"
+             "5750 key DOWN up\n"
+             "6000 key DOWN down\n"
+             "6050 key DOWN up\n"
+             "6400 key RIGHT down\n"
+             "6450 key RIGHT up\n"
+             "8200 quit\n");
+
+  pid_t inputd_pid = start_inputd(inputd, config, socket_path, replay_path,
+                                  log_path);
+  check(inputd_pid > 0, "cannot start inputd for the device case");
+  check(wait_for_file(socket_path, 3000), "device inputd socket missing");
+
+  pid_t child = fork();
+  if (child == 0) {
+    char snd_root[PATH_MAX];
+    char proc_cards[PATH_MAX];
+    char speaker_mute[PATH_MAX];
+    join_path(snd_root, sizeof(snd_root), root, "no-snd");
+    join_path(proc_cards, sizeof(proc_cards), root, "no-cards");
+    join_path(speaker_mute, sizeof(speaker_mute), root, "no-mute");
+    setenv("SDL_VIDEODRIVER", "offscreen", 1);
+    setenv("SDL_AUDIODRIVER", "dummy", 1);
+    setenv("BRICKDESK_HEADLESS", "1", 1);
+    setenv("LD_PRELOAD", shim, 1);
+    setenv("BRICKDESK_INPUT_SOCKET", socket_path, 1);
+    setenv("BRICKDESK_MENU_CAPTURE", capture_dir, 1);
+    setenv("BRICKDESK_ASSET_DIR", assets, 1);
+    setenv("BRICKDESK_CONFIG_DIR", config, 1);
+    setenv("BRICKDESK_MENU_DEBUG", "1", 1);
+    setenv("BRICKDESK_MENU_SYSTEM", "device", 1);
+    setenv("BRICKDESK_DEMO_WIDTH", "1024", 1);
+    setenv("BRICKDESK_DEMO_HEIGHT", "768", 1);
+    setenv("BRICKDESK_DEMO_FIXED_TIME_MS", "1000", 1);
+    setenv("BRICKDESK_AV_SYSFS_ROOT", root, 1);
+    setenv("BRICKDESK_AV_BRIGHTNESS_BACKEND", "sysfs", 1);
+    setenv("BRICKDESK_AV_SND_ROOT", snd_root, 1);
+    setenv("BRICKDESK_AV_PROC_CARDS", proc_cards, 1);
+    setenv("BRICKDESK_AV_SPEAKER_MUTE", speaker_mute, 1);
+    int log = open(app_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (log >= 0) {
+      dup2(log, STDOUT_FILENO);
+      dup2(log, STDERR_FILENO);
+      close(log);
+    }
+    execl(demo, demo, (char *)NULL);
+    _exit(127);
+  }
+  check(child > 0, "cannot start the device demo");
+  if (child < 0) {
+    stop_inputd(inputd_pid);
+    remove_tree(root);
+    return;
+  }
+
+  char capture_path[PATH_MAX];
+  join_path(capture_path, sizeof(capture_path), capture_dir, "menu-0005.png");
+  check(wait_for_file(capture_path, 15000),
+        "device case did not produce the adjusted menu capture");
+  sleep_ms(200);
+  kill(child, SIGTERM);
+  int status = 0;
+  bool finished = false;
+  for (int waited = 0; waited < 2000; waited += 20) {
+    pid_t result = waitpid(child, &status, WNOHANG);
+    if (result == child) {
+      finished = true;
+      break;
+    }
+    sleep_ms(20);
+  }
+  if (!finished) {
+    kill(child, SIGKILL);
+    waitpid(child, &status, 0);
+    check(false, "device demo did not exit");
+  } else {
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "device demo exit status 0x%x", status);
+  }
+
+  if (access(capture_path, R_OK) == 0) {
+    char target[PATH_MAX];
+    join_path(target, sizeof(target), out_dir, capture_name);
+    check(copy_file(capture_path, target), "cannot copy %s", capture_name);
+  } else {
+    check(false, "missing adjusted capture for %s", capture_name);
+  }
+
+  if (kind == DEVICE_CASE_ABSENT) {
+    char path[PATH_MAX];
+    join_path(path, sizeof(path), root,
+              "sys/class/backlight/bd-test/brightness");
+    check(access(path, F_OK) != 0, "absent case unexpectedly has a backlight");
+  } else {
+    char path[PATH_MAX];
+    join_path(path, sizeof(path), root,
+              "sys/class/backlight/bd-test/brightness");
+    int raw = read_int_file(path);
+    check(raw == expected_raw, "%s brightness raw %d, expected %d",
+          capture_name, raw, expected_raw);
+  }
+
+  char *app_content = read_file(app_log);
+  check(app_content != NULL, "device demo log missing");
+  if (app_content != NULL) {
+    check(strstr(app_content, "menu.open action") != NULL,
+          "device demo never opened the menu");
+    check(strstr(app_content, "audio unavailable") != NULL,
+          "device demo did not report the missing audio device");
+    if (kind == DEVICE_CASE_WRITABLE) {
+      check(strstr(app_content, "brightness write failed") == NULL,
+            "writable fake backlight rejected the write");
+      check(strstr(app_content, "brightness unavailable") == NULL,
+            "writable fake backlight was not probed");
+    } else if (kind == DEVICE_CASE_READ_ONLY) {
+      check(strstr(app_content, "brightness write failed") != NULL,
+            "read-only fake backlight did not reject the write");
+    } else {
+      check(strstr(app_content, "brightness unavailable") != NULL,
+            "empty fake sysfs was not reported as unavailable");
+    }
+    free(app_content);
+  }
+
+  char *inputd_log = read_file(log_path);
+  check(inputd_log != NULL, "device inputd log missing");
+  if (inputd_log != NULL) {
+    check(strstr(inputd_log, "action menu.open") != NULL,
+          "device inputd did not emit menu.open");
+    check(strstr(inputd_log, "grab") != NULL,
+          "device inputd never grabbed input");
+    free(inputd_log);
+  }
+
+  stop_inputd(inputd_pid);
+  if (getenv("MENU_TEST_KEEP") == NULL) {
+    remove_tree(root);
+  } else {
+    fprintf(stderr, "menu_test: kept %s\n", root);
+  }
+}
+
 static int run_state_phase(const char *state_app, const char *inputd,
                            const char *shim, const char *config,
                            const char *assets) {
@@ -755,6 +994,18 @@ int main(int argc, char **argv) {
   run_demo_phase(demo, inputd, shim, config, assets, out_dir, false);
   if (g_failures == 0) {
     run_demo_phase(demo, inputd, shim, config, assets, out_dir, true);
+  }
+  if (g_failures == 0) {
+    run_device_phase(demo, inputd, shim, config, assets, out_dir,
+                     DEVICE_CASE_WRITABLE, "menu_device_readback.png", 22);
+  }
+  if (g_failures == 0) {
+    run_device_phase(demo, inputd, shim, config, assets, out_dir,
+                     DEVICE_CASE_READ_ONLY, "menu_device_write_failed.png", 19);
+  }
+  if (g_failures == 0) {
+    run_device_phase(demo, inputd, shim, config, assets, out_dir,
+                     DEVICE_CASE_ABSENT, "menu_device_unavailable.png", -1);
   }
   if (g_failures == 0) {
     run_state_phase(state_app, inputd, shim, config, assets);

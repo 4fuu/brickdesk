@@ -1246,8 +1246,11 @@ static bool device_add(inputd *daemon, const bd_evdev *evdev, bool replay,
   return true;
 }
 
+static bool device_ready(const bd_evdev *device);
+static void device_retry_schedule(inputd *daemon, uint64_t now_ms);
+
 static void device_remove(inputd *daemon, inputd_device *device, uint64_t now_ms,
-                          const char *reason) {
+                          const char *reason, bool schedule_retry) {
   if (device->evdev.fd < 0) {
     return;
   }
@@ -1279,6 +1282,9 @@ static void device_remove(inputd *daemon, inputd_device *device, uint64_t now_ms
   }
   bd_evdev_close(&device->evdev);
   broadcast_device(daemon, "removed", device, reason, now_ms);
+  if (schedule_retry) {
+    device_retry_schedule(daemon, now_ms);
+  }
 }
 
 static void device_compact(inputd *daemon) {
@@ -1352,21 +1358,61 @@ static void device_attach(inputd *daemon, bd_evdev *evdev, uint64_t now_ms) {
   }
 }
 
+static bool device_ready(const bd_evdev *device) {
+  if (device == NULL || device->fd < 0) {
+    return false;
+  }
+  struct pollfd poll_fd;
+  poll_fd.fd = device->fd;
+  poll_fd.events = POLLIN;
+  poll_fd.revents = 0;
+  int result;
+  do {
+    result = poll(&poll_fd, 1, 0);
+  } while (result < 0 && errno == EINTR);
+  if (result < 0) {
+    return false;
+  }
+  return (poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
+}
+
 static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
-                             size_t error_size) {
+                             size_t error_size, bool *retry_needed) {
+  if (retry_needed != NULL) {
+    *retry_needed = false;
+  }
   if (daemon->replay_mode) {
     return true;
   }
   bd_evdev found[BD_INPUTD_MAX_DEVICES];
+  bool incomplete = false;
   errno = 0;
-  int found_count = bd_evdev_scan(daemon->device_dir, found,
-                                  BD_INPUTD_MAX_DEVICES, error, error_size);
+  int found_count =
+      bd_evdev_scan_ex(daemon->device_dir, found, BD_INPUTD_MAX_DEVICES,
+                       &incomplete, error, error_size);
   if (found_count < 0) {
     return false;
+  }
+  if (incomplete && retry_needed != NULL) {
+    *retry_needed = true;
   }
 
   bool matched[BD_INPUTD_MAX_DEVICES] = {false};
   for (int f = 0; f < found_count; ++f) {
+    if (!device_ready(&found[f])) {
+      /*
+       * A node can exist but be immediately dead (a FIFO without a writer,
+       * or a device invalidated by resume). Keep the directory watch, close
+       * the probe fd and retry with backoff; do not register and then
+       * immediately HUP the same node.
+       */
+      bd_evdev_close(&found[f]);
+      if (retry_needed != NULL) {
+        *retry_needed = true;
+      }
+      continue;
+    }
+
     bool existing_path = false;
     for (size_t i = 0; i < daemon->device_count; ++i) {
       inputd_device *device = &daemon->devices[i];
@@ -1385,7 +1431,7 @@ static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
       if (same_node) {
         bd_evdev_close(&found[f]);
       } else {
-        device_remove(daemon, device, now_ms, "replaced");
+        device_remove(daemon, device, now_ms, "replaced", false);
         device_attach(daemon, &found[f], now_ms);
       }
       break;
@@ -1403,13 +1449,16 @@ static bool device_reconcile(inputd *daemon, uint64_t now_ms, char *error,
     struct stat node;
     if (stat(device->evdev.path, &node) != 0 ||
         node.st_dev != device->node_dev || node.st_ino != device->node_ino) {
-      device_remove(daemon, device, now_ms, "gone");
+      device_remove(daemon, device, now_ms, "gone", false);
     }
   }
   return true;
 }
 
 static void device_retry_schedule(inputd *daemon, uint64_t now_ms) {
+  if (daemon->scan_deadline_ms != 0) {
+    return;
+  }
   unsigned delay = daemon->scan_backoff_ms;
   if (delay < BD_INPUTD_SCAN_RETRY_MIN_MS) {
     delay = BD_INPUTD_SCAN_RETRY_MIN_MS;
@@ -1455,7 +1504,6 @@ static void device_watch_update(inputd *daemon, uint64_t now_ms) {
   }
   daemon->watch_error_logged = false;
   daemon->scan_deadline_ms = 0;
-  daemon->scan_backoff_ms = 0;
 }
 
 static void device_drain_watch(inputd *daemon, uint64_t now_ms) {
@@ -1508,9 +1556,15 @@ static void device_service(inputd *daemon, uint64_t now_ms) {
   daemon->scan_deadline_ms = 0;
 
   char error[512] = {0};
-  if (device_reconcile(daemon, now_ms, error, sizeof(error))) {
+  bool retry_needed = false;
+  if (device_reconcile(daemon, now_ms, error, sizeof(error), &retry_needed)) {
     daemon->scan_error_logged = false;
     device_watch_update(daemon, now_ms);
+    if (retry_needed) {
+      device_retry_schedule(daemon, now_ms);
+    } else if (daemon->watch_wd >= 0) {
+      daemon->scan_backoff_ms = 0;
+    }
     return;
   }
   if (!daemon->scan_error_logged) {
@@ -1538,7 +1592,8 @@ static bool setup_devices(inputd *daemon, char *error, size_t error_size) {
   uint64_t now_ms = monotonic_ms();
   device_watch_update(daemon, now_ms);
 
-  if (!device_reconcile(daemon, now_ms, error, error_size)) {
+  bool retry_needed = false;
+  if (!device_reconcile(daemon, now_ms, error, error_size, &retry_needed)) {
     if (errno == ENOENT) {
       log_message(daemon, "%s; waiting for devices", error);
       daemon->scan_error_logged = true;
@@ -1547,6 +1602,12 @@ static bool setup_devices(inputd *daemon, char *error, size_t error_size) {
     return false;
   }
   device_watch_update(daemon, now_ms);
+  if (daemon->watch_wd >= 0) {
+    daemon->scan_backoff_ms = 0;
+  }
+  if (retry_needed) {
+    device_retry_schedule(daemon, now_ms);
+  }
   if (daemon->device_count == 0) {
     log_message(daemon, "no devices under %s; socket stays open",
                 daemon->device_dir);
@@ -1879,7 +1940,7 @@ int main(int argc, char **argv) {
         } else {
           snprintf(reason, sizeof(reason), "hangup");
         }
-        device_remove(&daemon, &daemon.devices[i], now_ms, reason);
+        device_remove(&daemon, &daemon.devices[i], now_ms, reason, true);
       }
       ++fd_index;
     }

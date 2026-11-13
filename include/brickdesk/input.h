@@ -328,7 +328,13 @@ typedef struct bd_evdev_event {
  * Scans `dir` (NULL means /dev/input) for event* nodes and opens the ones
  * that expose keys, axes or switches. The returned fds are O_NONBLOCK and
  * close-on-exec. Returns the device count, or -1 with `error` filled in.
+ *
+ * `bd_evdev_scan_ex` additionally sets `incomplete` when an event* node could
+ * not be opened or processed, so a daemon can retry it with backoff even when
+ * no directory change follows (for example a transient permission error).
  */
+int bd_evdev_scan_ex(const char *dir, bd_evdev *out, size_t max,
+                     bool *incomplete, char *error, size_t error_size);
 int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
                   size_t error_size);
 void bd_evdev_close(bd_evdev *device);

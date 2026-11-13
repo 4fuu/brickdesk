@@ -367,8 +367,11 @@ static bool open_device(const char *dir, const char *name, bd_evdev *out) {
   return true;
 }
 
-int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
-                  size_t error_size) {
+int bd_evdev_scan_ex(const char *dir, bd_evdev *out, size_t max,
+                     bool *incomplete, char *error, size_t error_size) {
+  if (incomplete != NULL) {
+    *incomplete = false;
+  }
   if (out == NULL || max == 0) {
     if (error != NULL && error_size > 0) {
       snprintf(error, error_size, "invalid device buffer");
@@ -392,12 +395,17 @@ int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
       continue;
     }
     if (path_count >= sizeof(paths) / sizeof(paths[0])) {
+      if (incomplete != NULL) {
+        *incomplete = true;
+      }
       break;
     }
     int written = snprintf(paths[path_count], sizeof(paths[path_count]), "%s",
                            entry->d_name);
     if (written > 0 && (size_t)written < sizeof(paths[path_count])) {
       ++path_count;
+    } else if (incomplete != NULL) {
+      *incomplete = true;
     }
   }
   closedir(directory);
@@ -405,14 +413,28 @@ int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
   qsort(paths, path_count, sizeof(paths[0]), compare_strings);
 
   size_t count = 0;
-  for (size_t i = 0; i < path_count && count < max; ++i) {
+  for (size_t i = 0; i < path_count; ++i) {
+    if (count >= max) {
+      if (incomplete != NULL) {
+        *incomplete = true;
+      }
+      break;
+    }
     bd_evdev device;
     if (!open_device(root, paths[i], &device)) {
+      if (incomplete != NULL) {
+        *incomplete = true;
+      }
       continue;
     }
     out[count++] = device;
   }
   return (int)count;
+}
+
+int bd_evdev_scan(const char *dir, bd_evdev *out, size_t max, char *error,
+                  size_t error_size) {
+  return bd_evdev_scan_ex(dir, out, max, NULL, error, error_size);
 }
 
 void bd_evdev_close(bd_evdev *device) {

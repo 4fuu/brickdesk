@@ -165,16 +165,25 @@ When a device read returns `POLLHUP`/`POLLERR`, `POLLNVAL`, or an error, inputd:
    global `release_all` notification is not sent, so keys held on another
    device stay down);
 2. closes the fd and removes it from the poll set and `hello` list;
-3. leaves the grab active for the remaining devices.
+3. leaves the grab active for the remaining devices;
+4. schedules a bounded reopen scan even if no directory event follows. This
+   covers an fd invalidated by resume/error while the node still exists. A
+   candidate that opens but is immediately `POLLHUP` (for example a FIFO
+   without a writer) is closed again instead of being registered and removed
+   repeatedly; the next retry uses the same 250 ms..5 s backoff.
 
 A later rescan reopens the path, re-runs `input.ini` matching and registers it
 exactly once. Node identity (device/inode) distinguishes a replug from the
 same still-open node, so an unchanged rescan never duplicates fds or events.
+An `event*` node that fails to open during a scan (for example a transient
+permission error or a symlink target that is not ready) marks the scan
+incomplete and is retried with the same bounded backoff, even when the
+directory watch stays valid and no later directory event arrives.
 
 For hardware-free lifecycle tests, `--device-dir DIR` accepts `eventN` FIFOs
-instead of character devices. A FIFO with no writer is treated as gone; keep
-the writer fd open while the device is present. Capabilities come from
-`DIR/eventN.meta`:
+instead of character devices. A FIFO with no writer is not registered while
+the writer is absent; keep the writer fd open while the device is present.
+Capabilities come from `DIR/eventN.meta`:
 
 ```ini
 # all fields optional except that a FIFO needs at least one capability

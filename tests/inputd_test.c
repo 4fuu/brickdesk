@@ -378,6 +378,19 @@ static void fake_unplug(fake_device *device) {
   unlink(device->meta);
 }
 
+static void fake_drop_writer(fake_device *device) {
+  if (device->fd >= 0) {
+    close(device->fd);
+    device->fd = -1;
+  }
+}
+
+static void fake_reopen_writer(fake_device *device) {
+  CHECK(device->fd < 0, "writer is already open for %s", device->path);
+  device->fd = open(device->path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  CHECK(device->fd >= 0, "reopen %s: %s", device->path, strerror(errno));
+}
+
 static void fake_send(fake_device *device, unsigned type, unsigned code,
                       int value) {
   struct input_event event;
@@ -716,6 +729,181 @@ static void test_grab(void) {
   stop_daemon();
 }
 
+static void test_fd_recovery(void) {
+  char device_dir[TEST_PATH_MAX];
+  join_path(device_dir, sizeof(device_dir), g_root, "input-fd");
+  CHECK(mkdir(device_dir, 0755) == 0, "mkdir %s: %s", device_dir,
+        strerror(errno));
+
+  fake_device a;
+  fake_device b;
+  fake_plug(&a, device_dir, 0, "Fake A", NULL);
+  fake_plug(&b, device_dir, 1, "Fake B", NULL);
+  start_daemon(device_dir);
+
+  test_client client = connect_client();
+  const char *hello = expect_line(&client, 3000, "\"type\":\"hello\"");
+  CHECK(strstr(hello, "Fake A") != NULL, "startup device missing: %s", hello);
+  client_send(&client, "{\"cmd\":\"subscribe\",\"actions\":true,\"keys\":true}");
+
+  fake_key(&a, BTN_SOUTH, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"pressed\":true");
+  fake_key(&a, BTN_SOUTH, 0);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"pressed\":false");
+
+  /* Hold A and B so fd loss must release only A. */
+  fake_key(&a, BTN_SOUTH, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"pressed\":true");
+  fake_key(&b, BTN_EAST, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"B\"",
+               "\"pressed\":true");
+
+  /*
+   * Invalidate the fd by closing the FIFO writer but leave event0 and its
+   * meta file in place. No directory event follows.
+   */
+  fake_drop_writer(&a);
+  bool b_released_early = false;
+  bool global_release = false;
+  CHECK(wait_removed_with_key(&client, "Fake A", "A", 3000,
+                              &b_released_early, &global_release),
+        "fd loss did not remove and release Fake A");
+  CHECK(!b_released_early, "fd loss released Fake B's held key");
+  CHECK(!global_release, "fd loss sent the global release_all notification");
+
+  /* While no writer exists, retries must not re-register or spin. */
+  sleep_ms(200);
+  long long idle_before = process_cpu_ticks();
+  bool churn = false;
+  uint64_t quiet_deadline = now_ms() + 700;
+  while (now_ms() < quiet_deadline) {
+    char line[TEST_LINE_MAX];
+    uint64_t now = now_ms();
+    if (!client_line(&client, (int)(quiet_deadline - now), line,
+                     sizeof(line))) {
+      break;
+    }
+    if (strstr(line, "\"action\":\"added\",\"device\":\"Fake A\"") != NULL) {
+      churn = true;
+    }
+  }
+  long long idle_after = process_cpu_ticks();
+  CHECK(!churn, "dead FIFO was re-registered before a writer returned");
+  CHECK(idle_before >= 0 && idle_after >= 0,
+        "cannot read daemon CPU time");
+  CHECK(idle_after - idle_before < 20,
+        "fd retry consumed %lld ticks without a writer",
+        idle_after - idle_before);
+
+  /* Reopen the same path without creating/removing directory entries. */
+  fake_reopen_writer(&a);
+  expect_line(&client, 4000,
+              "\"action\":\"added\",\"device\":\"Fake A\"");
+  fake_key(&a, BTN_SOUTH, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"source\":\"Fake A\"");
+  fake_key(&a, BTN_SOUTH, 0);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"pressed\":false");
+
+  fake_key(&b, BTN_EAST, 0);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"B\"",
+               "\"pressed\":false");
+
+  /* The same recovery must re-grab the device while the grab is active. */
+  client_send(&client, "{\"cmd\":\"grab\"}");
+  expect_line(&client, 3000, "\"type\":\"grab\",\"active\":true");
+
+  fake_key(&a, BTN_SOUTH, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"source\":\"Fake A\"");
+  fake_drop_writer(&a);
+  global_release = false;
+  CHECK(wait_removed_with_key(&client, "Fake A", "A", 3000, NULL,
+                              &global_release),
+        "grabbed fd loss did not remove and release Fake A");
+  CHECK(!global_release, "grabbed fd loss sent the global release_all");
+
+  fake_reopen_writer(&a);
+  expect_line2(&client, 4000,
+               "\"action\":\"added\",\"device\":\"Fake A\"",
+               "\"grabbed\":true");
+  fake_key(&a, BTN_SOUTH, 1);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"source\":\"Fake A\"");
+  fake_key(&a, BTN_SOUTH, 0);
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"pressed\":false");
+
+  client_send(&client, "{\"cmd\":\"ungrab\"}");
+  expect_line(&client, 3000, "\"type\":\"release_all\"");
+  expect_line(&client, 3000, "\"type\":\"grab\",\"active\":false");
+
+  fake_unplug(&a);
+  fake_unplug(&b);
+  client_close(&client);
+  stop_daemon();
+}
+
+static void test_transient_open(void) {
+  char device_dir[TEST_PATH_MAX];
+  char target_dir[TEST_PATH_MAX];
+  join_path(device_dir, sizeof(device_dir), g_root, "input-transient");
+  join_path(target_dir, sizeof(target_dir), g_root, "input-transient-target");
+  CHECK(mkdir(device_dir, 0755) == 0, "mkdir %s: %s", device_dir,
+        strerror(errno));
+  CHECK(mkdir(target_dir, 0755) == 0, "mkdir %s: %s", target_dir,
+        strerror(errno));
+
+  char event_path[TEST_PATH_MAX];
+  char meta_path[TEST_PATH_MAX];
+  char target_path[TEST_PATH_MAX];
+  join_path(event_path, sizeof(event_path), device_dir, "event0");
+  append_suffix(meta_path, sizeof(meta_path), event_path, ".meta");
+  join_path(target_path, sizeof(target_path), target_dir, "event0");
+  write_text_file(meta_path,
+                  "name=Deferred A\nvendor=0xbeef\nproduct=0x0001\n");
+  CHECK(symlink(target_path, event_path) == 0, "symlink %s: %s", event_path,
+        strerror(errno));
+
+  start_daemon(device_dir);
+  test_client client = connect_client();
+  const char *hello = expect_line(&client, 3000, "\"type\":\"hello\"");
+  CHECK(strstr(hello, "\"devices\":[]") != NULL,
+        "dangling event node was registered: %s", hello);
+
+  /* Let the initial scan fail; the target appears outside the watched dir. */
+  sleep_ms(450);
+  CHECK(mkfifo(target_path, 0600) == 0, "mkfifo %s: %s", target_path,
+        strerror(errno));
+  int writer = open(target_path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  CHECK(writer >= 0, "open %s: %s", target_path, strerror(errno));
+
+  expect_line(&client, 4000,
+              "\"action\":\"added\",\"device\":\"Deferred A\"");
+  client_send(&client, "{\"cmd\":\"subscribe\",\"actions\":true,\"keys\":true}");
+  struct input_event event;
+  memset(&event, 0, sizeof(event));
+  event.type = EV_KEY;
+  event.code = BTN_SOUTH;
+  event.value = 1;
+  CHECK(write(writer, &event, sizeof(event)) == (ssize_t)sizeof(event),
+        "write deferred event: %s", strerror(errno));
+  expect_line2(&client, 3000, "\"type\":\"key\",\"key\":\"A\"",
+               "\"source\":\"Deferred A\"");
+
+  close(writer);
+  unlink(event_path);
+  unlink(meta_path);
+  expect_line(&client, 3000,
+              "\"action\":\"removed\",\"device\":\"Deferred A\"");
+  client_close(&client);
+  stop_daemon();
+}
+
 static void print_usage(FILE *stream) {
   fprintf(stream,
           "usage: bd_inputd_test --inputd PATH --config-dir DIR\n");
@@ -750,5 +938,9 @@ int main(int argc, char **argv) {
   printf("inputd_hotplug: lifecycle, replug, hold release and idle checks passed\n");
   test_grab();
   printf("inputd_hotplug: grab hotplug checks passed\n");
+  test_fd_recovery();
+  printf("inputd_hotplug: fd-loss reopen and grab recovery checks passed\n");
+  test_transient_open();
+  printf("inputd_hotplug: transient open retry checks passed\n");
   return 0;
 }

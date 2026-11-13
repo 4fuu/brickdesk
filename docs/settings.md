@@ -30,14 +30,16 @@ The page is designed at 1024x768 and follows the v3 settings reference
 - left category list at x=28, first row at y=92, 43 px pitch. The selected row
   has a 3x22 px accent bar and an accent label; icons are drawn with renderer
   primitives.
-- page title: serif 34 px at x=248, baseline 128; subtitle 14 px at baseline
+- page title: serif 34 px at x=248, baseline 128; subtitle 22 px at baseline
   156.
 - settings table: x=248, y=170, width 748, 1 px border, **no rounded card
   corners**. The height follows the content and caps at y=660; longer pages
   scroll inside the table.
 - rows are 74 px when they have a subtitle and 62 px when they do not. Row
-  titles are 16 px bold, subtitles 14 px, values 15 px, hints 13 px. Nothing
-  is below 13 px.
+  titles are 24 px bold, subtitles 22 px, values 22 px, hints 20 px. The serif
+  page title stays 34 px and the top-bar `设置` stays 25 px. Nothing is below
+  20 px. This 24/22/22/20 scale is a provisional legibility pass; re-check it
+  on the 1024x768 device before treating it as final.
 - the focused row gets a 2 px accent ring (square, radius 2) and a 7% accent
   veil. The table border is redrawn per row so a partial repaint is exact.
 - the bottom strip is **not** a persistent Steam-style bar. It is 58 px and

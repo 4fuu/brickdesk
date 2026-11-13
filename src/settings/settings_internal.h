@@ -45,11 +45,11 @@ typedef struct bd_settings_palette {
 typedef struct bd_settings_fonts {
   bd_font *serif34;
   bd_font *serif25;
-  bd_font *title16;
-  bd_font *value15;
-  bd_font *body14;
-  bd_font *badge13;
-  bd_font *caption13;
+  bd_font *title;
+  bd_font *value;
+  bd_font *body;
+  bd_font *badge;
+  bd_font *caption;
   bd_font *fallback;
 } bd_settings_fonts;
 

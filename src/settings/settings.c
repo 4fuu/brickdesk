@@ -108,11 +108,11 @@ static bd_font *load_optional_full_font(bd_gfx *gfx) {
 static void fonts_free(bd_settings_fonts *fonts) {
   bd_font_destroy(fonts->serif34);
   bd_font_destroy(fonts->serif25);
-  bd_font_destroy(fonts->title16);
-  bd_font_destroy(fonts->value15);
-  bd_font_destroy(fonts->body14);
-  bd_font_destroy(fonts->badge13);
-  bd_font_destroy(fonts->caption13);
+  bd_font_destroy(fonts->title);
+  bd_font_destroy(fonts->value);
+  bd_font_destroy(fonts->body);
+  bd_font_destroy(fonts->badge);
+  bd_font_destroy(fonts->caption);
   bd_font_destroy(fonts->fallback);
   memset(fonts, 0, sizeof(*fonts));
 }
@@ -121,22 +121,23 @@ static bool fonts_load(bd_settings_fonts *fonts, bd_gfx *gfx) {
   memset(fonts, 0, sizeof(*fonts));
   fonts->serif34 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 34);
   fonts->serif25 = load_font(gfx, "NotoSerifSC-500-subset.ttf", 25);
-  fonts->title16 = load_font(gfx, "NotoSansSC-700-subset.ttf", 16);
-  fonts->value15 = load_font(gfx, "NotoSansSC-500-subset.ttf", 15);
-  fonts->body14 = load_font(gfx, "NotoSansSC-500-subset.ttf", 14);
-  fonts->badge13 = load_font(gfx, "NotoSansSC-700-subset.ttf", 13);
-  fonts->caption13 = load_font(gfx, "NotoSansSC-500-subset.ttf", 13);
+  /* Body copy and values are 22 px so the 1024x768 panel stays legible. */
+  fonts->title = load_font(gfx, "NotoSansSC-700-subset.ttf", 24);
+  fonts->value = load_font(gfx, "NotoSansSC-500-subset.ttf", 22);
+  fonts->body = load_font(gfx, "NotoSansSC-500-subset.ttf", 22);
+  fonts->badge = load_font(gfx, "NotoSansSC-700-subset.ttf", 20);
+  fonts->caption = load_font(gfx, "NotoSansSC-500-subset.ttf", 20);
   fonts->fallback = load_optional_full_font(gfx);
   if (fonts->serif34 == NULL || fonts->serif25 == NULL ||
-      fonts->title16 == NULL || fonts->value15 == NULL ||
-      fonts->body14 == NULL || fonts->badge13 == NULL ||
-      fonts->caption13 == NULL) {
+      fonts->title == NULL || fonts->value == NULL ||
+      fonts->body == NULL || fonts->badge == NULL ||
+      fonts->caption == NULL) {
     fonts_free(fonts);
     return false;
   }
-  bd_font *all[] = {fonts->serif34, fonts->serif25, fonts->title16,
-                    fonts->value15, fonts->body14, fonts->badge13,
-                    fonts->caption13};
+  bd_font *all[] = {fonts->serif34, fonts->serif25, fonts->title,
+                    fonts->value, fonts->body, fonts->badge,
+                    fonts->caption};
   for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
     bd_font_set_fallback(all[i], fonts->fallback);
   }
@@ -1331,11 +1332,11 @@ bd_settings *bd_settings_create(bd_gfx *gfx, bd_config *config,
     free(settings);
     return NULL;
   }
-  settings->plugin_fonts.title = settings->fonts.title16;
-  settings->plugin_fonts.body = settings->fonts.body14;
-  settings->plugin_fonts.badge = settings->fonts.badge13;
+  settings->plugin_fonts.title = settings->fonts.title;
+  settings->plugin_fonts.body = settings->fonts.body;
+  settings->plugin_fonts.badge = settings->fonts.badge;
   settings->plugin_fonts.serif = settings->fonts.serif34;
-  settings->plugin_fonts.latin = settings->fonts.body14;
+  settings->plugin_fonts.latin = settings->fonts.body;
   settings->plugin_fonts.fallback_full = settings->fonts.fallback;
   bd_settings_apply_theme(settings);
   bd_settings_rebuild(settings);

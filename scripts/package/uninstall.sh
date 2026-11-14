@@ -91,10 +91,17 @@ stop_pid() {
     pid=$1
     name=$2
     pid_matches "$pid" "$name" || return 0
-    kill "$pid" 2>/dev/null || true
-    sleep 1
+    # brickdesk and the stock MainUI can ignore SIGTERM while holding EGL.
+    # Uninstall is destructive; use SIGKILL and wait for the process to leave.
+    kill -9 "$pid" 2>/dev/null || true
+    tries=0
+    while [ "$tries" -lt 3 ] && pid_matches "$pid" "$name"; do
+        sleep 1
+        tries=$((tries + 1))
+    done
     if pid_matches "$pid" "$name"; then
-        kill -9 "$pid" 2>/dev/null || true
+        warn "could not stop $name (pid $pid)"
+        return 1
     fi
 }
 
@@ -112,12 +119,12 @@ if command -v pidof >/dev/null 2>&1; then
     for name in brickdesk brickdesk-perfd brickdesk-inputd; do
         pidof "$name" 2>/dev/null | tr ' ' '\n' | while IFS= read -r pid; do
             [ -n "$pid" ] || continue
-            kill "$pid" 2>/dev/null || true
+            kill -9 "$pid" 2>/dev/null || true
         done
     done
 elif command -v killall >/dev/null 2>&1; then
     for name in brickdesk brickdesk-perfd brickdesk-inputd; do
-        killall "$name" >/dev/null 2>&1 || true
+        killall -9 "$name" >/dev/null 2>&1 || true
     done
 fi
 sleep 1

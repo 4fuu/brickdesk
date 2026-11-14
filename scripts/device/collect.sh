@@ -4,6 +4,9 @@
 # Usage: scripts/device/collect.sh [-o DIR]
 # Default output: build-device/diagnostics-YYYYmmdd-HHMMSS/ plus .tar.gz.
 #
+# Environment: ADB_TIMEOUT (default 10) bounds each adb shell call. A timed-out
+# node is recorded as "# timeout after Ns" instead of blocking the bundle.
+#
 # The bundle is read-only on the device: it copies logs/config and dumps the
 # hardware nodes used by power, battery, LED, display, audio, input, Wi-Fi,
 # Bluetooth and cpufreq. It never writes sysfs or restarts services.
@@ -15,6 +18,10 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 . "$SCRIPT_DIR/common.sh"
 
 OUT=${OUT:-$REPO_ROOT/build-device/diagnostics-$(date +%Y%m%d-%H%M%S)}
+ADB_TIMEOUT=${ADB_TIMEOUT:-10}
+case "$ADB_TIMEOUT" in
+    ''|*[!0-9]*) ADB_TIMEOUT=10 ;;
+esac
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -27,14 +34,61 @@ done
 require_device
 mkdir -p "$OUT"
 
+TIMEOUT_CMD=
+if command -v timeout >/dev/null 2>&1 &&
+    timeout --version >/dev/null 2>&1; then
+    TIMEOUT_CMD=timeout
+else
+    warn "GNU timeout unavailable; adb shell calls use a background watchdog"
+fi
+
+# A few vendor sysfs nodes (notably /sys/power/wakeup_count) can block forever.
+# Keep one stuck attribute from preventing the rest of the diagnostic bundle.
+adb_shell_timed() {
+    if [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$ADB_TIMEOUT" "$ADB" shell "$@"
+        return $?
+    fi
+    "$ADB" shell "$@" &
+    adb_pid=$!
+    ( sleep "$ADB_TIMEOUT"; kill "$adb_pid" 2>/dev/null ) &
+    watchdog_pid=$!
+    rc=0
+    wait "$adb_pid" || rc=$?
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    return "$rc"
+}
+
 info "pulling logs and kernel facts"
-"$SCRIPT_DIR/logs.sh" -o "$OUT/logs" || warn "logs.sh failed; continuing"
+if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" 60 "$SCRIPT_DIR/logs.sh" -o "$OUT/logs" ||
+        warn "logs.sh failed or timed out; continuing"
+else
+    "$SCRIPT_DIR/logs.sh" -o "$OUT/logs" ||
+        warn "logs.sh failed; continuing"
+fi
 
 save() {
     name=$1
     shift
-    "$ADB" shell "$@" 2>/dev/null | tr -d '\r' >"$OUT/$name" || true
-    [ -s "$OUT/$name" ] || rm -f "$OUT/$name"
+    raw=$OUT/$name.raw
+    tmp=$OUT/$name.tmp
+    rm -f "$raw" "$tmp"
+    rc=0
+    adb_shell_timed "$@" >"$raw" 2>/dev/null || rc=$?
+    tr -d '\r' <"$raw" >"$tmp" 2>/dev/null || true
+    rm -f "$raw"
+    case "$rc" in
+        0) ;;
+        124|143) printf '# timeout after %ss\n' "$ADB_TIMEOUT" >>"$tmp" ;;
+        *) printf '# adb shell rc=%s\n' "$rc" >>"$tmp" ;;
+    esac
+    if [ -s "$tmp" ]; then
+        mv "$tmp" "$OUT/$name"
+    else
+        rm -f "$tmp"
+    fi
 }
 
 info "collecting identity and versions"
@@ -68,8 +122,15 @@ save cpufreq.txt 'for d in /sys/devices/system/cpu/cpufreq/policy*; do [ -d "$d"
 save thermal.txt 'for z in /sys/class/thermal/thermal_zone*; do [ -d "$z" ] || continue; echo "== $z"; cat "$z/type" 2>/dev/null; cat "$z/temp" 2>/dev/null; done'
 
 info "collecting brickdesk config and helper output"
-"$ADB" pull "$DEVICE_ROOT/config" "$OUT/config" >/dev/null 2>&1 || warn "cannot pull $DEVICE_ROOT/config"
-"$ADB" shell "du -sk '$DEVICE_ROOT/state' '$DEVICE_ROOT/logs' 2>/dev/null; ls -l '$DEVICE_ROOT/state' 2>/dev/null" 2>/dev/null | tr -d '\r' >"$OUT/brickdesk-state.txt" || true
+if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" 30 "$ADB" pull "$DEVICE_ROOT/config" "$OUT/config" >/dev/null 2>&1 ||
+        warn "cannot pull $DEVICE_ROOT/config (or timed out)"
+else
+    "$ADB" pull "$DEVICE_ROOT/config" "$OUT/config" >/dev/null 2>&1 ||
+        warn "cannot pull $DEVICE_ROOT/config"
+fi
+adb_shell_timed "du -sk '$DEVICE_ROOT/state' '$DEVICE_ROOT/logs' 2>/dev/null; ls -l '$DEVICE_ROOT/state' 2>/dev/null" 2>/dev/null |
+    tr -d '\r' >"$OUT/brickdesk-state.txt" || true
 save bd-power.txt "for b in '$DEVICE_ROOT/bin/bd-power' /mnt/SDCARD/brickdesk/bin/bd-power; do [ -x \"\$b\" ] && \"\$b\"; done"
 save bd-battery.txt "for b in '$DEVICE_ROOT/bin/bd-battery' /mnt/SDCARD/brickdesk/bin/bd-battery; do [ -x \"\$b\" ] && \"\$b\"; done"
 save bd-feedback.txt "for b in '$DEVICE_ROOT/bin/bd-feedback' /mnt/SDCARD/brickdesk/bin/bd-feedback; do [ -x \"\$b\" ] && \"\$b\" probe; done"

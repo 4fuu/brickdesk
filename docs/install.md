@@ -153,9 +153,22 @@ brickdesk 的钩子是 `zz_brickdesk.sh`，它：
 1. 检查 `config/boot-skip` 和崩溃计数；如果要求跳过，直接返回，让原厂 MainUI
    继续启动；
 2. 停掉已经运行的 MainUI（如果它比钩子先启动）；
-3. 启动 `brickdesk-inputd` 和 `brickdesk-perfd`；
-4. 在前台运行 `brickdesk`；
-5. 桌面退出后停止两个守护进程，并返回启动脚本。
+3. 用 `display_probe --ready` 等待 PowerVR RGX 固件和 SDL/EGL surface 就绪；
+   默认每 1 秒重试，最多 25 秒；readiness 失败不计入桌面崩溃次数，超时则直接
+   留在原厂 MainUI；
+4. 启动 `brickdesk-inputd` 和 `brickdesk-perfd`；
+5. 在前台运行 `brickdesk`；
+6. 桌面退出后停止两个守护进程，并返回启动脚本。
+
+boot hook 支持以下环境变量（默认值适合 Brick Pro）：
+
+```text
+BRICKDESK_START_DELAY=0              # readiness 前的固定等待秒数
+BRICKDESK_DISPLAY_READY_TIMEOUT=25   # readiness 总超时
+BRICKDESK_DISPLAY_READY_INTERVAL=1   # 重试间隔
+BRICKDESK_DISPLAY_READY=0            # 关闭 readiness 门控
+BRICKDESK_PROBE=/path/to/display_probe
+```
 
 输入和性能守护进程的日志在：
 

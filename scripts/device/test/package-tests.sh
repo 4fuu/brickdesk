@@ -193,6 +193,55 @@ awk '
 ' "$SD/brickdesk/logs/boot.log" || die "inputd/perfd did not start before the desktop"
 pass "inputd/perfd start before the desktop"
 
+printf '== display readiness retries before desktop ==\n'
+READY_COUNT=$TMP/ready-count
+READY_PROBE=$TMP/ready-probe
+printf '0\n' >"$READY_COUNT"
+cat >"$READY_PROBE" <<EOF
+#!/bin/sh
+count=\$(cat "$READY_COUNT")
+count=\$((count + 1))
+printf '%s\n' "\$count" >"$READY_COUNT"
+[ "\$count" -ge 3 ]
+EOF
+chmod +x "$READY_PROBE"
+: >"$EVENTS"
+printf '0\n' >"$SD/brickdesk/state/boot/attempts"
+FAKE_EVENT_LOG=$EVENTS FAKE_DESKTOP_MODE=ok \
+BRICKDESK_SD_ROOT=$SD BRICKDESK_DAEMON_WAIT=0 BRICKDESK_STOP_WAIT=0 \
+BRICKDESK_MIN_UPTIME=999 BRICKDESK_PROBE=$READY_PROBE \
+BRICKDESK_DISPLAY_READY_TIMEOUT=10 BRICKDESK_DISPLAY_READY_INTERVAL=1 \
+    sh "$SD/System/starts/zz_brickdesk.sh" >"$TMP/hook-ready.log"
+[ "$(cat "$READY_COUNT")" = "3" ] || die "readiness probe did not retry three times"
+[ "$(cat "$SD/brickdesk/state/boot/attempts")" = "0" ] ||
+    die "readiness failures consumed desktop crash attempts"
+grep -q 'display ready after 2s' "$SD/brickdesk/logs/boot.log" ||
+    die "readiness success was not logged"
+grep -q 'desktop start' "$EVENTS" || die "desktop did not start after readiness"
+pass "readiness retries and does not consume desktop attempts"
+
+printf '== display readiness timeout leaves the stock UI ==\n'
+FAIL_PROBE=$TMP/fail-probe
+cat >"$FAIL_PROBE" <<'EOF'
+#!/bin/sh
+echo "ready_error: fake GPU not ready" >&2
+exit 1
+EOF
+chmod +x "$FAIL_PROBE"
+: >"$EVENTS"
+printf '0\n' >"$SD/brickdesk/state/boot/attempts"
+FAKE_EVENT_LOG=$EVENTS FAKE_DESKTOP_MODE=ok \
+BRICKDESK_SD_ROOT=$SD BRICKDESK_DAEMON_WAIT=0 BRICKDESK_STOP_WAIT=0 \
+BRICKDESK_MIN_UPTIME=999 BRICKDESK_PROBE=$FAIL_PROBE \
+BRICKDESK_DISPLAY_READY_TIMEOUT=2 BRICKDESK_DISPLAY_READY_INTERVAL=1 \
+    sh "$SD/System/starts/zz_brickdesk.sh" >"$TMP/hook-ready-timeout.log"
+[ ! -s "$EVENTS" ] || die "desktop started after a readiness timeout"
+[ "$(cat "$SD/brickdesk/state/boot/attempts")" = "0" ] ||
+    die "readiness timeout consumed desktop crash attempts"
+grep -q 'display not ready after 2s; leaving the stock UI in control' \
+    "$SD/brickdesk/logs/boot.log" || die "readiness timeout was not logged"
+pass "readiness timeout logs and leaves the stock UI"
+
 printf '== crash-loop fallback ==\n'
 : >"$EVENTS"
 printf '0\n' >"$SD/brickdesk/state/boot/attempts"

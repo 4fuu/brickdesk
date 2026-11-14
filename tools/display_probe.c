@@ -239,6 +239,83 @@ static void print_extension_presence(const char *extensions, const char *name)
     printf("%s: %s\n", name, strstr(extensions, name) ? "yes" : "no");
 }
 
+static void set_gl_attributes(void)
+{
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+}
+
+/*
+ * Lightweight readiness probe for the boot hook.  Creating the window and
+ * context is the part that fails while the PowerVR RGX firmware is still
+ * loading; a full 60-frame benchmark would add boot latency and make swap
+ * timing failures look like display readiness failures.
+ */
+static int run_ready(void)
+{
+    SDL_Window *window = NULL;
+    SDL_GLContext context = NULL;
+    EGLSurface surface = EGL_NO_SURFACE;
+    int window_w = 0;
+    int window_h = 0;
+    int rc = 1;
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        printf("ready_error: SDL_Init: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    set_gl_attributes();
+    window = SDL_CreateWindow("brickdesk display readiness",
+                              SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                              PROBE_W, PROBE_H, SDL_WINDOW_OPENGL);
+    if (!window) {
+        printf("ready_error: SDL_CreateWindow: %s\n", SDL_GetError());
+        goto cleanup;
+    }
+
+    SDL_GetWindowSize(window, &window_w, &window_h);
+    if (window_w != PROBE_W || window_h != PROBE_H) {
+        printf("ready_error: window is %dx%d, expected %dx%d\n",
+               window_w, window_h, PROBE_W, PROBE_H);
+        goto cleanup;
+    }
+
+    context = SDL_GL_CreateContext(window);
+    if (!context) {
+        printf("ready_error: SDL_GL_CreateContext: %s\n", SDL_GetError());
+        goto cleanup;
+    }
+
+    surface = eglGetCurrentSurface(EGL_DRAW);
+    if (surface == EGL_NO_SURFACE) {
+        printf("ready_error: EGL draw surface is not current\n");
+        goto cleanup;
+    }
+
+    printf("READY: video_driver=%s window=%dx%d\n",
+           or_unknown(SDL_GetCurrentVideoDriver()), window_w, window_h);
+    rc = 0;
+
+cleanup:
+    if (context) {
+        SDL_GL_DeleteContext(context);
+    }
+    if (window) {
+        SDL_DestroyWindow(window);
+    }
+    SDL_Quit();
+    return rc;
+}
+
 static int run_probe(int frames)
 {
     struct fb_info fb;
@@ -281,16 +358,7 @@ static int run_probe(int frames)
     }
     printf("\n");
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+    set_gl_attributes();
 
     printf("sdl_requested_window: %dx%d\n", PROBE_W, PROBE_H);
     window = SDL_CreateWindow("brickdesk display probe",
@@ -474,9 +542,11 @@ cleanup:
 static void usage(const char *argv0)
 {
     printf("usage: %s [--frames N]\n", argv0);
+    printf("       %s --ready\n", argv0);
     printf("       %s --dump-fb FILE\n", argv0);
     printf("\n");
     printf("  --frames N     swap samples for the latency statistics (default %d)\n", DEFAULT_FRAMES);
+    printf("  --ready        only create the SDL window/GL context/EGL surface; no swap\n");
     printf("  --dump-fb FILE write the visible /dev/fb0 contents as binary PPM ('-' = stdout)\n");
 }
 
@@ -484,6 +554,14 @@ int main(int argc, char **argv)
 {
     int frames = DEFAULT_FRAMES;
     int i;
+
+    if (argc == 2 && strcmp(argv[1], "--ready") == 0) {
+        return run_ready();
+    }
+    if (argc > 1 && strcmp(argv[1], "--ready") == 0) {
+        fprintf(stderr, "error: --ready cannot be combined with other options\n");
+        return 2;
+    }
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dump-fb") == 0) {

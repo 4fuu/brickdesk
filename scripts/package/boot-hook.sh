@@ -3,11 +3,24 @@
 # /mnt/SDCARD/brickdesk/boot-hook.sh and is started by the generated
 # /mnt/SDCARD/System/starts/zz_brickdesk.sh wrapper.
 #
-# It starts brickdesk-inputd and brickdesk-perfd, then runs the desktop in the
-# foreground. Returning from this script lets the stock launcher continue to
-# MainUI. After three failed desktop starts the hook leaves the stock UI in
-# control and keeps a counter so later boots skip brickdesk until the counter is
-# reset with install.sh --reset-fallback.
+# It waits for the vendor display stack to become ready, starts
+# brickdesk-inputd and brickdesk-perfd, then runs the desktop in the foreground.
+# Returning from this script lets the stock launcher continue to MainUI. After
+# three failed desktop starts the hook leaves the stock UI in control and keeps
+# a counter so later boots skip brickdesk until the counter is reset with
+# install.sh --reset-fallback.
+#
+# Readiness is checked with `display_probe --ready` because the PowerVR RGX
+# firmware can finish loading several seconds after System/starts begins. A
+# failed readiness probe is retried and does not consume a desktop crash
+# attempt. If it never becomes ready, the hook leaves the stock UI in control.
+#
+# Environment knobs:
+#   BRICKDESK_START_DELAY              fixed delay before readiness, seconds (0)
+#   BRICKDESK_DISPLAY_READY_TIMEOUT    readiness retry timeout, seconds (25)
+#   BRICKDESK_DISPLAY_READY_INTERVAL   retry interval, seconds (1)
+#   BRICKDESK_DISPLAY_READY            0 disables the readiness gate
+#   BRICKDESK_PROBE                    display_probe path
 #
 # POSIX sh only; busybox ash must be able to run it.
 
@@ -24,6 +37,11 @@ RETRY_DELAY=${BRICKDESK_RETRY_DELAY:-2}
 MIN_UPTIME=${BRICKDESK_MIN_UPTIME:-20}
 DAEMON_WAIT=${BRICKDESK_DAEMON_WAIT:-1}
 STOP_WAIT=${BRICKDESK_STOP_WAIT:-1}
+START_DELAY=${BRICKDESK_START_DELAY:-0}
+DISPLAY_READY_TIMEOUT=${BRICKDESK_DISPLAY_READY_TIMEOUT:-25}
+DISPLAY_READY_INTERVAL=${BRICKDESK_DISPLAY_READY_INTERVAL:-1}
+DISPLAY_READY=${BRICKDESK_DISPLAY_READY:-1}
+PROBE=${BRICKDESK_PROBE:-$DEST/bin/display_probe}
 DESKTOP=${BRICKDESK_DESKTOP:-$DEST/bin/brickdesk}
 
 case "$RETRY_DELAY" in
@@ -37,6 +55,23 @@ case "$DAEMON_WAIT" in
 esac
 case "$STOP_WAIT" in
     ''|*[!0-9]*) STOP_WAIT=1 ;;
+esac
+case "$START_DELAY" in
+    ''|*[!0-9]*) START_DELAY=0 ;;
+esac
+[ "$START_DELAY" -le 60 ] || START_DELAY=60
+case "$DISPLAY_READY_TIMEOUT" in
+    ''|*[!0-9]*) DISPLAY_READY_TIMEOUT=25 ;;
+esac
+[ "$DISPLAY_READY_TIMEOUT" -le 120 ] || DISPLAY_READY_TIMEOUT=120
+case "$DISPLAY_READY_INTERVAL" in
+    ''|*[!0-9]*) DISPLAY_READY_INTERVAL=1 ;;
+esac
+[ "$DISPLAY_READY_INTERVAL" -ge 1 ] || DISPLAY_READY_INTERVAL=1
+[ "$DISPLAY_READY_INTERVAL" -le 10 ] || DISPLAY_READY_INTERVAL=10
+case "$DISPLAY_READY" in
+    0|1) ;;
+    *) DISPLAY_READY=1 ;;
 esac
 
 if ! mkdir -p "$LOG_DIR" "$DEST/state/boot" "$RUN_DIR" 2>/dev/null; then
@@ -74,6 +109,40 @@ read_attempts() {
 
 write_attempts() {
     printf '%s\n' "$1" >"$ATTEMPTS_FILE" 2>/dev/null || true
+}
+
+# The vendor RGX firmware is not necessarily ready when System/starts runs.
+# Probe the actual SDL/EGL path instead of relying on a node or dmesg spelling.
+# A failed probe does not consume a desktop crash attempt.
+wait_for_display() {
+    if [ "$DISPLAY_READY" != "1" ]; then
+        log "display readiness gate disabled"
+        if [ "$START_DELAY" -gt 0 ]; then
+            sleep "$START_DELAY"
+        fi
+        return 0
+    fi
+    if [ "$START_DELAY" -gt 0 ]; then
+        log "start delay ${START_DELAY}s before display readiness"
+        sleep "$START_DELAY"
+    fi
+    if [ ! -x "$PROBE" ]; then
+        log "warning: display probe missing or not executable: $PROBE; starting without readiness gate"
+        return 0
+    fi
+    log "waiting for display readiness (timeout ${DISPLAY_READY_TIMEOUT}s)"
+    : >"$LOG_DIR/display-ready.log" 2>/dev/null || true
+    waited=0
+    while [ "$waited" -lt "$DISPLAY_READY_TIMEOUT" ]; do
+        if "$PROBE" --ready >>"$LOG_DIR/display-ready.log" 2>&1; then
+            log "display ready after ${waited}s"
+            return 0
+        fi
+        sleep "$DISPLAY_READY_INTERVAL"
+        waited=$((waited + DISPLAY_READY_INTERVAL))
+    done
+    log "display not ready after ${DISPLAY_READY_TIMEOUT}s; leaving the stock UI in control"
+    return 1
 }
 
 pid_matches() {
@@ -178,6 +247,11 @@ export PATH="$DEST/bin:/usr/trimui/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
 if ! cd "$DEST" 2>/dev/null; then
     log "error: cannot enter $DEST"
+    exit 0
+fi
+
+if ! wait_for_display; then
+    log "boot hook end; the stock launcher may continue"
     exit 0
 fi
 

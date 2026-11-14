@@ -434,6 +434,10 @@ settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
 | `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、后备 `libSDL2-2.0.so.0`、assets 和默认 config；再从设备复制 stock SDL2 覆盖后备库 | 只写 SD 卡应用目录；不覆盖 `config/local.ini`；原子替换 SDL2；`sync` |
 | `run.sh` | 停原厂 UI，启动二进制；`--foreground` 直接跑 | 日志 `$DEST/logs/<name>.log` |
 | `logs.sh` | 拉应用日志、dmesg、logread、系统信息 | 默认输出 `build-device/logs` |
+Windows/MSYS2 下调用 `adb pull` 时先设置 `MSYS2_ARG_CONV_EXCL=*`，否则 `/mnt/...`
+会被改写成 `C:/...`。`collect.sh` 末尾的 `tar` 在 Windows 盘符路径下可能失败，但
+节点文件、logs/config/dmesg 已经写入输出目录，不影响诊断。
+
 | `collect.sh` | 一条命令生成完整诊断包：日志、配置、power/LED/马达/显示/音频/输入/网络/调频节点 | 只读；输出 `build-device/diagnostics-*.tar.gz` |
 | `screenshot.sh` | 通过 `display_probe --dump-fb` 读 fb0，拉回 PPM/PNG | 需要应用不占用 fb0 或能读 |
 | `perf.sh` | 采 CPU/RSS/频率/温度/电量 CSV | 不依赖 `top`/`pidof` |

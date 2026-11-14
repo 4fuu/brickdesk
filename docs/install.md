@@ -45,7 +45,7 @@ brickdesk-0.1.0-aarch64/
       bench_render
       brickdesk-demo
     lib/
-      libSDL2-2.0.so.0        # 后备 SDL2（运行时优先用原厂 /usr/trimui/lib）
+      libSDL2-2.0.so.0        # 后备 SDL2；install.sh 会用原厂库原子覆盖
       libbrickdesk-menu.so
     assets/
       fonts/
@@ -121,6 +121,8 @@ sh /mnt/SDCARD/brickdesk-0.1.0-aarch64/install.sh
 
 - 把 `payload/` 复制到 `/mnt/SDCARD/brickdesk/`；
 - 保留已有的 `config/local.ini`、`state/`、用户自己的 `apps/` 和 `plugins/`；
+- 如果设备存在 `/usr/trimui/lib/libSDL2-2.0.so.0`，把它原子复制到
+  `brickdesk/lib/libSDL2-2.0.so.0`；失败时保留包内后备 SDL2；
 - 写入启动钩子 `/mnt/SDCARD/System/starts/zz_brickdesk.sh`；
 - 如果该钩子文件已经存在且不是 brickdesk 的，先备份为
   `brickdesk/state/stock-hook.bak`；
@@ -308,7 +310,7 @@ sh /mnt/SDCARD/brickdesk-uninstall.sh --no-restart
 
 ```sh
 cd /mnt/SDCARD/brickdesk
-LD_LIBRARY_PATH=/usr/trimui/lib:/mnt/SDCARD/brickdesk/lib:/usr/lib:/lib \
+LD_LIBRARY_PATH=/mnt/SDCARD/brickdesk/lib:/usr/trimui/lib:/usr/lib:/lib \
 BRICKDESK_ASSET_DIR=/mnt/SDCARD/brickdesk/assets \
   ./bin/brickdesk
 ```
@@ -317,7 +319,7 @@ BRICKDESK_ASSET_DIR=/mnt/SDCARD/brickdesk/assets \
 
 ```sh
 cd /mnt/SDCARD/brickdesk
-LD_LIBRARY_PATH=/usr/trimui/lib:$PWD/lib:/usr/lib:/lib \
+LD_LIBRARY_PATH=$PWD/lib:/usr/trimui/lib:/usr/lib:/lib \
   ./bin/display_probe
 ```
 

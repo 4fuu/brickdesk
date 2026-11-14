@@ -78,6 +78,9 @@ make_desktop() {
 
 printf '== fake target build ==\n'
 mkdir -p "$FAKE_BUILD/dist/lib" "$FAKE_BUILD/bench" "$TMP/hello/bin"
+STOCK_SDL2=$TMP/stock-sdl2
+printf 'stock sdl2\n' >"$STOCK_SDL2"
+export BRICKDESK_STOCK_SDL2="$STOCK_SDL2"
 for name in brickdesk brickdesk-inputd brickdesk-perfd bd-input brickdesk-config bd-av bd-feedback bd-power bd-battery display_probe bench_render brickdesk-demo; do
     make_exit_script "$FAKE_BUILD/$name"
 done
@@ -152,6 +155,8 @@ BRICKDESK_SD_ROOT=$SD BRICKDESK_SKIP_DEVICE_CHECK=1 sh "$PKG/install.sh" >"$TMP/
 [ -x "$SD/brickdesk/bin/bd-battery" ] || die "bd-battery was not installed"
 [ -x "$SD/brickdesk/bin/bd-feedback" ] || die "bd-feedback was not installed"
 [ -f "$SD/brickdesk/assets/fonts/NotoSansSC-500-subset.ttf" ] || die "fonts were not installed"
+[ "$(cat "$SD/brickdesk/lib/libSDL2-2.0.so.0")" = "stock sdl2" ] ||
+    die "install did not replace the fallback SDL2 with the stock library"
 [ -f "$SD/brickdesk/plugins/hello/bin/hello" ] || die "hello plugin was not installed"
 [ -f "$SD/brickdesk-uninstall.sh" ] || die "uninstaller copy was not installed"
 grep -q 'brickdesk-boot-hook' "$SD/System/starts/zz_brickdesk.sh" || die "boot hook missing marker"

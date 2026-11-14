@@ -154,9 +154,9 @@ adb shell 'ls -l /lib/libc.so.6 /lib/libpthread.so.0 2>/dev/null'
 - `ldd --version` 的设备实际 glibc。若高于 2.23，把 CI 的
   `ci/check-glibc.sh --max` 和本文上限一起调整；若低于 2.23，保持 2.23 保守值。
 - `libSDL2` 的实际版本和路径；原厂 `/usr/trimui/lib/libSDL2-2.0.so.0.3000.8` 是
-  2.30.8，已实测能创建 1024×768 的 PowerVR NULL-WSEGL surface。运行时优先加载
-  原厂库（`LD_LIBRARY_PATH=/usr/trimui/lib:$DEST/lib:...`），包内 patched 2.26.1
-  只作为原厂库缺失时的后备。
+  2.30.8，已实测能创建 1024×768 的 PowerVR NULL-WSEGL surface。install.sh 会把
+  原厂库复制到 `$DEST/lib/libSDL2-2.0.so.0`，运行时仍用 `$DEST/lib` 优先；包内
+  patched 2.26.1 只作为原厂库缺失或复制失败时的后备。
 
 ### 4.2 显示（M1-03 核心）
 
@@ -431,7 +431,7 @@ settings 44.2 ms, steady RSS about 235-245 MiB with most of it in Mesa/LLVM.
 
 | 脚本 | 作用 | 关键行为 |
 |---|---|---|
-| `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、patched `libSDL2-2.0.so.0`、assets 和默认 config | 只写 SD 卡应用目录；不覆盖 `config/local.ini`；`sync` |
+| `deploy.sh` | 推送 `display_probe`、可选的 `brickdesk`、后备 `libSDL2-2.0.so.0`、assets 和默认 config；再从设备复制 stock SDL2 覆盖后备库 | 只写 SD 卡应用目录；不覆盖 `config/local.ini`；原子替换 SDL2；`sync` |
 | `run.sh` | 停原厂 UI，启动二进制；`--foreground` 直接跑 | 日志 `$DEST/logs/<name>.log` |
 | `logs.sh` | 拉应用日志、dmesg、logread、系统信息 | 默认输出 `build-device/logs` |
 | `collect.sh` | 一条命令生成完整诊断包：日志、配置、power/LED/马达/显示/音频/输入/网络/调频节点 | 只读；输出 `build-device/diagnostics-*.tar.gz` |
@@ -660,7 +660,8 @@ shared + static，安装到 sysroot，并对 `libSDL2-2.0.so.0` 跑 glibc 检查
 2026-11-14 真机结论：Brick Pro 原厂 SDL2 2.30.8 在 `/usr/trimui/lib` 下能用
 NULL native window 创建 1024×768 的 EGL surface，brickdesk 也能正常渲染；而当前
 2.26.1 patch 传 `&fbdev_window` 在该机上失败。运行时因此优先原厂 2.30.8，
-2.26.1 patched 只作为后备。若以后改为自包含 SDL2，应把 native window 改回
+2.26.1 patched 只作为后备。运行时仍保持 `$DEST/lib` 第一，避免整体前置
+`/usr/trimui/lib` shadow 其他依赖。若以后改为自包含 SDL2，应把 native window 改回
 NULL 并在真机重新验证，而不是继续假设 `struct fbdev_window *` 一定被接受。
 
 真机判断 patch 是否生效，只看这三点同时成立：
@@ -679,8 +680,9 @@ adb shell 'LD_LIBRARY_PATH=/mnt/SDCARD/brickdesk/lib ldd /mnt/SDCARD/brickdesk/b
 adb shell 'readelf -d /mnt/SDCARD/brickdesk/bin/display_probe | grep NEEDED'
 ```
 
-默认应确认 `libSDL2-2.0.so.0` 来自 `/usr/trimui/lib`；只有原厂库缺失或不可用时，
-才应回退到 `$DEST/lib/libSDL2-2.0.so.0`。
+install.sh 会用原厂库覆盖 `$DEST/lib/libSDL2-2.0.so.0`。运行时确认该文件是原厂
+2.30.8（`readelf`/`strings` 或 `LD_TRACE_LOADED_OBJECTS`）；只有原厂库缺失或
+复制失败时，`$DEST/lib` 里才会保留包内 patched 2.26.1。
 
 ## 7. 已知风险与未验证项
 

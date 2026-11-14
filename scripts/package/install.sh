@@ -26,6 +26,7 @@ HOOK=$HOOK_DIR/zz_brickdesk.sh
 HOOK_BACKUP=$DEST/state/stock-hook.bak
 UNINSTALLER=$SD_ROOT/brickdesk-uninstall.sh
 PAYLOAD=$SCRIPT_DIR/payload
+STOCK_SDL2=${BRICKDESK_STOCK_SDL2:-/usr/trimui/lib/libSDL2-2.0.so.0}
 INSTALL_HOOK=1
 RESET_FALLBACK=0
 
@@ -139,6 +140,30 @@ cp -R "$PAYLOAD"/. "$NEW"/ || {
     rm -rf "$NEW"
     die "cannot copy the payload"
 }
+
+# Brick Pro's stock SDL2 2.30.8 already reads the fb0 mode and creates the
+# PowerVR NULL-WSEGL surface. Copy just that library into the install tree so
+# the runtime keeps $DEST/lib first without shadowing unrelated vendor libs.
+# If it is missing, the packaged patched SDL2 remains in place as a fallback.
+STOCK_TMP=$NEW/lib/.libSDL2-2.0.so.0.stock.$$
+if [ -r "$STOCK_SDL2" ]; then
+    rm -f "$STOCK_TMP"
+    if cat "$STOCK_SDL2" >"$STOCK_TMP" 2>/dev/null &&
+        [ -s "$STOCK_TMP" ]; then
+        chmod 0755 "$STOCK_TMP" 2>/dev/null || true
+        if mv -f "$STOCK_TMP" "$NEW/lib/libSDL2-2.0.so.0"; then
+            info "copied the stock SDL2 runtime from $STOCK_SDL2"
+        else
+            rm -f "$STOCK_TMP"
+            warn "could not activate $STOCK_SDL2; keeping the packaged SDL2"
+        fi
+    else
+        rm -f "$STOCK_TMP"
+        warn "could not copy $STOCK_SDL2; keeping the packaged SDL2"
+    fi
+else
+    warn "stock SDL2 not found at $STOCK_SDL2; keeping the packaged SDL2"
+fi
 
 # User data has the highest priority and is never shipped in the payload.
 if [ -f "$DEST/config/local.ini" ]; then

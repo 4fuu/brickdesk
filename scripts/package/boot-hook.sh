@@ -242,10 +242,11 @@ elif command -v killall >/dev/null 2>&1; then
     sleep 1
 fi
 
-# Brick Pro's stock SDL2 2.30.8 already reads the fb0 mode and creates the
-# PowerVR NULL-WSEGL surface correctly. Prefer it; the packaged 2.26.1 remains
-# a fallback for images that do not ship a usable system SDL2.
-export LD_LIBRARY_PATH="/usr/trimui/lib:$DEST/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# install.sh copies Brick Pro's stock SDL2 2.30.8 into $DEST/lib because it
+# creates the PowerVR NULL-WSEGL surface correctly. Keep $DEST/lib first so the
+# rest of the vendor library path is not shadowed; the packaged 2.26.1 remains
+# there only when the stock library was unavailable at install time.
+export LD_LIBRARY_PATH="$DEST/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export BRICKDESK_ASSET_DIR="$DEST/assets"
 export HOME="$DEST"
 export PATH="$DEST/bin:/usr/trimui/bin:/usr/bin:/bin:/sbin:/usr/sbin"

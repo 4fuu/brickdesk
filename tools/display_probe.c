@@ -253,6 +253,162 @@ static void set_gl_attributes(void)
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 }
 
+static const char *egl_error_name(EGLint error)
+{
+    switch (error) {
+    case EGL_SUCCESS: return "EGL_SUCCESS";
+    case EGL_NOT_INITIALIZED: return "EGL_NOT_INITIALIZED";
+    case EGL_BAD_ACCESS: return "EGL_BAD_ACCESS";
+    case EGL_BAD_ALLOC: return "EGL_BAD_ALLOC";
+    case EGL_BAD_ATTRIBUTE: return "EGL_BAD_ATTRIBUTE";
+    case EGL_BAD_CONTEXT: return "EGL_BAD_CONTEXT";
+    case EGL_BAD_CONFIG: return "EGL_BAD_CONFIG";
+    case EGL_BAD_CURRENT_SURFACE: return "EGL_BAD_CURRENT_SURFACE";
+    case EGL_BAD_DISPLAY: return "EGL_BAD_DISPLAY";
+    case EGL_BAD_SURFACE: return "EGL_BAD_SURFACE";
+    case EGL_BAD_MATCH: return "EGL_BAD_MATCH";
+    case EGL_BAD_PARAMETER: return "EGL_BAD_PARAMETER";
+    case EGL_BAD_NATIVE_PIXMAP: return "EGL_BAD_NATIVE_PIXMAP";
+    case EGL_BAD_NATIVE_WINDOW: return "EGL_BAD_NATIVE_WINDOW";
+    case EGL_CONTEXT_LOST: return "EGL_CONTEXT_LOST";
+    default: return "EGL_UNKNOWN";
+    }
+}
+
+struct fbdev_window16 {
+    unsigned short width;
+    unsigned short height;
+};
+
+struct fbdev_window32 {
+    unsigned int width;
+    unsigned int height;
+};
+
+struct fbdev_window32_stride {
+    unsigned int width;
+    unsigned int height;
+    unsigned int stride;
+    unsigned int format;
+};
+
+/*
+ * Direct EGL probe used when SDL's mali-fbdev window creation fails.  The
+ * PowerVR NULL WSEGL variants seen on these devices disagree about whether the
+ * native window is NULL or a pointer to an fbdev_window, so test both layouts
+ * without involving SDL.
+ */
+static int run_egl_test(void)
+{
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLConfig config = NULL;
+    EGLSurface surface = EGL_NO_SURFACE;
+    EGLint major = 0;
+    EGLint minor = 0;
+    EGLint count = 0;
+    EGLint error;
+    const EGLint config_attribs[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_NONE
+    };
+    struct fbdev_window16 window16 = { PROBE_W, PROBE_H };
+    struct fbdev_window32 window32 = { PROBE_W, PROBE_H };
+    struct fbdev_window32_stride window32_stride = {
+        PROBE_W, PROBE_H, PROBE_W * 4, 0
+    };
+    struct {
+        const char *name;
+        EGLNativeWindowType window;
+    } variants[] = {
+        { "null", (EGLNativeWindowType)NULL },
+        { "fbdev16", (EGLNativeWindowType)&window16 },
+        { "fbdev32", (EGLNativeWindowType)&window32 },
+        { "fbdev32_stride", (EGLNativeWindowType)&window32_stride }
+    };
+    size_t i;
+
+    display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display == EGL_NO_DISPLAY) {
+        error = eglGetError();
+        printf("egl_test: eglGetDisplay failed: 0x%x (%s)\n",
+               (unsigned int)error, egl_error_name(error));
+        return 1;
+    }
+    if (!eglInitialize(display, &major, &minor)) {
+        error = eglGetError();
+        printf("egl_test: eglInitialize failed: 0x%x (%s)\n",
+               (unsigned int)error, egl_error_name(error));
+        return 1;
+    }
+    printf("egl_test: vendor=%s\n", or_unknown(eglQueryString(display, EGL_VENDOR)));
+    printf("egl_test: version=%s\n", or_unknown(eglQueryString(display, EGL_VERSION)));
+    printf("egl_test: initialized=%d.%d\n", (int)major, (int)minor);
+
+    if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+        error = eglGetError();
+        printf("egl_test: eglBindAPI failed: 0x%x (%s)\n",
+               (unsigned int)error, egl_error_name(error));
+        eglTerminate(display);
+        return 1;
+    }
+    if (!eglChooseConfig(display, config_attribs, &config, 1, &count) ||
+        count < 1) {
+        error = eglGetError();
+        printf("egl_test: eglChooseConfig failed: 0x%x (%s), count=%d\n",
+               (unsigned int)error, egl_error_name(error), (int)count);
+        eglTerminate(display);
+        return 1;
+    }
+    printf("egl_test: config_count=%d\n", (int)count);
+
+    {
+        const EGLint pbuffer_attribs[] = {
+            EGL_WIDTH, 16,
+            EGL_HEIGHT, 16,
+            EGL_NONE
+        };
+        surface = eglCreatePbufferSurface(display, config, pbuffer_attribs);
+        error = eglGetError();
+        printf("egl_test: pbuffer=%s\n",
+               surface != EGL_NO_SURFACE ? "PASS" : "FAIL");
+        if (surface == EGL_NO_SURFACE) {
+            printf("egl_test: pbuffer_error=0x%x (%s)\n",
+                   (unsigned int)error, egl_error_name(error));
+        } else {
+            eglDestroySurface(display, surface);
+            surface = EGL_NO_SURFACE;
+        }
+    }
+
+    for (i = 0; i < sizeof(variants) / sizeof(variants[0]); ++i) {
+        while (eglGetError() != EGL_SUCCESS) {
+            /* Clear any error left by the previous variant. */
+        }
+        surface = eglCreateWindowSurface(display, config, variants[i].window,
+                                         NULL);
+        error = eglGetError();
+        printf("egl_test: window_%s=%s", variants[i].name,
+               surface != EGL_NO_SURFACE ? "PASS" : "FAIL");
+        if (surface == EGL_NO_SURFACE) {
+            printf(" error=0x%x (%s)", (unsigned int)error,
+                   egl_error_name(error));
+        }
+        printf("\n");
+        if (surface != EGL_NO_SURFACE) {
+            eglDestroySurface(display, surface);
+            surface = EGL_NO_SURFACE;
+        }
+    }
+
+    eglTerminate(display);
+    return 0;
+}
+
 /*
  * Lightweight readiness probe for the boot hook.  Creating the window and
  * context is the part that fails while the PowerVR RGX firmware is still
@@ -543,10 +699,12 @@ static void usage(const char *argv0)
 {
     printf("usage: %s [--frames N]\n", argv0);
     printf("       %s --ready\n", argv0);
+    printf("       %s --egl-test\n", argv0);
     printf("       %s --dump-fb FILE\n", argv0);
     printf("\n");
     printf("  --frames N     swap samples for the latency statistics (default %d)\n", DEFAULT_FRAMES);
     printf("  --ready        only create the SDL window/GL context/EGL surface; no swap\n");
+    printf("  --egl-test     probe EGL window creation without SDL (diagnostic)\n");
     printf("  --dump-fb FILE write the visible /dev/fb0 contents as binary PPM ('-' = stdout)\n");
 }
 
@@ -558,8 +716,13 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--ready") == 0) {
         return run_ready();
     }
-    if (argc > 1 && strcmp(argv[1], "--ready") == 0) {
-        fprintf(stderr, "error: --ready cannot be combined with other options\n");
+    if (argc == 2 && strcmp(argv[1], "--egl-test") == 0) {
+        return run_egl_test();
+    }
+    if (argc > 1 &&
+        (strcmp(argv[1], "--ready") == 0 ||
+         strcmp(argv[1], "--egl-test") == 0)) {
+        fprintf(stderr, "error: diagnostic mode cannot be combined with other options\n");
         return 2;
     }
 

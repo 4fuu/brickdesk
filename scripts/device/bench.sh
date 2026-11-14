@@ -37,7 +37,7 @@ fi
 "$ADB" shell "mkdir -p '$DEVICE_TMP'"
 stop_stock_ui
 info "running $BIN $ARGS"
-"$ADB" shell "cd '$DEST' && LD_LIBRARY_PATH='$DEST/lib:/usr/trimui/lib:/usr/lib:/lib' '$BIN' $ARGS --json '$DEVICE_TMP/bench.json'"
+"$ADB" shell "cd '$DEST' && LD_LIBRARY_PATH='/usr/trimui/lib:$DEST/lib:/usr/lib:/lib' '$BIN' $ARGS --json '$DEVICE_TMP/bench.json'"
 
 OUT=${OUT:-"$REPO_ROOT/build-device/bench.json"}
 mkdir -p "$(dirname -- "$OUT")"

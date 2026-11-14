@@ -17,7 +17,7 @@ export REPO_ROOT
 require_device
 
 info "stopping brickdesk/display_probe"
-"$ADB" shell "for name in brickdesk display_probe; do pidof \$name >/dev/null 2>&1 && killall \$name >/dev/null 2>&1 || true; done; sleep 1"
+"$ADB" shell "for name in brickdesk display_probe; do for pid in \$(pidof \$name 2>/dev/null); do kill -9 \$pid 2>/dev/null || true; done; done; sleep 1"
 "$ADB" shell "rm -f '$DEVICE_TMP/brickdesk.pid' '$DEVICE_TMP/display_probe.pid'"
 
 start_stock_ui

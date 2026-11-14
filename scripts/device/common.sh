@@ -44,13 +44,34 @@ device_shell_capture() {
 }
 
 stop_stock_ui() {
-    info "stopping stock UI (runtrimui / MainUI)"
-    "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui stop >/dev/null 2>&1 || true; fi; killall MainUI >/dev/null 2>&1 || true; sleep 1"
+    info "stopping stock UI (SIGSTOP runtrimui, SIGKILL MainUI)"
+    "$ADB" shell "mkdir -p '$DEVICE_TMP'"
+    runtrimui_pid=$(device_pidof runtrimui.sh)
+    if [ -n "$runtrimui_pid" ]; then
+        # SIGSTOP prevents the launcher from respawning MainUI without the
+        # USB re-enumeration caused by /etc/init.d/runtrimui stop.
+        "$ADB" shell "printf '%s\\n' '$runtrimui_pid' >'$DEVICE_TMP/runtrimui.pid'; kill -STOP '$runtrimui_pid' 2>/dev/null || true"
+    else
+        "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui stop >/dev/null 2>&1 || true; fi"
+    fi
+    # MainUI ignores SIGTERM on Brick Pro; SIGKILL is required to release EGL.
+    "$ADB" shell "for pid in \$(pidof MainUI 2>/dev/null); do kill -9 \$pid 2>/dev/null || true; done; sleep 1"
 }
 
 start_stock_ui() {
     info "starting stock UI"
-    "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui start >/dev/null 2>&1 || true; fi; sleep 1; if ! pidof MainUI >/dev/null 2>&1; then if [ -x /usr/trimui/bin/runtrimui.sh ]; then nohup /usr/trimui/bin/runtrimui.sh >/tmp/runtrimui.log 2>&1 & else echo 'no stock launcher found' >&2; fi; fi"
+    resumed=0
+    if "$ADB" shell "[ -f '$DEVICE_TMP/runtrimui.pid' ]" >/dev/null 2>&1; then
+        runtrimui_pid=$("$ADB" shell "cat '$DEVICE_TMP/runtrimui.pid' 2>/dev/null" | tr -d '\r')
+        if [ -n "$runtrimui_pid" ]; then
+            "$ADB" shell "kill -CONT '$runtrimui_pid' 2>/dev/null || true; rm -f '$DEVICE_TMP/runtrimui.pid'; sleep 1"
+            resumed=1
+        fi
+    fi
+    if [ "$resumed" = "0" ]; then
+        "$ADB" shell "if [ -x /etc/init.d/runtrimui ]; then /etc/init.d/runtrimui start >/dev/null 2>&1 || true; fi"
+    fi
+    "$ADB" shell "sleep 1; if ! pidof MainUI >/dev/null 2>&1; then if [ -x /usr/trimui/bin/runtrimui.sh ]; then nohup /usr/trimui/bin/runtrimui.sh >/tmp/runtrimui.log 2>&1 & else echo 'no stock launcher found' >&2; fi; fi"
 }
 
 app_pid() {

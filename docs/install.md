@@ -45,7 +45,7 @@ brickdesk-0.1.0-aarch64/
       bench_render
       brickdesk-demo
     lib/
-      libSDL2-2.0.so.0        # 打过 fb0 分辨率 patch 的厂商 SDL2
+      libSDL2-2.0.so.0        # 后备 SDL2（运行时优先用原厂 /usr/trimui/lib）
       libbrickdesk-menu.so
     assets/
       fonts/
@@ -308,7 +308,7 @@ sh /mnt/SDCARD/brickdesk-uninstall.sh --no-restart
 
 ```sh
 cd /mnt/SDCARD/brickdesk
-LD_LIBRARY_PATH=/mnt/SDCARD/brickdesk/lib:/usr/trimui/lib:/usr/lib:/lib \
+LD_LIBRARY_PATH=/usr/trimui/lib:/mnt/SDCARD/brickdesk/lib:/usr/lib:/lib \
 BRICKDESK_ASSET_DIR=/mnt/SDCARD/brickdesk/assets \
   ./bin/brickdesk
 ```
@@ -317,7 +317,7 @@ BRICKDESK_ASSET_DIR=/mnt/SDCARD/brickdesk/assets \
 
 ```sh
 cd /mnt/SDCARD/brickdesk
-LD_LIBRARY_PATH=$PWD/lib:/usr/trimui/lib:/usr/lib:/lib \
+LD_LIBRARY_PATH=/usr/trimui/lib:$PWD/lib:/usr/lib:/lib \
   ./bin/display_probe
 ```
 

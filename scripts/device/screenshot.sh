@@ -44,7 +44,7 @@ trap cleanup EXIT INT TERM
 
 "$ADB" shell "mkdir -p '$DEVICE_TMP'"
 info "reading /dev/fb0 through display_probe"
-"$ADB" shell "cd '$DEST' && LD_LIBRARY_PATH='$DEST/lib:/usr/trimui/lib:/usr/lib:/lib' '$DEST/bin/display_probe' --dump-fb '$remote_ppm'"
+"$ADB" shell "cd '$DEST' && LD_LIBRARY_PATH='/usr/trimui/lib:$DEST/lib:/usr/lib:/lib' '$DEST/bin/display_probe' --dump-fb '$remote_ppm'"
 
 info "pulling $remote_ppm"
 "$ADB" pull "$remote_ppm" "$tmp_ppm" >/dev/null

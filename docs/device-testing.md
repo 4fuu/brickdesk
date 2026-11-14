@@ -154,7 +154,9 @@ adb shell 'ls -l /lib/libc.so.6 /lib/libpthread.so.0 2>/dev/null'
 - `ldd --version` 的设备实际 glibc。若高于 2.23，把 CI 的
   `ci/check-glibc.sh --max` 和本文上限一起调整；若低于 2.23，保持 2.23 保守值。
 - `libSDL2` 的实际版本和路径；原厂 `/usr/trimui/lib/libSDL2-2.0.so.0.3000.8` 是
-  2.30.8，和我们要部署的 2.26.1 patched 版本不同，确认 `LD_LIBRARY_PATH` 优先级。
+  2.30.8，已实测能创建 1024×768 的 PowerVR NULL-WSEGL surface。运行时优先加载
+  原厂库（`LD_LIBRARY_PATH=/usr/trimui/lib:$DEST/lib:...`），包内 patched 2.26.1
+  只作为原厂库缺失时的后备。
 
 ### 4.2 显示（M1-03 核心）
 
@@ -655,6 +657,12 @@ EGL surface 尺寸与面板不一致。
 shared + static，安装到 sysroot，并对 `libSDL2-2.0.so.0` 跑 glibc 检查。可重复执行，
 每次都会重新复制源码，避免 patch 残留。
 
+2026-11-14 真机结论：Brick Pro 原厂 SDL2 2.30.8 在 `/usr/trimui/lib` 下能用
+NULL native window 创建 1024×768 的 EGL surface，brickdesk 也能正常渲染；而当前
+2.26.1 patch 传 `&fbdev_window` 在该机上失败。运行时因此优先原厂 2.30.8，
+2.26.1 patched 只作为后备。若以后改为自包含 SDL2，应把 native window 改回
+NULL 并在真机重新验证，而不是继续假设 `struct fbdev_window *` 一定被接受。
+
 真机判断 patch 是否生效，只看这三点同时成立：
 
 ```text
@@ -671,7 +679,8 @@ adb shell 'LD_LIBRARY_PATH=/mnt/SDCARD/brickdesk/lib ldd /mnt/SDCARD/brickdesk/b
 adb shell 'readelf -d /mnt/SDCARD/brickdesk/bin/display_probe | grep NEEDED'
 ```
 
-确认 `libSDL2-2.0.so.0` 来自 `$DEST/lib`，而不是 `/usr/trimui/lib`。
+默认应确认 `libSDL2-2.0.so.0` 来自 `/usr/trimui/lib`；只有原厂库缺失或不可用时，
+才应回退到 `$DEST/lib/libSDL2-2.0.so.0`。
 
 ## 7. 已知风险与未验证项
 

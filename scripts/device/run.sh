@@ -1,5 +1,6 @@
 #!/bin/sh
-# Launch a deployed binary with the patched SDL2 on LD_LIBRARY_PATH.
+# Launch a deployed binary with the stock SDL2 preferred on LD_LIBRARY_PATH.
+# The packaged patched SDL2 is the fallback when the image has no system SDL2.
 #
 # The stock UI is stopped first by default because the PowerVR NULL WSEGL stack
 # has no compositor: two EGL/display owners cannot coexist. recover.sh starts
@@ -46,7 +47,9 @@ fi
 NAME=$(basename "$BIN")
 LOG=$DEST/logs/$NAME.log
 PIDFILE=$DEVICE_TMP/$NAME.pid
-LD_PATH=$DEST/lib:/usr/trimui/lib:/usr/lib:/lib
+# Prefer the device's stock SDL2 2.30.8; it creates the PowerVR NULL-WSEGL
+# surface correctly on Brick Pro. The packaged 2.26.1 remains the fallback.
+LD_PATH=/usr/trimui/lib:$DEST/lib:/usr/lib:/lib
 
 if [ "${STOP_STOCK:-1}" = "1" ]; then
     stop_stock_ui
